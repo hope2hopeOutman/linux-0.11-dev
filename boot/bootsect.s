@@ -65,7 +65,7 @@ go:	mov	ax,cs
 ! Note that 'es' is already set up.
 
 load_setup:
-	mov	dx,#0x0000		! drive 0, head 0
+	mov	dx,#0x0080		! drive 0, head 0
 	mov	cx,#0x0002		! sector 2, track 0
 	mov	bx,#0x0200		! address = 512, in INITSEG
 	mov	ax,#0x0200+SETUPLEN	! service 2, nr of sectors
@@ -78,14 +78,40 @@ load_setup:
 
 ok_load_setup:
 
-! Get disk drive parameters, specifically nr of sectors/track
+! Get hard disk drive parameters, specifically nr of sectors/track
 
-	mov	dl,#0x00
-	mov	ax,#0x0800		! AH=8 is get drive parameters
+	mov	dl,#0x80        ! The highest bit should be set to 1, indicate gets harddisk parameters.
+	mov	ax,#0x0800		! AH=8 is the function number to get drive parameters
 	int	0x13
-	mov	ch,#0x00
+
+	mov al,ch
+	mov ah,cl
+	and ah,#0xC0
+	shr ah,#0x06c
+
+	and cx,#0x003F
 	seg cs
-	mov	sectors,cx
+	mov drives,dl    !Here should get the num of 1
+	mov heads,dh     !For me, here should get the num 16  start with 0.
+	//dec heads
+	mov tracks,ax    !For me, here should get the num 520 start with 0.
+	//dec tracks
+	mov	sectors,cx   !For me, here should get the num 63 start with 1.
+
+! For modern pc, the bootloader will be allocate 1M spaces at begin of the hard disk, so here we should
+! recompute the variable track, head, sread.
+! 1024*1024/512=2048, 2048/63=32 tracks,2048%63=32 lefted sectors, 32/16=2 cylinder/track, 32%16=0 head, sread=32.
+    mov dx,#0x0000
+    mov ax,#0x0800  !0x0800=2048 sectors = 1M
+    div cx    ! ax=tracks, dx=lefted sectors
+    mov sread,dx
+    mov dx,#0x0000
+    mov cx,heads  !heads saves the max index of Head, the index beginning at 0 ,so should +1 gets the max num of head.
+    inc cx
+    div cx      !ax=track, dx=head
+    mov track,ax
+    mov head,dx
+
 	mov	ax,#INITSEG
 	mov	es,ax
 
@@ -107,7 +133,7 @@ ok_load_setup:
 	mov	ax,#SYSSEG
 	mov	es,ax		! segment of 0x010000
 	call	read_it
-	call	kill_motor
+!	call	kill_motor
 
 ! After that we check which root-device to use. If the device is
 ! defined (!= 0), nothing is done and the given device is used.
@@ -144,7 +170,11 @@ root_defined:
 !
 ! in:	es - starting address segment (normally 0x1000)
 !
-sread:	.word 1+SETUPLEN	! sectors read of current track
+drives:  .word 0     ! Max num of harddisk
+heads:   .word 0    ! Max num of head
+tracks:  .word 0     ! Max num of track
+!sread:	.word 1+SETUPLEN	! sectors read of current track for floppy disk.
+sread:	.word 0         ! sectors read of current track for hard disk.
 head:	.word 0			! current head
 track:	.word 0			! current track
 
@@ -177,12 +207,18 @@ ok2_read:
 	seg cs
 	cmp ax,sectors
 	jne ok3_read
-	mov ax,#1
-	sub ax,head
-	jne ok4_read
+!	mov ax,#1
+!	sub ax,head     for floppy disk.
+!	jne ok4_read
+    mov ax,heads
+    sub ax,head
+    jne ok4_read
 	inc track
-ok4_read:
 	mov head,ax
+	jmp ok3_read
+ok4_read:
+    inc head
+!	mov head,ax
 	xor ax,ax
 ok3_read:
 	mov sread,ax
@@ -204,10 +240,13 @@ read_track:
 	mov cx,sread
 	inc cx
 	mov ch,dl
+	shr dx,#0x02
+	and dl,#0xC0
+	add cl,dl       !set hightest two bits for ready to read track
 	mov dx,head
-	mov dh,dl
-	mov dl,#0
-	and dx,#0x0100
+	mov dh,dl       ! dh = head
+	mov dl,#0x80    ! dl = drive for hard disk
+!	and dx,#0x01FF  for floppy disk, the head should <=1.
 	mov ah,#2
 	int 0x13
 	jc bad_rt
@@ -230,6 +269,8 @@ bad_rt:	mov ax,#0
  * that we enter the kernel in a known state, and
  * don't have to worry about it later.
  */
+
+/*
 kill_motor:
 	push dx
 	mov dx,#0x3f2
@@ -237,6 +278,7 @@ kill_motor:
 	outb
 	pop dx
 	ret
+*/
 
 sectors:
 	.word 0
@@ -246,9 +288,10 @@ msg1:
 	.ascii "Loading system ..."
 	.byte 13,10,13,10
 
-.org 508
+.org 444
 root_dev:
 	.word ROOT_DEV
+.org 510
 boot_flag:
 	.word 0xAA55
 

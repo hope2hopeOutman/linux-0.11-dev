@@ -57,7 +57,7 @@ extern long startup_time;
  */
 #define EXT_MEM_K (*(unsigned short *)0x90002)
 #define DRIVE_INFO (*(struct drive_info *)0x90080)
-#define ORIG_ROOT_DEV (*(unsigned short *)0x901FC)
+#define ORIG_ROOT_DEV (*(unsigned short *)0x901BC)
 
 #define copy_struct(from,to,count) \
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (count))

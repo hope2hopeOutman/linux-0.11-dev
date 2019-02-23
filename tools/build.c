@@ -49,7 +49,7 @@ void die(char * str) {
 }
 
 void usage(void) {
-	die("Usage: build bootsect setup system [rootdev] [> image]");
+	die("Usage: build (bootsect setup | system) [> image]");
 }
 
 int main(int argc, char ** argv) {
@@ -76,6 +76,7 @@ int main(int argc, char ** argv) {
 		major_root = DEFAULT_MAJOR_ROOT;
 		minor_root = DEFAULT_MINOR_ROOT;
 	}
+
 	fprintf(stderr, "Root device is (%d, %d)\n", major_root, minor_root);
 	if ((major_root != 2) && (major_root != 3) && (major_root != 0)) {
 		fprintf(stderr, "Illegal root device (major = %d)\n", major_root);
@@ -105,8 +106,8 @@ int main(int argc, char ** argv) {
 		die("Boot block must be exactly 512 bytes");
 	if ((*(unsigned short *) (buf + 510)) != 0xAA55)
 		die("Boot block hasn't got boot flag (0xAA55)");
-	buf[508] = (char) minor_root;
-	buf[509] = (char) major_root;
+	buf[444] = (char) minor_root;
+	buf[445] = (char) major_root;
 	i = write(1, buf, 512);
 	if (i != 512)
 		die("Write call failed");
@@ -151,7 +152,7 @@ int main(int argc, char ** argv) {
 		die("Unable to open 'system'");
 
 	/*if (read(id, buf, GCC_HEADER) != GCC_HEADER)
-		die("Unable to read header of 'system'");*/
+	 die("Unable to read header of 'system'");*/
 	/* Now for latest GCC, the elf file is 4K aligned */
 	for (int j = 0; j < 4; j++) {
 		if (read(id, buf, GCC_HEADER) != GCC_HEADER)
@@ -167,5 +168,6 @@ int main(int argc, char ** argv) {
 	fprintf(stderr, "System is %d bytes.\n", i);
 	if (i > SYS_SIZE * 16)
 		die("System is too big");
+
 	return (0);
 }
