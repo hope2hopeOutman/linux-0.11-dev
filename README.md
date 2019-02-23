@@ -5,7 +5,7 @@ Mainly study linux system and try to refact it for practice.
 
 分支描述：
 
-1. hope2hopeOutman-bootFromHd-realMode
+1. hdBoot-realMode
 
 1.1 该分支主要是将系统改为从硬盘启动，引导程序（bootsect.s和setup.s），放置在硬盘引导区的前5个扇区中（现代硬盘的前1M空间都是引导区），OS放在硬盘的第一个分区，FS在硬盘的第二分区，注意0.11的FS目前只支持64M磁盘（后面会改的）.
 
