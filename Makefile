@@ -11,7 +11,7 @@ AS	=as --32
 LD	=ld
 LDFLAGS	=-s -x -M -m elf_i386 -Ttext 0x0000 -e startup_32
 CC	=gcc $(RAMDISK)
-CFLAGS	=-m32 -march=i386 -O -Wall -fstrength-reduce -fomit-frame-pointer
+CFLAGS	=-fno-stack-protector -m32 -O -Wall -fstrength-reduce -fomit-frame-pointer
 DISASMFLAGS=-D
 CPP	=cpp -nostdinc -Iinclude
 # cpp == gcc -E
@@ -40,7 +40,7 @@ all:	Image
 
 Image: boot/bootsect boot/setup tools/system tools/build 
 	objcopy -O binary -R .note -R .comment tools/system tools/kernel 
-	   tools/build boot/bootsect boot/setup tools/system $(ROOT_DEV) > Image 
+	tools/build boot/bootsect boot/setup tools/system $(ROOT_DEV) > Image 
 	#rm tools/kernel -f 
 	   sync
 
@@ -53,9 +53,9 @@ tools/build: tools/build.c
 
 boot/head.o: boot/head.s
 
-tools/system:	boot/head.o init/main.o \
+tools/system:	boot/head.o boot/qkdny.o init/main.o \
 		$(ARCHIVES) $(DRIVERS) $(MATH) $(LIBS)
-	$(LD) $(LDFLAGS) boot/head.o init/main.o \
+	$(LD) $(LDFLAGS) boot/head.o boot/qkdny.o init/main.o \
 	$(ARCHIVES) \
 	$(DRIVERS) \
 	$(MATH) \
@@ -117,6 +117,7 @@ dep:
 	(cd mm; make dep)
 
 ### Dependencies:
+boot/qkdny.o : boot/qkdny.c include/linux/hdreg.h
 init/main.o : init/main.c include/unistd.h include/sys/stat.h \
   include/sys/types.h include/sys/times.h include/sys/utsname.h \
   include/utime.h include/time.h include/linux/tty.h include/termios.h \

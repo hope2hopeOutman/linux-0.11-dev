@@ -15,4 +15,17 @@ Mainly study linux system and try to refact it for practice.
 
 1.4 新建一个MakeOSImage.c文件，用于将引导程序（bootsect.s和setup.s）放在硬盘的前五个扇区，将OS放在硬盘1M开始地址处。
 
+2. hdBoot-protectMode-keepLoader
+
+2.1 该分支实现在保护模式下加载OS code这样就不会受到实地址模式下1M寻址空间的限制，可以加载理论上最大4G的kernel。
+
+2.2 具体实现步骤是：在实地址模式下，先从硬盘第一分区加载32K的kernel code代码，放在0x10000处，然后将该32K kernel code搬运到0x0000内存起始地址处，
+    随后开启保护模式并跳转到0x0000地址处执行对剩下kernel的加载，由于这时已经是保护模式了，可以32为寻址了，所以就任性了呵呵。
+    qkdny.c这个代码就是负责搬运剩余的kernel的，因为它是链接在head.s后的，所以系统运行后不会被覆盖的，一直会保留到系统shutdown.
+
+2.3 后面会再出一个版本将qkdny.c放在kernel的开始4k内，这样当kernel完全加载完后，开始初始化内核目录表的时候，就会覆盖loader（head.s的一部分+qkdny.c）,这样就可以节省
+    一部分内存了，不过对于现代内存容量来说就可以忽略了，这里仅仅是个practice,主要是想学习下GCC 和 LD。
+
+
+
 

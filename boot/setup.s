@@ -17,6 +17,7 @@
 INITSEG  = 0x9000	! we move boot here - out of the way
 SYSSEG   = 0x1000	! system loaded at 0x10000 (65536).
 SETUPSEG = 0x9020	! this is the current segment
+NEEDMOVE = 0x8000
 
 .globl begtext, begdata, begbss, endtext, enddata, endbss
 .text
@@ -115,16 +116,12 @@ is_disk1:
 do_move:
 	mov	es,ax		! destination segment
 	add	ax,#0x1000
-	cmp	ax,#0x9000
-	jz	end_move
 	mov	ds,ax		! source segment
 	sub	di,di
 	sub	si,si
-	mov 	cx,#0x8000
+	mov cx,#NEEDMOVE
 	rep
-	movsw
-	jmp	do_move
-
+	movsb
 ! then we load the segment descriptors
 
 end_move:
@@ -205,12 +202,12 @@ empty_8042:
 gdt:
 	.word	0,0,0,0		! dummy
 
-	.word	0x07FF		! 8Mb - limit=2047 (2048*4096=8Mb)
+	.word	0x0FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
 	.word	0x0000		! base address=0
 	.word	0x9A00		! code read/exec
 	.word	0x00C0		! granularity=4096, 386
 
-	.word	0x07FF		! 8Mb - limit=2047 (2048*4096=8Mb)
+	.word	0x0FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
 	.word	0x0000		! base address=0
 	.word	0x9200		! data read/write
 	.word	0x00C0		! granularity=4096, 386

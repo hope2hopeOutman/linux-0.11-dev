@@ -51,16 +51,18 @@ extern void mem_init(long start, long end);
 extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
 extern long startup_time;
+extern long params_table_addr;
 
 /*
  * This is set up by the setup-routine at boot-time
  */
-#define EXT_MEM_K (*(unsigned short *)0x90002)
-#define DRIVE_INFO (*(struct drive_info *)0x90080)
-#define ORIG_ROOT_DEV (*(unsigned short *)0x901BC)
+
+#define EXT_MEM_K     (*(unsigned short *)    (params_table_addr+0x0002))
+#define DRIVE_INFO    (*(struct drive_info *) (params_table_addr+0x0080))
+#define ORIG_ROOT_DEV (*(unsigned short *)    (params_table_addr+0x01BC))
 
 #define copy_struct(from,to,count) \
-__asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (count))
+__asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
 /*
  * Yeah, yeah, it's ugly, but I cannot find how to do this correctly
@@ -112,7 +114,7 @@ void main(void)		/* This really IS void, no error here. */
  */
  	ROOT_DEV = ORIG_ROOT_DEV;
  	//drive_info = DRIVE_INFO;
- 	copy_struct((struct drive_info *)0x90080, &drive_info, 8);
+ 	copy_struct((struct drive_info *)(params_table_addr+0x0080), &drive_info, 8);
 	memory_end = (1<<20) + (EXT_MEM_K<<10);
 	memory_end &= 0xfffff000;
 	if (memory_end > 16*1024*1024)
