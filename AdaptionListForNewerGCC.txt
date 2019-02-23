@@ -1,0 +1,713 @@
+感言：献给所有想玩linux内核的朋友。
+这12个大坑排完以后，对linux系统的认识又上一个台阶，之前有些似是而非的东西算是彻底搞明白了，有时真的就是这样“慢就是快”，
+尤其是最后一个bug，都已经运行bash解释程序了，还是报general protection错误，当时真的有放弃的念头，心确实有点累了，
+但是想到有位天才少年“@棒子打下的777”曾经说过一句话，觉的很有力量：Talk is cheap, let's do it.
+再次满血复合地跟下去了，把源码结合trace又过了一遍。当时已经做好了最坏打算了，大不了把这个版本的bash解释程序的源码找到，
+read the fucking source code，看看它到底干了啥，没想到第12个大雷排完后，久违的登录提示符如约而至，心中一万个MaMa。
+
+别看这个版本只是0.11，但真的是麻雀虽小，五脏俱全：内存管理模块，文件系统模块，信号处理模块，系统调用和硬中断管理模块（8259A），
+字符设备处理模块，就差一个网络模块了，所以对于一个初学者来说，真的是不二之选（个人感受，仅供参考呵呵）。
+
+在此强烈推荐两本数：一本是赵炯老师的《linux0.11内核源代码完全解析》，还有一本是胡伟武老师的《计算机体系架构》。
+这两个人一个是把linux玩的透彻，一个是龙芯cpu总设计师，都是理论+实践派的，比那些只会照本宣科的家伙强太多了。
+就像书上说的那样，一本近600页操作系统书籍，进程调度能占去近一半篇幅，其实在内核中这只是很小的一块，在linux0.11里更是如此，
+就一个不到50行的函数，就把书中大讲特讲的进程调度给实现了，元芳你怎么看^_^。
+
+Talk is cheap, let's do it.
+
+
+
+This version has adapted for the gcc version 5.4.0 20160609 (Ubuntu 5.4.0-6ubuntu1~16.04.4) , So i think you can use the latest GCC
+to comile it and run it in bochs.
+The adaption list are follows:
+
+1. 修改elf header，现在是4K对齐了，所以要去掉开头的4k elf_header结构。    build.c 157 line 
+    /*if (read(id, buf, GCC_HEADER) != GCC_HEADER)
+		die("Unable to read header of 'system'");*/
+
+	/* 现在是4K对齐了,所以要去掉开头的4k elf_header结构 */
+	for (int j = 0; j < 4; j++) {
+		if (read(id, buf, GCC_HEADER) != GCC_HEADER)
+			die("Unable to read header of 'system'");
+	}   
+	 
+2. 修改结构体赋值操作，替换为嵌入式汇编，强行执行CLD指令，地址递增赋值。  main.c 115 line
+   #define copy_struct(from,to,count) \
+         __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (count))
+	void main(void)		/* This really IS void, no error here. */
+{			/* The startup routine assumes (well, ...) this */
+/*
+ * Interrupts are still disabled. Do necessary setups, then
+ * enable them
+ */
+ 	ROOT_DEV = ORIG_ROOT_DEV;
+ 	//drive_info = DRIVE_INFO;                                   /* 这里默认的copy是std，地址递减复制，是有问题的，所以注释掉了。 */
+ 	copy_struct((struct drive_info *)0x90080, &drive_info, 8);   /* 这时修正后的代码。  */
+	memory_end = (1<<20) + (EXT_MEM_K<<10);
+	memory_end &= 0xfffff000;
+	... ...
+	... ...
+	... ...
+	for(;;) pause();
+}
+   
+3. 修改minix文件系统的magic 为138F，改成支持minix2.0文件系统。  fs.h 41 line
+   #define SUPER_MAGIC 0x137F  ------------>>   #define SUPER_MAGIC 0x138F
+   
+4. 由于minix2.0文件系统的dir_entry占用32个字节，也就是说文件名最大支持30个字符了，所以fs.h 36行：
+    #define NAME_LEN 14  --------->> #define NAME_LEN 30
+	struct dir_entry {
+	   unsigned short inode;
+	   char name[NAME_LEN];
+    };
+    
+5. 修改sched.h的_set_base方法，因为GCC 优化的原因，第二次调用的时候会直接使用上次rorl处理过的edx寄存器，这样base值就不对了，坑爹啊，搞了一个星期这个问题。
+   修改前的代码：
+   #define _set_base(addr,base) \
+__asm__("movw %%dx,%0\n\t" \
+	"rorl $16,%%edx\n\t" \
+	"movb %%dl,%1\n\t" \
+	"movb %%dh,%2" \
+	::"m" (*((addr)+2)), \
+	  "m" (*((addr)+4)), \
+	  "m" (*((addr)+7)), \
+	  "d" (base) \
+	:"dx")
+	修改后的代码：
+	#define _set_base(addr,base) \
+__asm__("movw %%dx,%0\n\t" \
+	"rorl $16,%%edx\n\t" \
+	"movb %%dl,%1\n\t" \
+	"movb %%dh,%2\n\t" \
+	"rorl $16,%%edx" \      /* 不把高16位和低16位再调换回去，会出大问题的，这也是循环体内调用嵌入式汇编的通病，优化过了。 */
+	::"m" (*((addr)+2)), \
+	  "m" (*((addr)+4)), \
+	  "m" (*((addr)+7)), \
+	  "d" (base))
+	  
+看看老代码，经过GCC自动优化后的鬼样子，你就明白了，copy_mem方法会调用该嵌入式汇编：	  
+00000f8a <copy_mem>:
+     f8a:	55                   	push   %ebp
+     f8b:	57                   	push   %edi
+     f8c:	56                   	push   %esi
+     f8d:	53                   	push   %ebx
+     f8e:	83 ec 0c             	sub    $0xc,%esp
+     f91:	8b 5c 24 24          	mov    0x24(%esp),%ebx
+     f95:	be 0f 00 00 00       	mov    $0xf,%esi
+     f9a:	0f 03 f6             	lsl    %si,%esi
+     f9d:	46                   	inc    %esi
+     f9e:	bf 17 00 00 00       	mov    $0x17,%edi
+     fa3:	0f 03 ff             	lsl    %di,%edi
+     fa6:	47                   	inc    %edi
+     fa7:	a1 00 00 00 00       	mov    0x0,%eax
+     fac:	8a b0 df 02 00 00    	mov    0x2df(%eax),%dh
+     fb2:	8a 90 dc 02 00 00    	mov    0x2dc(%eax),%dl
+     fb8:	c1 e2 10             	shl    $0x10,%edx
+     fbb:	66 8b 90 da 02 00 00 	mov    0x2da(%eax),%dx
+     fc2:	89 d1                	mov    %edx,%ecx
+     fc4:	8a b0 e7 02 00 00    	mov    0x2e7(%eax),%dh
+     fca:	8a 90 e4 02 00 00    	mov    0x2e4(%eax),%dl
+     fd0:	c1 e2 10             	shl    $0x10,%edx
+     fd3:	66 8b 90 e2 02 00 00 	mov    0x2e2(%eax),%dx
+     fda:	89 d5                	mov    %edx,%ebp
+     fdc:	39 d1                	cmp    %edx,%ecx
+     fde:	74 10                	je     ff0 <copy_mem+0x66>
+     fe0:	83 ec 0c             	sub    $0xc,%esp
+     fe3:	68 97 01 00 00       	push   $0x197
+     fe8:	e8 fc ff ff ff       	call   fe9 <copy_mem+0x5f>
+     fed:	83 c4 10             	add    $0x10,%esp
+     ff0:	39 fe                	cmp    %edi,%esi
+     ff2:	76 10                	jbe    1004 <copy_mem+0x7a>
+     ff4:	83 ec 0c             	sub    $0xc,%esp
+     ff7:	68 b5 01 00 00       	push   $0x1b5
+     ffc:	e8 fc ff ff ff       	call   ffd <copy_mem+0x73>
+    1001:	83 c4 10             	add    $0x10,%esp
+    1004:	8b 74 24 20          	mov    0x20(%esp),%esi
+    1008:	c1 e6 1a             	shl    $0x1a,%esi
+    100b:	89 b3 18 02 00 00    	mov    %esi,0x218(%ebx)
+    1011:	89 f2                	mov    %esi,%edx
+    1013:	66 89 93 da 02 00 00 	mov    %dx,0x2da(%ebx)
+    101a:	c1 ca 10             	ror    $0x10,%edx
+    101d:	88 93 dc 02 00 00    	mov    %dl,0x2dc(%ebx)
+    1023:	88 b3 df 02 00 00    	mov    %dh,0x2df(%ebx)
+    1029:	66 89 93 e2 02 00 00 	mov    %dx,0x2e2(%ebx)  /* 对应set_base操作，这时edx的高16位与低16位已经对调过了，不能再用老值了，GCC优化坑爹啊。 */
+    1030:	c1 ca 10             	ror    $0x10,%edx        
+    1033:	88 93 e4 02 00 00    	mov    %dl,0x2e4(%ebx)
+    1039:	88 b3 e7 02 00 00    	mov    %dh,0x2e7(%ebx)
+    103f:	83 ec 04             	sub    $0x4,%esp
+    1042:	57                   	push   %edi
+    1043:	56                   	push   %esi
+    1044:	55                   	push   %ebp
+    1045:	e8 fc ff ff ff       	call   1046 <copy_mem+0xbc>
+    104a:	83 c4 10             	add    $0x10,%esp
+    104d:	85 c0                	test   %eax,%eax
+    104f:	74 12                	je     1063 <copy_mem+0xd9>
+    1051:	83 ec 08             	sub    $0x8,%esp
+    1054:	57                   	push   %edi
+    1055:	56                   	push   %esi
+    1056:	e8 fc ff ff ff       	call   1057 <copy_mem+0xcd>
+    105b:	83 c4 10             	add    $0x10,%esp
+    105e:	b8 f4 ff ff ff       	mov    $0xfffffff4,%eax
+    1063:	83 c4 0c             	add    $0xc,%esp
+    1066:	5b                   	pop    %ebx
+    1067:	5e                   	pop    %esi
+    1068:	5f                   	pop    %edi
+    1069:	5d                   	pop    %ebp
+    106a:	c3                   	ret    
+
+	
+6. 内联函数使用要慎重啊，传递的参数都是址传递啊，这点一定要记住喽。
+   详见内核态打印用户态数据函数cpy_str_to_kernel，就是因为用的内联被坑了，调用完后的kstr就不是指向数组的头部了。   
+   printk.c 第43行，新增cpy_str_to_kernel函数，用于在内核态打印用户态的字符串，主要为了debug，为后面的分析bug立下汗马功劳^_^。
+	char* cpy_str_to_kernel(char * dest,const char *src)
+	{
+	__asm__(
+		"push %%ds\n"
+		"push %%fs\n\t"
+		"pop  %%ds\n\t"
+		"cld\n\t"
+		"1:\tlodsb\n\t"
+		"stosb\n\t"
+		"testb %%al,%%al\n\t"
+		"jne 1b\n\t"
+		"pop %%ds"
+		::"S" (src),"D" (dest));
+	return dest;
+	}   
+     具体用法如下：
+     char keystr[32] = { 0 };                                      /* 现在内核栈中分配空间，用于存储用户态要打印的字符串。 */
+	 cpy_str_to_kernel(keystr, name);                              /* name是指向用户态字符串的指针，该函数将用户态字符串copy到内核态。 */
+	 printk("fetch subname: %s, namelen: %d \n\r", name, namelen); /* 在内核态打印用户态的字符串。 */
+
+   
+7. 修改vsprintf函数，在处理字符串的时候，因为用strlen内联函数计算字符串长度，所以计算完后要恢复字符串的头指针。
+   和问题6是一脉相承的呵呵，终于可以在内核态愉快的打印用户态的数据进行debug了，这个太重要了。
+    vsprintf.c 的  vsprintf()方法的打印字符串代码段要修改：
+	case 's':
+	s = va_arg(args, char *);
+	len = strlen(s);
+	修改为：
+	case 's':
+	s = va_arg(args, char *);
+	len = strlen(s);
+	s-=(len+1);    /* 要将字符串指针重新指向字符串头。 */
+			
+	看一下strlen代码你就明白了：
+	static inline int strlen(const char * s)
+	{
+	register int __res __asm__("cx");
+	__asm__("cld\n\t"
+		"repne\n\t"
+		"scasb\n\t"
+		"notl %0\n\t"
+		"decl %0"
+		:"=c" (__res):"D" (s),"a" (0),"0" (0xffffffff));
+	return __res;
+	}
+    这时EDI已经指向字符串末尾了。			
+   
+8. static int match(int len, const char * name, struct dir_entry * de)
+   还是内联惹的祸，每次比较完，没有重置ESI的值，导致随后的比较有问题。
+
+	修改前的代码：
+	static int match(int len,const char * name,struct dir_entry * de)
+	{
+		register int same __asm__("ax");
+	
+		if (!de || !de->inode || len > NAME_LEN)
+			return 0;
+		if (len < NAME_LEN && de->name[len])
+			return 0;  /* repe: ecx!=0 and zf=1,执行一次串操作； setz: zf=0, mov $1, %al； fs相当于seg fs命令，就是指定随后的下一条命令的操作数用fs作为基地址段，而不是DS。   */
+		__asm__("cld\n\t"
+			"fs ; repe ; cmpsb\n\t"
+			"setz %%al"
+			:"=a" (same)
+			:"0" (0),"S" ((long) name),"D" ((long) de->name),"c" (len)
+			:"cx","di","si");
+		return same;
+	}
+
+	修改后的代码：
+	static int match(int len, const char * name, struct dir_entry * de) {
+		register int same __asm__("ax");
+	
+		if (!de || !de->inode || len > NAME_LEN)
+			return 0;
+		if (len < NAME_LEN && de->name[len])
+			return 0;
+	
+		__asm__("push %%ebx" ::);  /* 先把之前的Old value保存起来 */
+	
+		__asm__("cld\n\t"
+				"fs ; repe ; cmpsb\n\t"
+				"setz %%al\n\t"
+				"sub %%ecx,%%ebx\n\t"
+				"sub %%ebx,%%esi\n\t"
+				"pop %%ebx"       /* 还原oldvalue。 */
+				:"=a" (same)
+				:"0" (0),"S" ((long) name),"D" ((long) de->name),"c" (len),"b" (len));
+		return same;
+	}
+	修正过的。
+
+9. sched.h _get_base宏定义的嵌入式汇编，在内联的时候会出现寄存器依赖错误，
+   当然通过寄存器重命名可以解决此问题，GCC在内联的时候没有考虑好插入点上下文的依赖关系。
+	原来的宏定义：
+	#define _get_base(addr) ({\
+	unsigned long __base; \
+	__asm__("movb %3,%%dh\n\t" \
+			"movb %2,%%dl\n\t" \
+			"shll $16,%%edx\n\t" \
+			"movw %1,%%dx" \
+			:"=d" (__base) \
+			:"m" (*((addr)+2)), \
+			 "m" (*((addr)+4)), \
+			 "m" (*((addr)+7))); \
+	__base;})
+
+	内联后：EDX有依赖关系了，这样的逻辑就有问题了。
+	(0) [0x000000007911] 0008:0000000000007911 (unk. ctxt): mov dh, byte ptr ds:[edx+743] ; 8ab2e7020000
+	<bochs:31> s
+	Next at t=36497115
+	(0) [0x000000007917] 0008:0000000000007917 (unk. ctxt): mov dl, byte ptr ds:[edx+740] ; 8a92e4020000
+	<bochs:32> s
+	Next at t=36497116
+	(0) [0x00000000791d] 0008:000000000000791d (unk. ctxt): shl edx, 0x10             ; c1e210
+	<bochs:33> s
+	Next at t=36497117
+	(0) [0x000000007920] 0008:0000000000007920 (unk. ctxt): mov dx, word ptr ds:[edx+738] ; 668b92e2020000
+    
+	修正后的：
+	#define _get_base(addr) ({\
+	unsigned long __base; \
+	__asm__ __volatile__ ("push %%eax" ::); \
+	__asm__ __volatile__ ("addl $7,%%eax\n\t" \
+	                      "movb 0(%%eax),%%dh\n\t" \
+						  "subl $3,%%eax\n\t" \
+						  "movb 0(%%eax),%%dl\n\t" \
+						  "shll $16,%%edx\n\t" \
+						  "subl $2,%%eax\n\t" \
+					      "movw 0(%%eax),%%dx\n\t" \
+						  "pop %%eax" \
+						  :"=d" (__base) \
+	                      :"a" ((long)addr)); \
+	__base;})
+	或
+	这种方法容易阅读，但效率太低了，一个指令至少是4个时钟周期，多出来这么多指令。
+	#define _get_base(addr) ({\
+	unsigned long __base; \
+	__asm__("push %%eax\n\t" \
+	        "push %1\n\t" \
+			"push %2\n\t" \
+			"push %3\n\t" \
+			"pop %%eax\n\t" \
+	        "movb %%al,%%dh\n\t" \
+			"pop %%eax\n\t" \
+			"movb %%al,%%dl\n\t" \
+			"shll $16,%%edx\n\t" \
+			"pop %%eax\n\t" \
+			"movw %%ax,%%dx\n\t" \
+			"pop %%eax" \
+			:"=d" (__base) \
+			:"m" (*((addr)+2)), \
+			 "m" (*((addr)+4)), \
+			 "m" (*((addr)+7))); \
+	__base;})
+
+10. buffer.c 中的bread_page函数，还是循环体内的嵌入式汇编GCC优化后，没有将esi的值处理好。
+	void bread_page(unsigned long address, int dev, int b[4]) {
+		struct buffer_head * bh[4];
+		int i;
+	
+		for (i = 0; i < 4; i++) {
+			if (b[i]) {
+				if (bh[i] = getblk(dev, b[i])) {
+					if (!bh[i]->b_uptodate) {
+						ll_rw_block(READ, bh[i]);
+					}
+				}
+			} else {
+				bh[i] = NULL;
+			}
+		}
+		for (i = 0; i < 4; i++, address += BLOCK_SIZE) {
+			if (bh[i]) {
+				wait_on_buffer(bh[i]);
+				if (bh[i]->b_uptodate) {
+					COPYBLK((unsigned long) bh[i]->b_data, address);
+				}
+				brelse(bh[i]);
+			}
+		}
+	}
+对应的汇编代码是：
+00001899 <bread_page>:
+    1899:	55                   	push   %ebp
+    189a:	57                   	push   %edi
+    189b:	56                   	push   %esi
+    189c:	53                   	push   %ebx
+    189d:	83 ec 1c             	sub    $0x1c,%esp
+    18a0:	8b 7c 24 30          	mov    0x30(%esp),%edi
+    18a4:	8b 6c 24 34          	mov    0x34(%esp),%ebp
+    18a8:	8b 74 24 38          	mov    0x38(%esp),%esi
+    18ac:	bb 00 00 00 00       	mov    $0x0,%ebx
+    18b1:	8b 04 9e             	mov    (%esi,%ebx,4),%eax
+    18b4:	85 c0                	test   %eax,%eax
+    18b6:	74 2b                	je     18e3 <bread_page+0x4a>
+    18b8:	83 ec 08             	sub    $0x8,%esp
+    18bb:	50                   	push   %eax
+    18bc:	55                   	push   %ebp
+    18bd:	e8 fc ff ff ff       	call   18be <bread_page+0x25>
+    18c2:	89 44 9c 10          	mov    %eax,0x10(%esp,%ebx,4)
+    18c6:	83 c4 10             	add    $0x10,%esp
+    18c9:	85 c0                	test   %eax,%eax
+    18cb:	74 1d                	je     18ea <bread_page+0x51>
+    18cd:	80 78 0a 00          	cmpb   $0x0,0xa(%eax)
+    18d1:	75 17                	jne    18ea <bread_page+0x51>
+    18d3:	83 ec 08             	sub    $0x8,%esp
+    18d6:	50                   	push   %eax
+    18d7:	6a 00                	push   $0x0
+    18d9:	e8 fc ff ff ff       	call   18da <bread_page+0x41>
+    18de:	83 c4 10             	add    $0x10,%esp
+    18e1:	eb 07                	jmp    18ea <bread_page+0x51>
+    18e3:	c7 04 9c 00 00 00 00 	movl   $0x0,(%esp,%ebx,4)
+    18ea:	43                   	inc    %ebx
+    18eb:	83 fb 04             	cmp    $0x4,%ebx
+    18ee:	75 c1                	jne    18b1 <bread_page+0x18>
+    18f0:	89 e5                	mov    %esp,%ebp
+    18f2:	8b 5d 00             	mov    0x0(%ebp),%ebx
+    18f5:	85 db                	test   %ebx,%ebx
+    18f7:	74 39                	je     1932 <bread_page+0x99>
+    18f9:	fa                   	cli    
+    18fa:	80 7b 0d 00          	cmpb   $0x0,0xd(%ebx)
+    18fe:	74 15                	je     1915 <bread_page+0x7c>
+    1900:	8d 73 10             	lea    0x10(%ebx),%esi
+    1903:	83 ec 0c             	sub    $0xc,%esp
+    1906:	56                   	push   %esi
+    1907:	e8 fc ff ff ff       	call   1908 <bread_page+0x6f>
+    190c:	83 c4 10             	add    $0x10,%esp
+    190f:	80 7b 0d 00          	cmpb   $0x0,0xd(%ebx)
+    1913:	75 ee                	jne    1903 <bread_page+0x6a>
+    1915:	fb                   	sti    
+    1916:	80 7b 0a 00          	cmpb   $0x0,0xa(%ebx)
+    191a:	74 0a                	je     1926 <bread_page+0x8d>
+    191c:	8b 33                	mov    (%ebx),%esi
+    191e:	b9 00 01 00 00       	mov    $0x100,%ecx
+    1923:	fc                   	cld    
+    1924:	f3 a5                	rep movsl %ds:(%esi),%es:(%edi)  /* 这里copy完1024个字节后，edi也会指向一页内存的下一个1k处了 */
+    1926:	83 ec 0c             	sub    $0xc,%esp
+    1929:	53                   	push   %ebx
+    192a:	e8 fc ff ff ff       	call   192b <bread_page+0x92>
+    192f:	83 c4 10             	add    $0x10,%esp
+    1932:	81 c7 00 04 00 00    	add    $0x400,%edi               /* 这里又将edi再加上1k就有问题了，OK。 */
+    1938:	83 c5 04             	add    $0x4,%ebp
+    193b:	8d 44 24 10          	lea    0x10(%esp),%eax
+    193f:	39 e8                	cmp    %ebp,%eax
+    1941:	75 af                	jne    18f2 <bread_page+0x59>
+    1943:	83 c4 1c             	add    $0x1c,%esp
+    1946:	5b                   	pop    %ebx
+    1947:	5e                   	pop    %esi
+    1948:	5f                   	pop    %edi
+    1949:	5d                   	pop    %ebp
+    194a:	c3                   	ret    
+	
+	
+源码修改有两种方式：
+	第一种最简单，将循环的for (i = 0; i < 4; i++, address += BLOCK_SIZE)改成 for (i = 0; i < 4; i++)，但这样不通用，不过这里是没问题的。
+	第二种是改嵌入式汇编：COPYBLK
+	#define COPYBLK(from,to) \
+	__asm__("cld\n\t" \
+		"rep\n\t" \
+		"movsl\n\t" \
+		::"c" (BLOCK_SIZE/4),"S" (from),"D" (to) \
+		:"cx","di","si")
+		
+	修改后：
+	#define COPYBLK(from,to) \
+	__asm__("cld\n\t" \
+		"rep\n\t" \
+		"movsl\n\t" \
+		"subl $0x400,%%esi\n\t" \
+		::"c" (BLOCK_SIZE/4),"S" (from),"D" (to) \
+		:"cx","di","si")
+	
+11. bitmap.c中的new_block方法里的嵌入式汇编也有esi处理问题。
+	int new_block(int dev)
+	{
+		struct buffer_head * bh;
+		struct super_block * sb;
+		int i,j;
+	
+		if (!(sb = get_super(dev)))
+			panic("trying to get new block from nonexistant device");
+		j = 8192;
+		for (i=0 ; i<8 ; i++)
+			if (bh=sb->s_zmap[i])
+				if ((j=find_first_zero(bh->b_data))<8192)
+					break;
+		if (i>=8 || !bh || j>=8192)
+			return 0;
+		if (set_bit(j,bh->b_data))
+			panic("new_block: bit already set");
+		bh->b_dirt = 1;
+		j += i*8192 + sb->s_firstdatazone-1;
+		if (j >= sb->s_nzones)
+			return 0;
+		if (!(bh=getblk(dev,j)))
+			panic("new_block: cannot get block");
+		if (bh->b_count != 1)
+			panic("new block: count is != 1");
+		clear_block(bh->b_data);
+		bh->b_uptodate = 1;
+		bh->b_dirt = 1;
+		brelse(bh);
+		return j;
+	}
+find_first_zero中的esi没有还原到命中block的开始位置，而后面的set_bit会用命中block的命中位置为起点，去设置占用位，这样当然有问题了。
+	有问题的汇编如下：
+	#define find_first_zero(addr) ({ \
+	int __res; \
+	__asm__("cld\n" \
+		"1:\tlodsl\n\t" \
+		"notl %%eax\n\t" \
+		"bsfl %%eax,%%edx\n\t" \
+		"je 2f\n\t" \
+		"addl %%edx,%%ecx\n\t" \	
+		"jmp 3f\n" \
+		"2:\taddl $32,%%ecx\n\t" \
+		"cmpl $8192,%%ecx\n\t" \
+		"jl 1b\n" \	
+		"3:" \
+		:"=c" (__res):"c" (0),"S" (addr):"ax","dx"); \
+	__res;})
+
+	修正后的汇编如下：
+	#define find_first_zero(addr) ({ \
+	int __res; \
+	__asm__("cld\n" \
+		"pushl %%esi\n\t" \           /* 不管该block是否命中，先把block的开始位置保存起来。 */
+		"1:\tlodsl\n\t" \
+		"notl %%eax\n\t" \
+		"bsfl %%eax,%%edx\n\t" \
+		"je 2f\n\t" \
+		"addl %%edx,%%ecx\n\t" \
+		"popl %%esi\n\t" \           /* 说明在该block中命中了，然后还原esi到block的开始位置。 */
+		"jmp 3f\n" \
+		"2:\taddl $32,%%ecx\n\t" \
+		"cmpl $8192,%%ecx\n\t" \
+		"jl 1b\n" \
+		"addl $4,%%esp\n\t" \        /* 如果没有命中，也要丢弃该入栈的老的esi值。 */
+		"3:" \
+		:"=c" (__res):"c" (0),"S" (addr):"ax","dx"); \
+	__res;})
+
+12. inode.c 的get_empty_inode方法里的如下代码是有问题的。 
+	memset(inode, 0, sizeof(*inode));
+	inode->i_count = 1;
+	这两行代码是有依赖关系的，所以memset嵌入式汇编的edi要还原到初始值。
+	
+	00000fc5 <get_empty_inode>:
+	     fc5:	57                   	push   %edi
+	     fc6:	56                   	push   %esi
+	     fc7:	53                   	push   %ebx
+	     fc8:	bb 2e 07 00 00       	mov    $0x72e,%ebx
+	     fcd:	8b 0d 00 00 00 00    	mov    0x0,%ecx
+	     fd3:	ba 20 00 00 00       	mov    $0x20,%edx
+	     fd8:	bf 00 00 00 00       	mov    $0x0,%edi
+	     fdd:	8d 41 38             	lea    0x38(%ecx),%eax
+	     fe0:	3d 00 07 00 00       	cmp    $0x700,%eax
+	     fe5:	72 05                	jb     fec <get_empty_inode+0x27>
+	     fe7:	b8 00 00 00 00       	mov    $0x0,%eax
+	     fec:	66 83 78 30 00       	cmpw   $0x0,0x30(%eax)
+	     ff1:	75 12                	jne    1005 <get_empty_inode+0x40>
+	     ff3:	66 83 78 32 00       	cmpw   $0x0,0x32(%eax)
+	     ff8:	75 09                	jne    1003 <get_empty_inode+0x3e>
+	     ffa:	a3 00 00 00 00       	mov    %eax,0x0
+	     fff:	89 c7                	mov    %eax,%edi
+	    1001:	eb 0c                	jmp    100f <get_empty_inode+0x4a>
+	    1003:	89 c7                	mov    %eax,%edi
+	    1005:	89 c1                	mov    %eax,%ecx
+	    1007:	4a                   	dec    %edx
+	    1008:	75 d3                	jne    fdd <get_empty_inode+0x18>
+	    100a:	a3 00 00 00 00       	mov    %eax,0x0
+	    100f:	85 ff                	test   %edi,%edi
+	    1011:	75 35                	jne    1048 <get_empty_inode+0x83>
+	    1013:	be 2e 00 00 00       	mov    $0x2e,%esi
+	    1018:	83 ec 04             	sub    $0x4,%esp
+	    101b:	0f b7 06             	movzwl (%esi),%eax
+	    101e:	50                   	push   %eax
+	    101f:	0f b7 46 fe          	movzwl -0x2(%esi),%eax
+	    1023:	50                   	push   %eax
+	    1024:	68 9d 00 00 00       	push   $0x9d
+	    1029:	e8 fc ff ff ff       	call   102a <get_empty_inode+0x65>
+	    102e:	83 c6 38             	add    $0x38,%esi
+	    1031:	83 c4 10             	add    $0x10,%esp
+	    1034:	39 de                	cmp    %ebx,%esi
+	    1036:	75 e0                	jne    1018 <get_empty_inode+0x53>
+	    1038:	83 ec 0c             	sub    $0xc,%esp
+	    103b:	68 a8 00 00 00       	push   $0xa8
+	    1040:	e8 fc ff ff ff       	call   1041 <get_empty_inode+0x7c>
+	    1045:	83 c4 10             	add    $0x10,%esp
+	    1048:	fa                   	cli    
+	    1049:	80 7f 32 00          	cmpb   $0x0,0x32(%edi)
+	    104d:	74 15                	je     1064 <get_empty_inode+0x9f>
+	    104f:	8d 77 20             	lea    0x20(%edi),%esi
+	    1052:	83 ec 0c             	sub    $0xc,%esp
+	    1055:	56                   	push   %esi
+	    1056:	e8 fc ff ff ff       	call   1057 <get_empty_inode+0x92>
+	    105b:	83 c4 10             	add    $0x10,%esp
+	    105e:	80 7f 32 00          	cmpb   $0x0,0x32(%edi)
+	    1062:	75 ee                	jne    1052 <get_empty_inode+0x8d>
+	    1064:	fb                   	sti    
+	    1065:	80 7f 33 00          	cmpb   $0x0,0x33(%edi)
+	    1069:	74 2a                	je     1095 <get_empty_inode+0xd0>
+	    106b:	8d 77 20             	lea    0x20(%edi),%esi
+	    106e:	89 f8                	mov    %edi,%eax
+	    1070:	e8 06 f8 ff ff       	call   87b <write_inode>
+	    1075:	fa                   	cli    
+	    1076:	80 7f 32 00          	cmpb   $0x0,0x32(%edi)
+	    107a:	74 12                	je     108e <get_empty_inode+0xc9>
+	    107c:	83 ec 0c             	sub    $0xc,%esp
+	    107f:	56                   	push   %esi
+	    1080:	e8 fc ff ff ff       	call   1081 <get_empty_inode+0xbc>
+	    1085:	83 c4 10             	add    $0x10,%esp
+	    1088:	80 7f 32 00          	cmpb   $0x0,0x32(%edi)
+	    108c:	75 ee                	jne    107c <get_empty_inode+0xb7>
+	    108e:	fb                   	sti    
+	    108f:	80 7f 33 00          	cmpb   $0x0,0x33(%edi)
+	    1093:	75 d9                	jne    106e <get_empty_inode+0xa9>
+	    1095:	66 83 7f 30 00       	cmpw   $0x0,0x30(%edi)
+	    109a:	0f 85 2d ff ff ff    	jne    fcd <get_empty_inode+0x8>
+	    10a0:	b9 38 00 00 00       	mov    $0x38,%ecx
+	    10a5:	b0 00                	mov    $0x0,%al
+	    10a7:	fc                   	cld    
+	    10a8:	f3 aa                	rep stos %al,%es:(%edi)  /* 这时edi已经指向下一个inode节点的开始位置了。 */
+	    10aa:	66 c7 47 30 01 00    	movw   $0x1,0x30(%edi)   /* 所以这里设置的是下一个节点的icount=1了，不是当前要设置的inode节点了。 */
+	    10b0:	89 f8                	mov    %edi,%eax
+	    10b2:	5b                   	pop    %ebx
+	    10b3:	5e                   	pop    %esi
+	    10b4:	5f                   	pop    %edi
+	    10b5:	c3                   	ret    
+	修改memset代码。
+	修改前：	
+	static inline void * memset(void * s,char c,int count)
+	{
+	__asm__("cld\n\t"
+		"rep\n\t"
+		"stosb\n\t"
+		::"a" (c),"D" (s),"c" (count));
+	return s;
+	}
+	
+	修改后：
+	
+	static inline void * memset(void * s,char c,int count)
+	{
+	__asm__("cld\n\t"
+		"pushl %%edi\n\t"
+		"rep\n\t"
+		"stosb\n\t"
+		"popl %%edi"
+		::"a" (c),"D" (s),"c" (count));
+	return s;
+	}
+	
+	
+	
+
+赵炯老师挑出来的源码修改：
+sched.c中的interruptible_sleep_on方法有问题。
+insert_into_queues有问题。
+
+int sys_write(unsigned int fd,char * buf,int count)
+{
+	struct file * file;
+	struct m_inode * inode;
+	
+	if (fd>=NR_OPEN || count <0 || !(file=current->filp[fd]))
+		return -EINVAL;
+	if (!count)
+		return 0;
+	inode=file->f_inode;
+	if (inode->i_pipe)
+		return (file->f_mode&2)?write_pipe(inode,buf,count):-EIO;
+	if (S_ISCHR(inode->i_mode))
+		return rw_char(WRITE,inode->i_zone[0],buf,count,&file->f_pos);
+	if (S_ISBLK(inode->i_mode))
+		return block_write(inode->i_zone[0],&file->f_pos,buf,count);
+	if (S_ISREG(inode->i_mode))
+		return file_write(inode,file,buf,count);
+	printk("(Write)inode->i_mode=%06o, fd: %d, tty: %d, Pid: %d\n\r",inode->i_mode, fd, current->tty, current->pid);
+	return -EINVAL;
+}
+
+int sys_open(const char * filename, int flag, int mode) {
+	struct m_inode * inode;
+	struct file * f;
+	int i, fd;
+
+	/*char kstr[32] = { 0 };
+	 cpy_str_to_kernel(kstr, filename);
+	 printk("open a file name: %s \n\r", kstr);*/
+
+	mode &= 0777 & ~current->umask;
+	for (fd = 0; fd < NR_OPEN; fd++) {
+		if (!current->filp[fd]) {
+			break;
+		}
+	}
+	if (fd >= NR_OPEN) {
+		printk("errorno0: %d \n\r", EINVAL);
+		return -EINVAL;
+	}
+	current->close_on_exec &= ~(1 << fd);
+	f = 0 + file_table;
+	for (i = 0; i < NR_FILE; i++, f++) {
+		if (!f->f_count)
+			break;
+	}
+	if (i >= NR_FILE) {
+		printk("errorno1: %d \n\r", EINVAL);
+		return -EINVAL;
+	}
+	(current->filp[fd] = f)->f_count++;
+	if ((i = open_namei(filename, flag, mode, &inode)) < 0) {
+		current->filp[fd] = NULL;
+		f->f_count = 0;
+		printk("this fd: %d \n\r", i);
+		return i;
+	}
+	/* ttys are somewhat special (ttyxx major==4, tty major==5) */
+	if (S_ISCHR(inode->i_mode)) {
+		if (MAJOR(inode->i_zone[0]) == 4) {
+			if (current->leader && current->tty < 0) {
+				current->tty = MINOR(inode->i_zone[0]);
+				tty_table[current->tty].pgrp = current->pgrp;
+			}
+			char kstr[32] = { 0 };
+			cpy_str_to_kernel(kstr, filename);
+			printk("Pid: %d, tty: %d,pgrp: %d, fileName: %s, inode: %u\n\r",
+					current->pid, current->tty, current->pgrp, kstr,
+					(unsigned long) inode);
+		} else if (MAJOR(inode->i_zone[0]) == 5) {
+			if (current->tty < 0) {
+				iput(inode);
+				current->filp[fd] = NULL;
+				f->f_count = 0;
+				//printk("errorno2: %d \n\r", EPERM);
+				return -EPERM;
+			}
+		}
+	}
+	/* Likewise with block-devices: check for floppy_change */
+	if (S_ISBLK(inode->i_mode)) {
+		check_disk_change(inode->i_zone[0]);
+	}
+	f->f_mode = inode->i_mode;
+	f->f_flags = flag;
+	f->f_count = 1;
+	f->f_inode = inode;
+	f->f_pos = 0;
+	//printk("New fd: %d \n\r", fd);
+	return (fd);
+}
