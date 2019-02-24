@@ -11,8 +11,11 @@
  * the page directory will exist. The startup code will be overwritten by
  * the page directory.
  */
+
+HD_INTERRUPT_READ = 0x20
+
 .text
-.globl idt,gdt,pg_dir,tmp_floppy_area
+.globl idt,gdt,pg_dir,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd
 pg_dir:
 .globl startup_32
 startup_32:
@@ -21,14 +24,32 @@ startup_32:
 	mov %ax,%es
 	mov %ax,%fs
 	mov %ax,%gs
-	lss stack_start,%esp
+
+	movl %ds:0x90002,%ebx
+	shl  $0x0A,%ebx
+	addl $0x100000,%ebx
+	subl $0x4,%ebx
+    /* init a temp stack in the highest addr of memory for handling HD intr.  */
+	movl %ebx,temp_stack
+	lss temp_stack,%esp
 	call setup_idt
 	call setup_gdt
 	movl $0x10,%eax		# reload all the segment registers
-	mov %ax,%ds		# after changing gdt. CS was already
-	mov %ax,%es		# reloaded in 'setup_gdt'
+	mov %ax,%ds		    # after changing gdt. CS was already
+	mov %ax,%es		    # reloaded in 'setup_gdt'
 	mov %ax,%fs
 	mov %ax,%gs
+	/* Move the params, such as memeory size, vedio card, hd info to the highest address of the memory, because addr bound will be erased later.  */
+    call move_params_to_memend
+    /* Mask all other inerrupts except hd interrupt, and register a hd handler to IDT table for handling HD int */
+	call set_hd_intr_gate
+    /* Open Interrupt here, just for HD intr. */
+	sti
+	/* Capture HD intr and handle it , mainly work is get data from HD controller (HD_DATA port), sector by sector. intr trigger per sector. */
+	call do_hd_read_request
+	/* Pay much more Attenttion here, you must make sure all sectors has been loaded from HD before executing below command. */
+	cli
+
 	lss stack_start,%esp
 	xorl %eax,%eax
 1:	incl %eax		# check that A20 really IS enabled
@@ -106,6 +127,62 @@ rp_sidt:
 setup_gdt:
 	lgdt gdt_descr
 	ret
+/* handle HD intr for reading per sector. */
+hd_read_interrupt:
+/*
+ * It's strange here that when HD_INTERRUPT occurs,
+ * the EIP pointer to second code relative to the beginning of this code seg,
+ * so insert a redundant code here, to make sure, pushl %eax can be call.
+ */
+    jmp 1f
+1:	pushl %eax
+	pushl %ecx
+	pushl %edx
+	push %ds
+	push %es
+	push %fs
+	movl $0x10,%eax
+	mov %ax,%ds
+	mov %ax,%es
+	mov %ax,%fs
+	movb $0x20,%al
+	outb %al,$0xA0		# EOI to interrupt controller #1
+	jmp 1f			    # give port chance to breathe
+1:	jmp 1f
+
+1:	outb %al,$0x20
+    movl %ds:hd_intr_cmd,%edx
+    cmpl $HD_INTERRUPT_READ,%edx
+    jne omt
+	call do_read_intr	# interesting way of handling intr.
+omt:pop %fs
+	pop %es
+	pop %ds
+	popl %edx
+	popl %ecx
+	popl %eax
+	iret
+/* init stack struct for lss comand to load. */
+.align 4
+temp_stack:
+    .long 0x00
+    .word 0x10
+    .word 0x0
+/*
+ * Record the beginning address for loading the left OS code to here,
+ * because in bootsect.s we have loaded 32K os code to 0x10000 and move it to 0x0000,
+ * so here the init value should be 0x8000.
+ */
+.align 4
+load_os_addr:
+    .long 0x8000
+
+/*
+ * This variable will filter all other Intrs from HD, just read intr can be work, it's used in hd_read_interrupt.
+ */
+.align 4
+hd_intr_cmd:
+    .long 0x0
 
 /*
  * I put the kernel page tables right after the page directory,
@@ -232,8 +309,17 @@ gdt_descr:
 	.align 8
 idt:	.fill 256,8,0		# idt is uninitialized
 
-gdt:	.quad 0x0000000000000000	/* NULL descriptor */
+gdt:
+	.quad 0x0000000000000000	/* NULL descriptor */
 	.quad 0x00c09a0000000fff	/* 16Mb */
 	.quad 0x00c0920000000fff	/* 16Mb */
 	.quad 0x0000000000000000	/* TEMPORARY - don't use */
-	.fill 252,8,0			/* space for LDT's and TSS's etc */
+	.fill 252,8,0			    /* space for LDT's and TSS's etc */
+
+/*
+ * Record the address of the params table for main func to init.
+ * allocated in here to avoid erasing when setup dir_page.
+ */
+.align 4
+params_table_addr:
+    .long 0

@@ -3,8 +3,6 @@
 ! 0x3000 is 0x30000 bytes = 196kB, more than enough for current
 ! versions of linux
 !
-SYSSIZE = 0x3000
-!
 !	bootsect.s		(C) 1991 Linus Torvalds
 !
 ! bootsect.s is loaded at 0x7c00 by the bios-startup routines, and moves
@@ -36,7 +34,8 @@ BOOTSEG  = 0x07c0			! original address of boot-sector
 INITSEG  = 0x9000			! we move boot here - out of the way
 SETUPSEG = 0x9020			! setup starts here
 SYSSEG   = 0x1000			! system loaded at 0x10000 (65536).
-ENDSEG   = SYSSEG + SYSSIZE		! where to stop loading
+!ENDSEG   = SYSSEG + SYSSIZE		! where to stop loading
+NEED_SECTORS = 64           ! need to load first beginning OS code, not bootloader code
 
 ! ROOT_DEV:	0x000 - same type of floppy as boot.
 !		0x301 - first partition on first drive etc
@@ -175,6 +174,7 @@ heads:   .word 0    ! Max num of head
 tracks:  .word 0     ! Max num of track
 !sread:	.word 1+SETUPLEN	! sectors read of current track for floppy disk.
 sread:	.word 0         ! sectors read of current track for hard disk.
+sreads: .word 0         ! totally has loaded OS sectors
 head:	.word 0			! current head
 track:	.word 0			! current track
 
@@ -182,17 +182,22 @@ read_it:
 	mov ax,es
 	test ax,#0x0fff
 die:	jne die			! es must be at 64kB boundary
-	xor bx,bx		! bx is starting address within segment
+	xor bx,bx		    ! bx is starting address within segment
 rp_read:
-	mov ax,es
-	cmp ax,#ENDSEG		! have we loaded all yet?
+	mov ax,sreads
+	cmp ax,#NEED_SECTORS ! have we loaded the first 16K OS code all yet?
 	jb ok1_read
 	ret
 ok1_read:
 	seg cs
 	mov ax,sectors
-	sub ax,sread
+	sub ax,sread          ! lefted sectors of a track needed to load.
+	mov cx,#NEED_SECTORS
+	sub cx,sreads         ! lefted sectors should be loaded.
+	cmp cx,ax
+	jbe same_track
 	mov cx,ax
+same_track:
 	shl cx,#9
 	add cx,bx
 	jnc ok2_read
@@ -202,13 +207,14 @@ ok1_read:
 	shr ax,#9
 ok2_read:
 	call read_track
+	add sreads,ax
 	mov cx,ax
 	add ax,sread
 	seg cs
 	cmp ax,sectors
 	jne ok3_read
 !	mov ax,#1
-!	sub ax,head     for floppy disk.
+!	sub ax,head           for floppy disk.
 !	jne ok4_read
     mov ax,heads
     sub ax,head

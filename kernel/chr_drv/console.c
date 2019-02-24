@@ -32,19 +32,21 @@
 #include <asm/io.h>
 #include <asm/system.h>
 
+extern long params_table_addr;
+
 /*
  * These are set up by the setup-routine at boot-time:
  */
 
-#define ORIG_X			(*(unsigned char *)0x90000)
-#define ORIG_Y			(*(unsigned char *)0x90001)
-#define ORIG_VIDEO_PAGE		(*(unsigned short *)0x90004)
-#define ORIG_VIDEO_MODE		((*(unsigned short *)0x90006) & 0xff)
-#define ORIG_VIDEO_COLS 	(((*(unsigned short *)0x90006) & 0xff00) >> 8)
+#define ORIG_X			    (*(unsigned char *)    (params_table_addr))
+#define ORIG_Y			    (*(unsigned char *)    (params_table_addr+0x0001))
+#define ORIG_VIDEO_PAGE		(*(unsigned short *)   (params_table_addr+0x0004))
+#define ORIG_VIDEO_MODE		((*(unsigned short *)  (params_table_addr+0x0006)) & 0xff)
+#define ORIG_VIDEO_COLS 	(((*(unsigned short *) (params_table_addr+0x0006)) & 0xff00) >> 8)
 #define ORIG_VIDEO_LINES	(25)
-#define ORIG_VIDEO_EGA_AX	(*(unsigned short *)0x90008)
-#define ORIG_VIDEO_EGA_BX	(*(unsigned short *)0x9000a)
-#define ORIG_VIDEO_EGA_CX	(*(unsigned short *)0x9000c)
+#define ORIG_VIDEO_EGA_AX	(*(unsigned short *)   (params_table_addr+0x0008))
+#define ORIG_VIDEO_EGA_BX	(*(unsigned short *)   (params_table_addr+0x000a))
+#define ORIG_VIDEO_EGA_CX	(*(unsigned short *)   (params_table_addr+0x000c))
 
 #define VIDEO_TYPE_MDA		0x10	/* Monochrome Text Display	*/
 #define VIDEO_TYPE_CGA		0x11	/* CGA Display 			*/
