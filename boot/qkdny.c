@@ -1,12 +1,11 @@
 /*
- *  linux/boot/qkdny.c
+ *  linux/kernel/hd.c
  *
- *  (C) 2019 @outman
+ *  (C) 1991  Linus Torvalds
  */
 
 /*
- * qkdny will load left OS code from HD to memory at address 0x8000,
- * and qkdny will permanently resident in memory.
+ *
  */
 
 #include <linux/hdreg.h>
@@ -30,6 +29,8 @@ __asm__("pushl %%edi;cld;rep;insw;popl %%edi"::"d" (port),"D" (buf),"c" (nr))
 
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
+
+__asm__ (".text;.org 0x00;.globl do_controller_ready");
 
 int do_controller_ready(int retries) {
 	while (--retries && (inb_p(HD_STATUS) & 0xc0) != 0x40)
@@ -192,5 +193,20 @@ void do_hd_read_request(void) {
 			retries = 10000;
 			goto repeat;
 		};
+		//Mask all 16 interrupts source,include master and slave chip.
+		outb_p(0xff, 0x21);
+		outb_p(0xff, 0xA1);
 	}
+
 }
+
+/*
+ * This function do nothing, just make sure this file can be compile with 2K size.
+ * So qkdny will be erased when we jump to tail.s to init dir table and page tables,
+ * Do this just practice and study GCC and LD, Indeed doing like this can be reused a little bit memory,
+ * but for today's memory size it can be omit ^_^.
+ */
+void noperation(void) {
+	__asm__ (".org 0x7FF");
+}
+

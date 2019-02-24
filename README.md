@@ -25,6 +25,12 @@ Mainly study linux system and try to refact it for practice.
 
 2.3 后面会再出一个版本将qkdny.c放在kernel的开始4k内，这样当kernel完全加载完后，开始初始化内核目录表的时候，就会覆盖loader（head.s的一部分+qkdny.c）,这样就可以节省
     一部分内存了，不过对于现代内存容量来说就可以忽略了，这里仅仅是个practice,主要是想学习下GCC 和 LD。
+    
+3. hdBoot-protectMode-eraseLoader
+   该分支会将loader 从内存中删除，当系统启动以后。
+   具体做法是：将head.s分成两个部分head.s和tail.s；head.s和qkdny.c会链接组成4K的代码段，占据0x0000~0x01000处负责加载剩余的kernel,
+   tail.s负责初始胡内核的目录表和页表，所以将loader放在开始的4K地址处，当初始化目录表的时候就覆盖了。
+   这个分支仅仅是个练习，不会合并到主分支的。
 
 
 

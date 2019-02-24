@@ -52,10 +52,11 @@ tools/build: tools/build.c
 	-o tools/build tools/build.c
 
 boot/head.o: boot/head.s
+boot/tail.o: boot/tail.s
 
-tools/system:	boot/head.o boot/qkdny.o init/main.o \
+tools/system:	boot/head.o boot/qkdny.o boot/tail.o init/main.o \
 		$(ARCHIVES) $(DRIVERS) $(MATH) $(LIBS)
-	$(LD) $(LDFLAGS) boot/head.o boot/qkdny.o init/main.o \
+	$(LD) $(LDFLAGS) boot/head.o boot/qkdny.o boot/tail.o init/main.o \
 	$(ARCHIVES) \
 	$(DRIVERS) \
 	$(MATH) \
