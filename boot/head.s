@@ -25,12 +25,27 @@ startup_32:
 	mov %ax,%fs
 	mov %ax,%gs
 
-	movl %ds:0x90002,%ebx
-	shl  $0x0A,%ebx
-	addl $0x100000,%ebx
-	subl $0x4,%ebx
+	movl %ds:0x90002,%edx
+	shl  $0x0A,%edx
+	addl $0x100000,%edx
+	/* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
+    lss tmp_floppy_area,%esp
+    /* 设置内核代码段的limit */
+    lea gdt,%ebx
+    add $0x08,%ebx
+    push %edx
+    push %ebx
+    call set_seg_limit
+    /* 设置内核数据段的limit */
+    lea gdt,%ebx
+    add $0x10,%ebx
+    push %edx
+    push %ebx
+    call set_seg_limit
+
+	subl $0x4,%edx
     /* init a temp stack in the highest addr of memory for handling HD intr.  */
-	movl %ebx,temp_stack
+	movl %edx,temp_stack
 	lss temp_stack,%esp
 	call setup_idt
 	call setup_gdt
@@ -208,7 +223,9 @@ pg3:
  * on a 64kB border.
  */
 tmp_floppy_area:
-	.fill 1024,1,0
+    .long after_page_tables
+    .word 0x10
+	.fill 1024-6,1,0
 
 after_page_tables:
 	pushl $0		# These are the parameters to main :-)
@@ -311,8 +328,8 @@ idt:	.fill 256,8,0		# idt is uninitialized
 
 gdt:
 	.quad 0x0000000000000000	/* NULL descriptor */
-	.quad 0x00c09a0000000fff	/* 16Mb */
-	.quad 0x00c0920000000fff	/* 16Mb */
+	.quad 0x00c09a0000000fff	/* Code seg, limit default size: 16Mb */
+	.quad 0x00c0920000000fff	/* Data seg, limit default size: 16Mb */
 	.quad 0x0000000000000000	/* TEMPORARY - don't use */
 	.fill 252,8,0			    /* space for LDT's and TSS's etc */
 
