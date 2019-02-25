@@ -31,6 +31,20 @@ __asm__("pushl %%edi;cld;rep;insw;popl %%edi"::"d" (port),"D" (buf),"c" (nr))
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
+#define set_limit(addr,limit) \
+__asm__("pushl %%edx\n\t" \
+    "movw %%dx,%0\n\t" \
+	"rorl $16,%%edx\n\t" \
+	"movb %1,%%dh\n\t" \
+	"andb $0xf0,%%dh\n\t" \
+	"orb %%dh,%%dl\n\t" \
+	"movb %%dl,%1\n\t" \
+	"rorl $16,%%edx\n\t" \
+	"popl %%edx\n\t" \
+	::"m" (*(addr)), \
+	  "m" (*((addr)+6)), \
+	  "d" (limit))
+
 int do_controller_ready(int retries) {
 	while (--retries && (inb_p(HD_STATUS) & 0xc0) != 0x40)
 		;
@@ -193,4 +207,9 @@ void do_hd_read_request(void) {
 			goto repeat;
 		};
 	}
+}
+
+void set_seg_limit(void* addr, unsigned long limit){
+   limit = (limit/0x1000-1);    /* 因为limit的粒度G设置为1(4k) */
+   set_limit(addr, limit);
 }
