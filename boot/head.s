@@ -30,6 +30,7 @@ startup_32:
 	addl $0x100000,%edx
 	/* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
     lss tmp_floppy_area,%esp
+
     /* 设置内核代码段的limit */
     lea gdt,%ebx
     add $0x08,%ebx
