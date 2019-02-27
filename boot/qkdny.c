@@ -45,20 +45,29 @@ __asm__("pushl %%edx\n\t" \
 	  "m" (*((addr)+6)), \
 	  "d" (limit))
 
-int do_controller_ready(int retries) {
-	while (--retries && (inb_p(HD_STATUS) & 0xc0) != 0x40)
-		;
-	return (retries);
+/*
+ *  将预先加载的32K OS code再次搬运到内核目录表和页表的后面，4k对齐,因为这里页表的个数将根据配置内存的大小动态分配了，
+ *  所以当内存大于636M就会有问题了，所以这里要动态分配了，想想看为什么？
+ */
+void move_code_to_pgt_tail()
+{
+
 }
 
 void move_params_to_memend() {
 	long paramsMem = (1 << 20) + ((*(unsigned short *) 0x90002) << 10);
 	paramsMem &= 0xfffff000;
-	if (paramsMem > 16 * 1024 * 1024)
-		paramsMem = 16 * 1024 * 1024;
+	if (paramsMem > 64 * 1024 * 1024)
+		paramsMem = 64 * 1024 * 1024;
 	paramsMem -= 0x8000;
 	params_table_addr = paramsMem;
 	copy_struct((long*)0x90000, (long*)paramsMem, 512/4);
+}
+
+int do_controller_ready(int retries) {
+	while (--retries && (inb_p(HD_STATUS) & 0xc0) != 0x40)
+		;
+	return (retries);
 }
 
 void set_hd_intr_gate() {
