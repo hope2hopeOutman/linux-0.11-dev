@@ -117,10 +117,14 @@ void main(void)		/* This really IS void, no error here. */
  	copy_struct((struct drive_info *)(params_table_addr+0x0080), &drive_info, 8);
 	memory_end = (1<<20) + (EXT_MEM_K<<10);
 	memory_end &= 0xfffff000;
-	if (memory_end > 16*1024*1024)
-		memory_end = 16*1024*1024;
+	/*
+	 * 这里目前最大只能支持64M内存，因为每个进程的寻址空进就是64M，所以如果内存大于64M话，因为是共享同一个目录表的，所以会造成内核与普通进程寻址空间冲突。
+	 * 下面会改为每个进程都有自己的目录表，这样都有4G的寻址空间而不会冲突。
+	 */
+	if (memory_end > 64*1024*1024)
+		memory_end = 64*1024*1024;
 	if (memory_end > 12*1024*1024) 
-		buffer_memory_end = 4*1024*1024;
+		buffer_memory_end = 4*1024*1024 + 4*1024*1024; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
 	else if (memory_end > 6*1024*1024)
 		buffer_memory_end = 2*1024*1024;
 	else

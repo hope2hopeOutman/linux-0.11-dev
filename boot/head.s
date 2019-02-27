@@ -12,10 +12,13 @@
  * the page directory.
  */
 
-HD_INTERRUPT_READ = 0x20
+HD_INTERRUPT_READ  = 0x20
+OS_BASE_ADDR       = 0x500000
+PG_DIR_BASE_ADDR   = 0x000000
+PG_TAB_BASE_ADDR   = 0x100000
 
 .text
-.globl idt,gdt,pg_dir,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd
+.globl idt,gdt,pg_dir,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87
 pg_dir:
 .globl startup_32
 startup_32:
@@ -24,7 +27,25 @@ startup_32:
 	mov %ax,%es
 	mov %ax,%fs
 	mov %ax,%gs
+	mov %ax,%ss
 
+	/* 将preload的32K OS-code再次搬运到5M地址起始处，前面的4K用作kernel的目录表最大可以管理1k个页表，
+	 * 4k~640k用作高速buffer存储buffer_head和磁盘块,1M~5M用于存储1k个页表，每个页表可以管理4M物理内存，最大可管理4G物理内存。
+	 * 5M后加载OS，如果内存<4G意味着4M页表空间是用不完的，所以也可以用来当作高速buffer，内核态用实地址模式管理整个物理内存。
+	 * 这样做的目的是为了能根据内存实际大小，动态分配页表，管理最大4G的内存，并且最大化利用物理内存，同时利于物理内存管理。
+	 */
+    movl $0x8000,%ecx            /* 总共要复制的字节数0x8000=32k */
+    movl $0x0000,%esi            /* origin addr */
+    movl $OS_BASE_ADDR,%edi      /* dest addr */
+    cld
+    rep
+    movsb
+    //jmp real_entry    /* 注意这里千万别这么用，这里real_entry标号是相对与head.o的offset，所以要获得其在整个CS段内的offset要加上head的入口地址（既0x500000）*/
+    xorl %ecx,%ecx
+    lea real_entry,%ecx  /*这里获得的有效地址就是head.o编译时分配的基地址（0x500000+real_enry）*/
+    jmp *%ecx
+
+real_entry:
 	movl %ds:0x90002,%edx
 	shl  $0x0A,%edx
 	addl $0x100000,%edx
@@ -196,7 +217,7 @@ temp_stack:
  */
 .align 4
 load_os_addr:
-    .long 0x8000
+    .long OS_BASE_ADDR+0x8000
 
 /*
  * This variable will filter all other Intrs from HD, just read intr can be work, it's used in hd_read_interrupt.
@@ -210,6 +231,8 @@ hd_intr_cmd:
  * using 4 of them to span 16 Mb of physical memory. People with
  * more than 16MB will have to expand this.
  */
+
+/*
 .org 0x1000
 pg0:
 
@@ -223,11 +246,14 @@ pg2:
 pg3:
 
 .org 0x5000
+*/
+
 /*
  * tmp_floppy_area is used by the floppy-driver when DMA cannot
  * reach to a buffer-block. It needs to be aligned, so that it isn't
  * on a 64kB border.
  */
+.org 0x1000
 tmp_floppy_area:
     .long after_page_tables
     .word 0x10
@@ -297,18 +323,57 @@ ignore_int:
  */
 .align 4
 setup_paging:
-	movl $1024*5,%ecx		/* 5 pages - pg_dir+4 page tables */
+	movl $1024,%ecx		     /* 1 page - pg_dir，目录表占用一页4K,且在内存开始出0x0000～0x0FFF */
 	xorl %eax,%eax
 	xorl %edi,%edi			/* pg_dir is at 0x000 */
-	cld;rep;stosl
-	movl $pg0+7,pg_dir		/* set present bit/user r/w */
-	movl $pg1+7,pg_dir+4		/*  --------- " " --------- */
-	movl $pg2+7,pg_dir+8		/*  --------- " " --------- */
-	movl $pg3+7,pg_dir+12		/*  --------- " " --------- */
-	movl $pg3+4092,%edi
-	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
-	std
-1:	stosl			/* fill pages backwards - more efficient :-) */
+	cld;rep;stosl           /* 将这4K空间初始化为0 */
+
+    /* 首先计算获得内存的大小，注意这时0x90002还没有被覆盖，此处存储的还是扩展内存的大小。 */
+    movl %ds:0x90002,%eax
+	shl  $0x0A,%eax
+	addl $0x100000,%eax
+    /* 计算内存占用多少页表，也就是多少个目录项。 */
+    movl $0x400000,%ebx
+    divl %ebx           /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数。 */
+    movl $PG_TAB_BASE_ADDR,%edx
+    movl $PG_DIR_BASE_ADDR,%ebx
+
+/* 初始化目录项，将每个页表的基地址赋值到目录项并设置rwx属性。 */
+init_dir:
+    cmp  $0,%eax
+    je init_pgt
+    dec %eax
+    addl $7,%edx
+    movl %edx,(%ebx)
+    subl $7,%edx
+    cmp $0,%eax
+    je init_pgt
+    addl $0x1000,%edx
+    addl $4,%ebx
+    jmp init_dir
+
+//	movl $pg0+7,pg_dir		    /* set present bit/user r/w */
+//	movl $pg1+7,pg_dir+4		/*  --------- " " --------- */
+//	movl $pg2+7,pg_dir+8		/*  --------- " " --------- */
+//	movl $pg3+7,pg_dir+12		/*  --------- " " --------- */
+
+/* 初始化所有页表，从最后一个页表的最后一个页表项初始化。 */
+init_pgt:
+//	movl $pg3+4092,%edi
+    addl $4092,%edx         /* 注意：这里的edx经过上面的init_dir操作后，存储的就是最后一个页表的首地址，所以+4094就得到了最后一个页表项的首地址了。*/
+    movl %edx,%edi
+
+//	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
+
+	/* 首先计算获得内存的大小，注意这时0x90002还没有被覆盖，此处存储的还是扩展内存的大小。 */
+    movl %ds:0x90002,%eax
+	shl  $0x0A,%eax
+	addl $0x100000,%eax
+	/* 将内存最后一页的起始地址+7，赋值给eax */
+    subl $4096,%eax
+    addl $7,%eax
+	std                 /* 重置方向为地址递减操作 */
+1:	stosl			    /* fill pages backwards - more efficient :-) ，类似功能：movl %eax,%ss:%edi;subl $4,%edi*/
 	subl $0x1000,%eax
 	jge 1b
 	xorl %eax,%eax		/* pg_dir is at 0x0000 */
@@ -316,7 +381,7 @@ setup_paging:
 	movl %cr0,%eax
 	orl $0x80000000,%eax
 	movl %eax,%cr0		/* set paging (PG) bit */
-	ret			/* this also flushes prefetch-queue */
+	ret			        /* this also flushes prefetch-queue */
 
 .align 4
 .word 0
