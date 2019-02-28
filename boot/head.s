@@ -18,8 +18,7 @@ PG_DIR_BASE_ADDR   = 0x000000
 PG_TAB_BASE_ADDR   = 0x100000
 
 .text
-.globl idt,gdt,pg_dir,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87
-pg_dir:
+.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87
 .globl startup_32
 startup_32:
 	movl $0x10,%eax

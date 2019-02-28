@@ -157,26 +157,35 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
-	from_dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
-	to_dir = (unsigned long *) ((to>>20) & 0xffc);
-	size = ((unsigned) (size+0x3fffff)) >> 22;
+	from_dir = (unsigned long *) ((from>>20) & 0xffc);  /* _pg_dir = 0，计算该from线性地址所在的目录项，也就是落在那个页表中。 */
+	to_dir = (unsigned long *) ((to>>20) & 0xffc);      /* 计算to线性地址所在的目录项。 */
+	size = ((unsigned) (size+0x3fffff)) >> 22;          /* 因为每个页表能管理4M物理内存，所以这里(size+(4M-1))/4M确保，不够整除的部分也能被copy. */
 	for( ; size-->0 ; from_dir++,to_dir++) {
-		if (1 & *to_dir)
+		if (1 & *to_dir)      /* to线性地址所在的目录项已经存在了，则出错。 */
 			panic("copy_page_tables: already exist");
-		if (!(1 & *from_dir))
+		if (!(1 & *from_dir)) /* 判断from线性地址所在的目录项是否存在。 */
 			continue;
+		/* 读取目录项中存储的某个页表的物理地址，因为页表的地址是4K对齐的，所以要&0xfffff000擦除有可能出错的bit位。 */
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		if (!(to_page_table = (unsigned long *) get_free_page()))
+		if (!(to_page_table = (unsigned long *) get_free_page())) /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
 			return -1;	/* Out of memory, see freeing */
-		*to_dir = ((unsigned long) to_page_table) | 7;
-		nr = (from==0)?0xA0:1024;
+		*to_dir = ((unsigned long) to_page_table) | 7;  /* 将获取的新的页表物理地址，或7后赋值给to线性地址所在的目录项。 */
+		/*
+		 * 这里需要改了，原来OS加载到0x0000开始地址处的时候，当fork task1的时候，这里要copy的内核代码只需要640k,所以需要copy 640K/4K=160(0xA0)个页表项；
+		 * 注意这里是页表项，因为每个页表也占用1页4K,而每个页表项占用4字节用于记录一个物理页的地址，所以一个页表有1024个页表项，共可管理4M物理空间。
+		 * 这里把OS加载到了5M地址处，所以要copy的是从0x0000~0x500000+640K地址空间占用的页表。
+		 */
+		//nr = (from==0)?0xA0:1024;
+		nr = (size == 0) ? 0xA0:1024;
+
+        /* 注意：这里的from_page_table是一个页表的基地址，也就是第一个页表项的地址，所以通过*from_page_table取页表项中记录的物理页地址。 */
 		for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
-			this_page = *from_page_table;
-			if (!(1 & this_page))
+			this_page = *from_page_table;   /* 这里的this_page记录的是物理页地址。 */
+			if (!(1 & this_page)) /* 判断该物理页是否存在。 */
 				continue;
-			this_page &= ~2;
-			*to_page_table = this_page;
-			if (this_page > LOW_MEM) {
+			this_page &= ~2;    /* 将该物理页设置为只读。 */
+			*to_page_table = this_page;  /* 将该物理页地址copy到新分配的页表对应的页表项中。 */
+			if (this_page > LOW_MEM) {   /* 这里也要调整，LOW_MEM=8M */
 				*from_page_table = this_page;
 				this_page -= LOW_MEM;
 				this_page >>= 12;

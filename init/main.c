@@ -39,6 +39,8 @@ inline _syscall0(int,sync)
 
 #include <linux/fs.h>
 
+unsigned long* pg_dir = (unsigned long*)0;
+
 static char printbuf[1024];
 
 extern int vsprintf();

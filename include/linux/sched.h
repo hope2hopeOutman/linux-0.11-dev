@@ -26,6 +26,8 @@
 #define NULL ((void *) 0)
 #endif
 
+#define PG_DIR_ADDR 0
+
 extern int copy_page_tables(unsigned long from, unsigned long to, long size);
 extern int free_page_tables(unsigned long from, unsigned long size);
 
@@ -110,6 +112,7 @@ struct task_struct {
  *  INIT_TASK is used to set up the first task table, touch at
  * your own risk!. Base=0, limit=0x9ffff (=640kB)
  */
+/* 注意：这里的段限长还是640K就有问题了，因为内核代码和数据段已经被最终放置在了5M的开始处了，所以这里的Limit应该设置为59F,5M+640K */
 #define INIT_TASK \
 /* state etc */	{ 0,15,15, \
 /* signals */	0,{{},},0, \
@@ -122,10 +125,10 @@ struct task_struct {
 /* filp */	{NULL,}, \
 	{ \
 		{0,0}, \
-/* ldt */	{0x9f,0xc0fa00}, \
-		{0x9f,0xc0f200}, \
+/* ldt */	{0x59f,0xc0fa00}, \
+		{0x59f,0xc0f200}, \
 	}, \
-/*tss*/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,(long)&pg_dir,\
+/*tss*/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,PG_DIR_ADDR,\
 	 0,0,0,0,0,0,0,0, \
 	 0,0,0x17,0x17,0x17,0x17,0x17,0x17, \
 	 _LDT(0),0x80000000, \
