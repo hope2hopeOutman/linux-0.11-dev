@@ -102,9 +102,12 @@ static void time_init(void)
 	startup_time = kernel_mktime(&time);
 }
 
-static long memory_end = 0;
+long memory_end = 0;
 static long buffer_memory_end = 0;
-static long main_memory_start = 0;
+long main_memory_start = 0;
+
+long PAGING_PAGES = 0;
+long LOW_MEM      = 0;
 
 struct drive_info { char dummy[32]; } drive_info;
 
@@ -119,19 +122,33 @@ void main(void)		/* This really IS void, no error here. */
  	copy_struct((struct drive_info *)(params_table_addr+0x0080), &drive_info, 8);
 	memory_end = (1<<20) + (EXT_MEM_K<<10);
 	memory_end &= 0xfffff000;
+
+	long code_end = (long) start_buffer;
+
 	/*
 	 * 这里目前最大只能支持64M内存，因为每个进程的寻址空进就是64M，所以如果内存大于64M话，因为是共享同一个目录表的，所以会造成内核与普通进程寻址空间冲突。
 	 * 下面会改为每个进程都有自己的目录表，这样都有4G的寻址空间而不会冲突。
 	 */
-	if (memory_end > 64*1024*1024)
+	if (memory_end > 64*1024*1024) {
 		memory_end = 64*1024*1024;
-	if (memory_end > 12*1024*1024) 
-		buffer_memory_end = 4*1024*1024 + 4*1024*1024; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
-	else if (memory_end > 6*1024*1024)
-		buffer_memory_end = 2*1024*1024;
-	else
-		buffer_memory_end = 1*1024*1024;
+	}
+	if (memory_end >= 16*1024*1024) {\
+		if ((code_end-OS_BASE_ADDR) <= 0x100000) {
+		    buffer_memory_end = OS_BASE_ADDR + 4*1024*1024; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
+		}
+		else {
+			buffer_memory_end = (code_end/0x100000) * 0x100000 + 4*1024*1024;
+		}
+	}
+	else {
+		/* 内存必须>=16M */
+		return;
+	}
 	main_memory_start = buffer_memory_end;
+
+	PAGING_PAGES = (memory_end - main_memory_start) >> 12;
+	LOW_MEM      = main_memory_start;
+
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif

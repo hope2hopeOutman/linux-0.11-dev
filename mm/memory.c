@@ -40,9 +40,12 @@ static inline volatile void oom(void)
 __asm__("movl %%eax,%%cr3"::"a" (0))
 
 /* these are not to be changed without changing head.s etc */
-#define LOW_MEM 0x100000
-#define PAGING_MEMORY (15*1024*1024)
-#define PAGING_PAGES (PAGING_MEMORY>>12)
+//#define LOW_MEM 0x100000
+//#define PAGING_MEMORY (15*1024*1024)
+//#define PAGING_PAGES (PAGING_MEMORY>>12)
+#define MAX_PAGING_PAGES (4*1024*1024*1024)
+extern long PAGING_PAGES, LOW_MEM;
+
 #define MAP_NR(addr) (((addr)-LOW_MEM)>>12)
 #define USED 100
 
@@ -54,7 +57,7 @@ static long HIGH_MEMORY = 0;
 #define copy_page(from,to) \
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
-static unsigned char mem_map [ PAGING_PAGES ] = {0,};
+static unsigned char mem_map [ MAX_PAGING_PAGES >> 12 ] = {0,};
 
 /*
  * Get physical address of first (actually last :-) free page, and mark it
@@ -77,7 +80,7 @@ __asm__("std ; repne ; scasb\n\t"
 	"1:"
 	"cld;"
 	:"=a" (__res)
-	:"0" (0),"i" (LOW_MEM),"c" (PAGING_PAGES),
+	:"0" (0),"r" (LOW_MEM),"c" (PAGING_PAGES),
 	"D" (mem_map+PAGING_PAGES-1));
 return __res;
 }
@@ -180,16 +183,25 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 
         /* 注意：这里的from_page_table是一个页表的基地址，也就是第一个页表项的地址，所以通过*from_page_table取页表项中记录的物理页地址。 */
 		for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
-			this_page = *from_page_table;   /* 这里的this_page记录的是物理页地址。 */
+			this_page = *from_page_table;   /* 这里的this_page页表项记录的是物理页地址。 */
 			if (!(1 & this_page)) /* 判断该物理页是否存在。 */
 				continue;
-			this_page &= ~2;    /* 将该物理页设置为只读。 */
+			this_page &= ~2;    /* 将新分配的页表项设置为只读。 */
 			*to_page_table = this_page;  /* 将该物理页地址copy到新分配的页表对应的页表项中。 */
-			if (this_page > LOW_MEM) {   /* 这里也要调整，LOW_MEM=8M */
-				*from_page_table = this_page;
+			/*
+			 * 这里如果要Copy的物理页地址<=LOW_MEM说明是task0 fork task1,则这时，不能把task0对应的页表项设置为只读，只能将task1的所有页表项都设置为只读，
+			 * 当task1运行的时候要进行堆栈操作时，发现共享task0的堆栈对于自己是只读的，所以为出发wp异常，这时缺页异常管理函数，会在分页内存区为其分配一页内存为其
+			 * 用户态堆栈，其内核太堆栈和task_struct占用一个分页。
+			 *
+			 * 对于要Copy的物理页地址>LOW_MEM时，这时一定是task1或其子孙执行 fork操作，这时要把父子进程的页表项都设置为只读，谁先执行先触发WP异常，在处理WP的时候，
+			 * 会将另一个进程的页表项都设置为可写。
+			 *
+			 */
+			if (this_page > LOW_MEM) {
+				*from_page_table = this_page;   /* 将父进程的页表项页设置为只读。 */
 				this_page -= LOW_MEM;
 				this_page >>= 12;
-				mem_map[this_page]++;
+				mem_map[this_page]++;           /* 这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。 */
 			}
 		}
 	}
@@ -226,7 +238,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 /* no need for invalidate */
 	return page;
 }
-
+/* 处理写保护异常，table_entry是物理地址，不是线性地址搞清楚喽。 */
 void un_wp_page(unsigned long * table_entry)
 {
 	unsigned long old_page,new_page;
@@ -237,9 +249,17 @@ void un_wp_page(unsigned long * table_entry)
 		invalidate();
 		return;
 	}
+	/*
+	 * copy on write就是在这里开始了，有两种情况：
+	 * 1. old_page >= LOW_MEM && mem_map[MAP_NR(old_page)]==2
+	 *    说明是task1或其子孙fork后，先执行的会触发WP异常并执行写时复制操作，轮到另一个进程执行时也会触发WP，但仅仅设置为可写就行了。
+	 * 2. old_page < LOW_MEM
+	 *    说明是task0 fork task1后，task1执行时触发的WP，这时会为task1分配一页内存作为task1用户态堆栈，内核态堆栈在fork task1时就建好了，
+	 *    与task1的task_struct共同占用一页内存。
+	 */
 	if (!(new_page=get_free_page()))
 		oom();
-	if (old_page >= LOW_MEM)
+	if (old_page >= LOW_MEM)         /* 这里理解了吧，为什么要加这个判断了。 */
 		mem_map[MAP_NR(old_page)]--;
 	*table_entry = new_page | 7;
 	invalidate();
@@ -261,6 +281,12 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 	if (CODE_SPACE(address))
 		do_exit(SIGSEGV);
 #endif
+	/*
+	 * ((address>>10) & 0xffc) 得到页表项在页表中的offset
+	 * (*((unsigned long *) ((address>>20) &0xffc))) 得到页表的基地址 base。
+	 * 所以base+offset就得到该页表项的物理地址了。
+	 */
+
 	un_wp_page((unsigned long *)
 		(((address>>10) & 0xffc) + (0xfffff000 &
 		*((unsigned long *) ((address>>20) &0xffc)))));
@@ -411,12 +437,12 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 void mem_init(long start_mem, long end_mem)
 {
-	int i;
+	int i = 0;
 
 	HIGH_MEMORY = end_mem;
-	for (i=0 ; i<PAGING_PAGES ; i++)
+	/*for (i=0 ; i<PAGING_PAGES ; i++)
 		mem_map[i] = USED;
-	i = MAP_NR(start_mem);
+	i = MAP_NR(start_mem);*/
 	end_mem -= start_mem;
 	end_mem >>= 12;
 	while (end_mem-->0)

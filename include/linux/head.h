@@ -18,4 +18,6 @@ extern desc_table idt,gdt;
 #define LDT_CODE 1
 #define LDT_DATA 2
 
+#define OS_BASE_ADDR 0x500000
+
 #endif
