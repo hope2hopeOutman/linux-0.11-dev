@@ -43,8 +43,8 @@ __asm__("movl %%eax,%%cr3"::"a" (0))
 //#define LOW_MEM 0x100000
 //#define PAGING_MEMORY (15*1024*1024)
 //#define PAGING_PAGES (PAGING_MEMORY>>12)
-#define MAX_PAGING_PAGES (4*1024*1024*1024)
-extern long PAGING_PAGES, LOW_MEM;
+#define MAX_PAGING_PAGES ((32*1024*1024)>>12)
+extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY;
 
 #define MAP_NR(addr) (((addr)-LOW_MEM)>>12)
 #define USED 100
@@ -52,12 +52,10 @@ extern long PAGING_PAGES, LOW_MEM;
 #define CODE_SPACE(addr) ((((addr)+4095)&~4095) < \
 current->start_code + current->end_code)
 
-static long HIGH_MEMORY = 0;
-
 #define copy_page(from,to) \
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
-static unsigned char mem_map [ MAX_PAGING_PAGES >> 12 ] = {0,};
+unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 
 /*
  * Get physical address of first (actually last :-) free page, and mark it
@@ -92,8 +90,10 @@ return __res;
 void free_page(unsigned long addr)
 {
 	if (addr < LOW_MEM) return;
-	if (addr >= HIGH_MEMORY)
+	if (addr >= HIGH_MEMORY){
+		printk("nonexistent page: %p, high_mem: %u \n\r", addr, HIGH_MEMORY);
 		panic("trying to free nonexistent page");
+	}
 	addr -= LOW_MEM;
 	addr >>= 12;
 	if (mem_map[addr]--) return;
@@ -112,8 +112,10 @@ int free_page_tables(unsigned long from,unsigned long size)
 
 	if (from & 0x3fffff)
 		panic("free_page_tables called with wrong alignment");
-	if (!from)
+	if (!from) {
+		printk("Free pg_dir, currentPid: %d, fid: %d \n\r", current->pid, current->father);
 		panic("Trying to free up swapper memory space");
+	}
 	size = (size + 0x3fffff) >> 22;
 	dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
 	for ( ; size-->0 ; dir++) {
@@ -179,7 +181,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 		 * 这里把OS加载到了5M地址处，所以要copy的是从0x0000~0x500000+640K地址空间占用的页表。
 		 */
 		//nr = (from==0)?0xA0:1024;
-		nr = (size == 0) ? 0xA0:1024;
+		nr = (from==0 && size == 0) ? 512:1024;
 
         /* 注意：这里的from_page_table是一个页表的基地址，也就是第一个页表项的地址，所以通过*from_page_table取页表项中记录的物理页地址。 */
 		for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
@@ -222,7 +224,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 /* NOTE !!! This uses the fact that _pg_dir=0 */
 
 	if (page < LOW_MEM || page >= HIGH_MEMORY)
-		printk("Trying to put page %p at %p\n",page,address);
+		printk("Trying to put page %p at %p,low_mem: %u,high_mem: %u\n",page,address,LOW_MEM,HIGH_MEMORY);
 	if (mem_map[(page-LOW_MEM)>>12] != 1)
 		printk("mem_map disagrees with %p at %p\n",page,address);
 	page_table = (unsigned long *) ((address>>20) & 0xffc);
@@ -241,6 +243,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 /* 处理写保护异常，table_entry是物理地址，不是线性地址搞清楚喽。 */
 void un_wp_page(unsigned long * table_entry)
 {
+	//printk("table_entry: %p \n\r", table_entry);
 	unsigned long old_page,new_page;
 
 	old_page = 0xfffff000 & *table_entry;
@@ -286,6 +289,8 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 	 * (*((unsigned long *) ((address>>20) &0xffc))) 得到页表的基地址 base。
 	 * 所以base+offset就得到该页表项的物理地址了。
 	 */
+
+	//printk("error line address: %p \n\r", address);
 
 	un_wp_page((unsigned long *)
 		(((address>>10) & 0xffc) + (0xfffff000 &

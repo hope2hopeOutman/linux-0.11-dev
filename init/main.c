@@ -108,6 +108,7 @@ long main_memory_start = 0;
 
 long PAGING_PAGES = 0;
 long LOW_MEM      = 0;
+long HIGH_MEMORY  = 0;
 
 struct drive_info { char dummy[32]; } drive_info;
 
@@ -137,17 +138,18 @@ void main(void)		/* This really IS void, no error here. */
 		    buffer_memory_end = OS_BASE_ADDR + 4*1024*1024; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
 		}
 		else {
-			buffer_memory_end = (code_end/0x100000) * 0x100000 + 4*1024*1024;
+			buffer_memory_end = (code_end>>20)<<20 + 4*1024*1024;
 		}
 	}
 	else {
 		/* 内存必须>=16M */
 		return;
 	}
-	main_memory_start = buffer_memory_end;
 
+	main_memory_start = buffer_memory_end;
 	PAGING_PAGES = (memory_end - main_memory_start) >> 12;
 	LOW_MEM      = main_memory_start;
+	HIGH_MEMORY  = memory_end;
 
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);

@@ -52,6 +52,7 @@ int copy_mem(int nr, struct task_struct * p) {
 	set_base(p->ldt[1], new_code_base);
 	set_base(p->ldt[2], new_data_base);
 	if (copy_page_tables(old_data_base, new_data_base, data_limit)) {
+		//printk("copy_page_tables error result in free page tables error. \n\r");
 		free_page_tables(new_data_base, data_limit);
 		return -ENOMEM;
 	}
@@ -74,9 +75,9 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
-	if (last_pid == 4) {
-		printk("task nr: %d \n\r", nr);
-	}
+	//if (last_pid == 4) {
+		printk("task nr: %d,last_pid: %d \n\r", nr, last_pid);
+	//}
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->state = TASK_UNINTERRUPTIBLE;
 	p->pid = last_pid;
@@ -138,9 +139,9 @@ int find_empty_process(void) {
 		last_pid = 1;
 	for (i = 0; i < NR_TASKS; i++)
 		if (task[i]) {
-			/*printk("find, pid: %d, fpid: %d, currentPid: %d, status: %d\n\r",
+			printk("find, pid: %d, fpid: %d, currentPid: %d, status: %d\n\r",
 					task[i]->pid, task[i]->father, current->pid,
-					current->state);*/
+					current->state);
 			if (task[i]->pid == last_pid)
 				goto repeat;
 		}
