@@ -103,7 +103,7 @@ static void time_init(void)
 }
 
 long memory_end = 0;
-static long buffer_memory_end = 0;
+long buffer_memory_end = 0;
 long main_memory_start = 0;
 
 long PAGING_PAGES = 0;
@@ -139,7 +139,7 @@ void main(void)		/* This really IS void, no error here. */
 		    buffer_memory_end = OS_BASE_ADDR + 4*1024*1024; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
 		}
 		else {
-			buffer_memory_end = (code_end>>20)<<20 + 4*1024*1024;
+			buffer_memory_end = ((code_end/0x100000)*0x100000 + 4*1024*1024);
 		}
 	}
 	else {

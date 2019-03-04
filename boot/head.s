@@ -73,8 +73,10 @@ real_entry:
     /* init a temp stack in the highest addr of memory for handling HD intr.  */
 	movl %edx,temp_stack
 	lss temp_stack,%esp
-	call setup_idt
+
 	call setup_gdt
+	call setup_idt
+
 	movl $0x10,%eax		# reload all the segment registers
 	mov %ax,%ds		    # after changing gdt. CS was already
 	mov %ax,%es		    # reloaded in 'setup_gdt'

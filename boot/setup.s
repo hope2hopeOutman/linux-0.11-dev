@@ -198,16 +198,17 @@ empty_8042:
 	test	al,#2		! is input buffer full?
 	jnz	empty_8042	! yes - loop
 	ret
-
+!注意这里的limit也要根据实际内存大小动态调整才行，因为head.s里会在内存最大处建立临时堆栈，
+!当call setup_gdt或setup_idt是会自动将下调指令入栈，这时如果不将这里limit调为实际内存大小，会报beyong limit错误。
 gdt:
 	.word	0,0,0,0		! dummy
 
-	.word	0x0FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
+	.word	0x1FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
 	.word	0x0000		! base address=0
 	.word	0x9A00		! code read/exec
 	.word	0x00C0		! granularity=4096, 386
 
-	.word	0x0FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
+	.word	0x1FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
 	.word	0x0000		! base address=0
 	.word	0x9200		! data read/write
 	.word	0x00C0		! granularity=4096, 386
