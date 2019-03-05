@@ -75,7 +75,7 @@ real_entry:
     movl $0xFFFFFFFC,%edx
     jmp init_temp_stack
 L4G:
-    shl  0x0C,%edx
+    shl $0x0C,%edx
 	subl $0x4,%edx
     /* init a temp stack in the highest addr of memory for handling HD intr.  */
 init_temp_stack:

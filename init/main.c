@@ -103,13 +103,13 @@ static void time_init(void)
 	startup_time = kernel_mktime(&time);
 }
 
-long memory_end = 0;
-long buffer_memory_end = 0;
-long main_memory_start = 0;
+long memory_end = 0;         /* Granularity is 4K */
+long buffer_memory_end = 0;  /* Granularity is 4K */
+long main_memory_start = 0;  /* Granularity is 4K */
 
 long PAGING_PAGES = 0;
-long LOW_MEM      = 0;
-long HIGH_MEMORY  = 0;
+long LOW_MEM      = 0;       /* Granularity is byte */
+long HIGH_MEMORY  = 0;       /* Granularity is byte */
 
 struct drive_info { char dummy[32]; } drive_info;
 
@@ -124,7 +124,7 @@ void main(void)		/* This really IS void, no error here. */
  	copy_struct((struct drive_info *)(params_table_addr+0x0080), &drive_info, 8);
 /*	memory_end = (1<<20) + (EXT_MEM_K<<10);
 	memory_end &= 0xfffff000;*/
- 	memory_end = *(long*)total_memory_size;
+ 	memory_end = total_memory_size;
 
 	long code_end = (long) start_buffer;
 
@@ -136,14 +136,14 @@ void main(void)		/* This really IS void, no error here. */
 		memory_end = 64*1024*1024;
 	}*/
 
-	if (memory_end*0x1000 >= 16*1024*1024) {
+	if (memory_end == 0x100000 || memory_end*0x1000 >= 16*1024*1024) {
 		unsigned long code_szie = (code_end-OS_BASE_ADDR);
 		if (code_szie < 0x100000) {
-		    buffer_memory_end = OS_BASE_ADDR + 4*1024*1024; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
+		    buffer_memory_end = (OS_BASE_ADDR + 4*1024*1024) / 0x1000; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
 		}
 		else {
 			//buffer_memory_end = ((code_end>>20)<<20 + 4*1024*1024);这里千万别这么写,GCC会优化成用sbb指令，造成结果有误，坑爹啊。
-			buffer_memory_end = ((code_end/0x100000)*0x100000 + 4*1024*1024);
+			buffer_memory_end = ((code_end/0x100000)*0x100000 + 4*1024*1024) / 0x1000;
 		}
 	}
 	else {
@@ -152,9 +152,9 @@ void main(void)		/* This really IS void, no error here. */
 	}
 
 	main_memory_start = buffer_memory_end;
-	PAGING_PAGES = (memory_end - main_memory_start) >> 12;
-	LOW_MEM      = main_memory_start;
-	HIGH_MEMORY  = memory_end;
+	PAGING_PAGES = memory_end - main_memory_start;
+	LOW_MEM      = main_memory_start*0x1000;
+	HIGH_MEMORY  = (memory_end-1)*0x1000+0xFFF;
 
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
@@ -169,7 +169,7 @@ void main(void)		/* This really IS void, no error here. */
 	buffer_init(buffer_memory_end);
 	hd_init();
 	floppy_init();
-	printk("mem_size: %u \n\r", memory_end);
+	printk("mem_size: %u (granularity 4K) \n\r", memory_end);
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
