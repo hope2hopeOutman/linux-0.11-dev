@@ -54,6 +54,7 @@ extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
 extern long startup_time;
 extern long params_table_addr;
+extern long total_memory_size;
 
 /*
  * This is set up by the setup-routine at boot-time
@@ -121,8 +122,9 @@ void main(void)		/* This really IS void, no error here. */
  	ROOT_DEV = ORIG_ROOT_DEV;
  	//drive_info = DRIVE_INFO;
  	copy_struct((struct drive_info *)(params_table_addr+0x0080), &drive_info, 8);
-	memory_end = (1<<20) + (EXT_MEM_K<<10);
-	memory_end &= 0xfffff000;
+/*	memory_end = (1<<20) + (EXT_MEM_K<<10);
+	memory_end &= 0xfffff000;*/
+ 	memory_end = *(long*)total_memory_size;
 
 	long code_end = (long) start_buffer;
 
@@ -130,15 +132,17 @@ void main(void)		/* This really IS void, no error here. */
 	 * 这里目前最大只能支持64M内存，因为每个进程的寻址空进就是64M，所以如果内存大于64M话，因为是共享同一个目录表的，所以会造成内核与普通进程寻址空间冲突。
 	 * 下面会改为每个进程都有自己的目录表，这样都有4G的寻址空间而不会冲突。
 	 */
-	if (memory_end > 64*1024*1024) {
+	/*if (memory_end > 64*1024*1024) {
 		memory_end = 64*1024*1024;
-	}
-	if (memory_end >= 16*1024*1024) {
+	}*/
+
+	if (memory_end*0x1000 >= 16*1024*1024) {
 		unsigned long code_szie = (code_end-OS_BASE_ADDR);
 		if (code_szie < 0x100000) {
 		    buffer_memory_end = OS_BASE_ADDR + 4*1024*1024; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
 		}
 		else {
+			//buffer_memory_end = ((code_end>>20)<<20 + 4*1024*1024);这里千万别这么写,GCC会优化成用sbb指令，造成结果有误，坑爹啊。
 			buffer_memory_end = ((code_end/0x100000)*0x100000 + 4*1024*1024);
 		}
 	}
@@ -165,6 +169,7 @@ void main(void)		/* This really IS void, no error here. */
 	buffer_init(buffer_memory_end);
 	hd_init();
 	floppy_init();
+	printk("mem_size: %u \n\r", memory_end);
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

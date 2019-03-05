@@ -15,7 +15,7 @@
 #include <asm/system.h>
 
 extern void hd_read_interrupt(void);
-extern long params_table_addr, load_os_addr, hd_intr_cmd;
+extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
 
 typedef struct HardAllInfoT {
 	char dummy[32];
@@ -54,12 +54,19 @@ void move_code_to_pgt_tail()
 
 }
 
+/* 这里也要讲内存转换成以4K为单位的总大小. */
 void move_params_to_memend() {
-	long paramsMem = (1 << 20) + ((*(unsigned short *) 0x90002) << 10);
-	paramsMem &= 0xfffff000;
-	if (paramsMem > 64 * 1024 * 1024)
-		paramsMem = 64 * 1024 * 1024;
-	paramsMem -= 0x8000;
+	unsigned long totalMem  = 0;
+	unsigned long paramsMem = 0;
+	//如果totalMem<1M也就是内存总大小<4G
+	if (total_memory_size < 0x100000)
+	{
+		totalMem  = total_memory_size * 0x1000;
+		paramsMem = totalMem - 0x8000;
+	}
+	else {
+		paramsMem = 0xFFFF8000;  /* paramsMem=4G-32K=0xFFFF8000,最高的32K地址用来存储各种硬件参数。 */
+	}
 	params_table_addr = paramsMem;
 	copy_struct((long*)0x90000, (long*)paramsMem, 512/4);
 }
@@ -219,6 +226,6 @@ void do_hd_read_request(void) {
 }
 
 void set_seg_limit(void* addr, unsigned long limit){
-   limit = (limit/0x1000-1);    /* 因为limit的粒度G设置为1(4k) */
+   limit -=1;              /* limit的粒度G设置为1(4k) */
    set_limit(addr, limit);
 }

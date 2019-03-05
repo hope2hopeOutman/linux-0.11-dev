@@ -42,10 +42,11 @@ start:
 	mov	[0],dx		! it from 0x90000.
 
 ! Get memory size (extended mem, kB)
-
-	mov	ah,#0x88
+!这里因为要支持4G内存，所以用function number 0xE801，取扩展内存2的大小16M~4G(单位粒度是64K),扩展内存1(单位粒度是1K)大小为1M~16M,
+!所以实际内存大小：extend1+extend2+1M
+	mov	ax,#0xE801
 	int	0x15
-	mov	[2],ax
+	mov	[2],bx
 
 ! Get video-card data:
 
@@ -198,20 +199,22 @@ empty_8042:
 	test	al,#2		! is input buffer full?
 	jnz	empty_8042	! yes - loop
 	ret
-!注意这里的limit也要根据实际内存大小动态调整才行，因为head.s里会在内存最大处建立临时堆栈，
-!当call setup_gdt或setup_idt是会自动将下调指令入栈，这时如果不将这里limit调为实际内存大小，会报beyong limit错误。
+!注意这里的limit也要根据内存实际的大小动态调整才行，因为head.s里会在内存最大处建立临时堆栈，
+!当call setup_gdt或setup_idt是会自动将下一条指令入栈，这时如果不将这里limit调为实际内存大小，会报beyong limit错误。
+!注意如果内存过大的话，例如4G那么就超出了实地址模式能计算的最大值了，所以这里直接将其limit设置为4G即可,因为后面进入保护模式的时候，
+!还会根据实际的内存大小重新设置的。
 gdt:
 	.word	0,0,0,0		! dummy
 
-	.word	0x1FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
+	.word	0xFFFF		! 4G: limit=0xFFFFF (4G/4K-1=0xFFFFF)
 	.word	0x0000		! base address=0
 	.word	0x9A00		! code read/exec
-	.word	0x00C0		! granularity=4096, 386
+	.word	0x00CF		! granularity=4096, 386
 
-	.word	0x1FFF		! 16Mb - limit=4095 ((4095+1)*4096=16Mb)
+	.word	0xFFFF		! 4G: limit=0xFFFFF (4G/4K-1=0xFFFFF)
 	.word	0x0000		! base address=0
 	.word	0x9200		! data read/write
-	.word	0x00C0		! granularity=4096, 386
+	.word	0x00CF		! granularity=4096, 386
 
 idt_48:
 	.word	0			! idt limit=0

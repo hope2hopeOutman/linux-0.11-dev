@@ -18,7 +18,7 @@ PG_DIR_BASE_ADDR   = 0x000000
 PG_TAB_BASE_ADDR   = 0x100000
 
 .text
-.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87
+.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
 .globl startup_32
 startup_32:
 	movl $0x10,%eax
@@ -43,11 +43,12 @@ startup_32:
     xorl %ecx,%ecx
     lea real_entry,%ecx  /*这里获得的有效地址就是head.o编译时分配的基地址（0x500000+real_enry）*/
     jmp *%ecx
-
+/* 下面计算内存的大小统一用4K作为粒度。 */
 real_entry:
-	movl %ds:0x90002,%edx
-	shl  $0x0A,%edx
-	addl $0x100000,%edx
+	movl %ds:0x90002,%edx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K */
+	shl  $0x04,%edx               /* 左移4位乘以16*/
+	addl $0x1000,%edx             /* +16M得到总的内存大小，以4K为单位。 */
+	movl %edx,total_memory_size   /* 将内存总大小(4K granularity)存储到全局变量total_memory_size */
 	/* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
     lss tmp_floppy_area,%esp
 
@@ -58,7 +59,7 @@ real_entry:
     push %ebx
     call set_seg_limit   /* 注意这里的函数调用可不会自动帮你把参数弹出来哈哈，自己动手丰衣足食。 */
     popl %ebx
-    popl %edx            /* 恢复内存的总大小，单位是byte,因为set_seg_limit函数会将它转换为粒度G=4k的数值。*/
+    popl %edx            /* 恢复内存的总大小，单位是4K，因为set_seg_limit函数有可能会用到edx。*/
 
     /* 设置内核数据段的limit */
     lea gdt,%ebx
@@ -67,10 +68,17 @@ real_entry:
     push %ebx
     call set_seg_limit
     popl %ebx
-    popl %edx  /* 恢复内存的总大小，单位是byte,因为set_seg_limit函数会将它转换为粒度G=4k的数值。*/
+    popl %edx             /* 恢复内存的总大小，单位是4K。*/
 
+    cmp $0x100000,%edx    /* 比较edx是否等于1M,也就是总内存大小是否是4G，如果等于4G，那么esp=(4G-4)=0xFFFF FFFC */
+    jne L4G
+    movl $0xFFFFFFFC,%edx
+    jmp init_temp_stack
+L4G:
+    shl  0x0C,%edx
 	subl $0x4,%edx
     /* init a temp stack in the highest addr of memory for handling HD intr.  */
+init_temp_stack:
 	movl %edx,temp_stack
 	lss temp_stack,%esp
 
@@ -330,13 +338,11 @@ setup_paging:
 	cld;rep;stosl           /* 将这4K空间初始化为0 */
 
     /* 首先计算获得内存的大小，注意这时0x90002还没有被覆盖，此处存储的还是扩展内存的大小。 */
-    movl %ds:0x90002,%eax
-	shl  $0x0A,%eax
-	addl $0x100000,%eax
+    movl total_memory_size,%eax
     /* 计算内存占用多少页表，也就是多少个目录项。 */
-    movl $0x400000,%ebx
+    movl $0x400,%ebx
     xorl %edx,%edx       /* 因为divl的除数是双字，所以被除数是%edx:%eax，所以这里要把edx清零。 */
-    divl %ebx           /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数。 */
+    divl %ebx            /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数。 */
     movl $PG_TAB_BASE_ADDR,%edx
     movl $PG_DIR_BASE_ADDR,%ebx
 
@@ -367,12 +373,17 @@ init_pgt:
 
 //	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
 
-	/* 首先计算获得内存的大小，注意这时0x90002还没有被覆盖，此处存储的还是扩展内存的大小。 */
-    movl %ds:0x90002,%eax
-	shl  $0x0A,%eax
-	addl $0x100000,%eax
+	/* 首先获取内存总大小。 */
+    movl total_memory_size,%eax
 	/* 将内存最后一页的起始地址+7，赋值给eax */
+	cmp $0x100000,%eax
+    jne l4g
+	movl $0xFFFFF000,%eax
+	jmp rwx
+l4g:
+    shl $0x0C,%eax
     subl $4096,%eax
+rwx:
     addl $7,%eax
 	std                 /* 重置方向为地址递减操作 */
 1:	stosl			    /* fill pages backwards - more efficient :-) ，类似功能：movl %eax,%ss:%edi;subl $4,%edi*/
@@ -413,3 +424,9 @@ gdt:
 .align 4
 params_table_addr:
     .long 0
+
+/* 这里的内存总大小是以4K为granularity的。 */
+.align 4
+total_memory_size:
+    .long 0
+

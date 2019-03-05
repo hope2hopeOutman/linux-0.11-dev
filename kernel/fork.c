@@ -139,9 +139,9 @@ int find_empty_process(void) {
 		last_pid = 1;
 	for (i = 0; i < NR_TASKS; i++)
 		if (task[i]) {
-			printk("find, pid: %d, fpid: %d, currentPid: %d, status: %d\n\r",
+			/*printk("find, pid: %d, fpid: %d, currentPid: %d, status: %d\n\r",
 					task[i]->pid, task[i]->father, current->pid,
-					current->state);
+					current->state);*/
 			if (task[i]->pid == last_pid)
 				goto repeat;
 		}
