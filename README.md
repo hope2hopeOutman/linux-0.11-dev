@@ -1,4 +1,4 @@
-# OldLinux-0.11-xx 
+# OldLinux-0.11-dev
 Mainly study linux system and try to refact it for practice.
 
 主要工作：在较新的ubuntu平台，用较新的GCC编译0.11的代码，然后在bochs2.6.9中跑起来，具体做了哪些适配工作，请查看AdaptionListForNewerGCC.txt
@@ -25,6 +25,16 @@ Mainly study linux system and try to refact it for practice.
 
 2.3 后面会再出一个版本将qkdny.c放在kernel的开始4k内，这样当kernel完全加载完后，开始初始化内核目录表的时候，就会覆盖loader（head.s的一部分+qkdny.c）,这样就可以节省
     一部分内存了，不过对于现代内存容量来说就可以忽略了，这里仅仅是个practice,主要是想学习下GCC 和 LD。
+    
+3. hdBoot-protectMode-eraseLoader
+   该分支把加载代码编译成整好占用开始的4K地址空间，这样当代码加载完后，初始化目录表就会覆盖掉加载代码。
+
+4. support4GAddrSpacePerProcess
+   该分支实现了根据内存的实际大小动态初始化内核目录表和页表，从而支持内核对4G内存的寻址，将目录表放在内存开始出0x0000
+   页表占用4M从地址1M开始，内核代码被放置在了5M地址开始处，能够成功管理<64M的内存了，对于>64M的内存会出错，因为我们知道该内核是所有进程
+   共用一个目录表且地址空间是64M大小，起始地址是nr*64M,所以当物理内存>64M后，进程1的地址空间和内核空间就重叠了，会有地址冲突错误的，
+   所以下面支持每个进程都有自己独立的4G寻址空间，都有自己独立的目录表。
+   本来打算该分支实现的，但工作量有点大，而且实现的方式有两种，所以就不在此分支上开发了，后面会开两个分支用两种方式实现进程4G寻址。
 
 
 
