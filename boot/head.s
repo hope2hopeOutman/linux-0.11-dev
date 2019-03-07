@@ -387,12 +387,21 @@ setup_paging:
 	xorl %edi,%edi			/* pg_dir is at 0x000 */
 	cld;rep;stosl           /* 将这4K空间初始化为0 */
 
-    /* 首先计算获得内存的大小，注意这时0x90002还没有被覆盖，此处存储的还是扩展内存的大小。 */
+    /* total_memory_size存储了内存的大小，但是为4K */
     movl total_memory_size,%eax
-    /* 计算内存占用多少页表，也就是多少个目录项。 */
+    /*
+     * 计算内存占用多少页表，也就是多少个目录项。目录项个数=内存大小/4M=total_memory_size/1k,这里要判断内存是否大于1G
+     * 如果大于1G的话，那么内核的1G地址空间就不能完全实地址一对一映射了，要留一部分地址空间(128M)映射>1Gd=的物理地址。
+     * 1G/4M=256=0x100所以1G内存需要0x100个页表来管理，所以只要比较内存对应的页表数是否>0x100来初始化内核的目录表。
+     */
     movl $0x400,%ebx
     xorl %edx,%edx       /* 因为divl的除数是双字，所以被除数是%edx:%eax，所以这里要把edx清零。 */
-    divl %ebx            /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数。 */
+    divl %ebx            /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数 */
+    cmp $0x100,%eax      /* 判断内存占用的页表数是否大于0x100,既内存是否>1G */
+    jle 1f               /* 如果内存<=1G那么内核就实地址1:1映射1G内存 */
+    subl $0x20,%eax      /* 内存>1G,那么就将内核的钱1G-128M的地址空间用来实地址映射内存，后128M地址空间作为保留空间，用来管理>1G部分的物理内存。 */
+1:
+    movl %eax,%ecx       /* 备份要初始化目录项个数，因为后面%eax中的值会改变 */
     movl $PG_TAB_BASE_ADDR,%edx
     movl $PG_DIR_BASE_ADDR,%ebx
 
@@ -423,17 +432,10 @@ init_pgt:
 
 //	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
 
-	/* 首先获取内存总大小。 */
-    movl total_memory_size,%eax
-	/* 将内存最后一页的起始地址+7，赋值给eax */
-	cmp $0x100000,%eax
-    jne l4g
-	movl $0xFFFFF000,%eax
-	jmp rwx
-l4g:
-    shl $0x0C,%eax
-    subl $4096,%eax
-rwx:
+	movl %ecx,%eax       /* 获取内核要实地址映射的内存对应的目录项个数 */
+    shl $0x16,%eax       /* 获得内核要实地址映射的的内存的大小,单位是byte */
+    subl $4096,%eax      /* 计算得到要实地址映射的最后一页的基地址 */
+    /* 将内存最后一页的起始地址+7，赋值给eax */
     addl $7,%eax
 	std                 /* 重置方向为地址递减操作 */
 1:	stosl			    /* fill pages backwards - more efficient :-) ，类似功能：movl %eax,%ss:%edi;subl $4,%edi*/
