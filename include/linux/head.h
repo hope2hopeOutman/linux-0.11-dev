@@ -5,7 +5,8 @@ typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
 
-extern unsigned long pg_dir[1024];
+//extern unsigned long pg_dir[1024];
+extern unsigned long* pg_dir;
 extern desc_table idt,gdt;
 
 #define GDT_NUL 0
@@ -16,5 +17,7 @@ extern desc_table idt,gdt;
 #define LDT_NUL 0
 #define LDT_CODE 1
 #define LDT_DATA 2
+
+#define OS_BASE_ADDR 0x500000
 
 #endif

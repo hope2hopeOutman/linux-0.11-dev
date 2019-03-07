@@ -160,7 +160,7 @@ int sys_open(const char * filename, int flag, int mode) {
 	if ((i = open_namei(filename, flag, mode, &inode)) < 0) {
 		current->filp[fd] = NULL;
 		f->f_count = 0;
-		printk("this fd: %d \n\r", i);
+		//printk("this fd: %d \n\r", i);
 		return i;
 	}
 	/* ttys are somewhat special (ttyxx major==4, tty major==5) */

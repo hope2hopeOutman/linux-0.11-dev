@@ -330,6 +330,10 @@ restart_interp:
 	if (last_task_used_math == current)
 		last_task_used_math = NULL;
 	current->used_math = 0;
+	/*if (current->pid == 2)
+	{
+		printk("a_text: %d \n\r", ex.a_text);
+	}*/
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
 	p = (unsigned long) create_tables((char *)p,argc,envc);
 	current->brk = ex.a_bss +

@@ -15,7 +15,7 @@
 #include <asm/system.h>
 
 extern void hd_read_interrupt(void);
-extern long params_table_addr, load_os_addr, hd_intr_cmd;
+extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
 
 typedef struct HardAllInfoT {
 	char dummy[32];
@@ -31,20 +31,50 @@ __asm__("pushl %%edi;cld;rep;insw;popl %%edi"::"d" (port),"D" (buf),"c" (nr))
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
+#define set_limit(addr,limit) \
+__asm__("pushl %%edx\n\t" \
+    "movw %%dx,%0\n\t" \
+	"rorl $16,%%edx\n\t" \
+	"movb %1,%%dh\n\t" \
+	"andb $0xf0,%%dh\n\t" \
+	"orb %%dh,%%dl\n\t" \
+	"movb %%dl,%1\n\t" \
+	"rorl $16,%%edx\n\t" \
+	"popl %%edx\n\t" \
+	::"m" (*(addr)), \
+	  "m" (*((addr)+6)), \
+	  "d" (limit))
+
+/*
+ *  将预先加载的32K OS code再次搬运到内核目录表和页表的后面，4k对齐,因为这里页表的个数将根据配置内存的大小动态分配了，
+ *  所以当内存大于636M就会有问题了，所以这里要动态分配了，想想看为什么？
+ */
+void move_code_to_pgt_tail()
+{
+
+}
+
+/* 这里也要讲内存转换成以4K为单位的总大小. */
+void move_params_to_memend() {
+	unsigned long totalMem  = 0;
+	unsigned long paramsMem = 0;
+	//如果totalMem<1M也就是内存总大小<4G
+	if (total_memory_size < 0x100000)
+	{
+		totalMem  = total_memory_size * 0x1000;
+		paramsMem = totalMem - 0x8000;
+	}
+	else {
+		paramsMem = 0xFFFF8000;  /* paramsMem=4G-32K=0xFFFF8000,最高的32K地址用来存储各种硬件参数。 */
+	}
+	params_table_addr = paramsMem;
+	copy_struct((long*)0x90000, (long*)paramsMem, 512/4);
+}
+
 int do_controller_ready(int retries) {
 	while (--retries && (inb_p(HD_STATUS) & 0xc0) != 0x40)
 		;
 	return (retries);
-}
-
-void move_params_to_memend() {
-	long paramsMem = (1 << 20) + ((*(unsigned short *) 0x90002) << 10);
-	paramsMem &= 0xfffff000;
-	if (paramsMem > 16 * 1024 * 1024)
-		paramsMem = 16 * 1024 * 1024;
-	paramsMem -= 0x8000;
-	params_table_addr = paramsMem;
-	copy_struct((long*)0x90000, (long*)paramsMem, 512/4);
 }
 
 void set_hd_intr_gate() {
@@ -193,4 +223,9 @@ void do_hd_read_request(void) {
 			goto repeat;
 		};
 	}
+}
+
+void set_seg_limit(void* addr, unsigned long limit){
+   limit -=1;              /* limit的粒度G设置为1(4k) */
+   set_limit(addr, limit);
 }

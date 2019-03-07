@@ -40,21 +40,22 @@ static inline volatile void oom(void)
 __asm__("movl %%eax,%%cr3"::"a" (0))
 
 /* these are not to be changed without changing head.s etc */
-#define LOW_MEM 0x100000
-#define PAGING_MEMORY (15*1024*1024)
-#define PAGING_PAGES (PAGING_MEMORY>>12)
+//#define LOW_MEM 0x100000
+//#define PAGING_MEMORY (15*1024*1024)
+//#define PAGING_PAGES (PAGING_MEMORY>>12)
+#define MAX_PAGING_PAGES (1024*1024)     /* 4*1024*1024*1024=4G/4k=1M */
+extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY;
+
 #define MAP_NR(addr) (((addr)-LOW_MEM)>>12)
 #define USED 100
 
 #define CODE_SPACE(addr) ((((addr)+4095)&~4095) < \
 current->start_code + current->end_code)
 
-static long HIGH_MEMORY = 0;
-
 #define copy_page(from,to) \
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
-static unsigned char mem_map [ PAGING_PAGES ] = {0,};
+unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 
 /*
  * Get physical address of first (actually last :-) free page, and mark it
@@ -77,7 +78,7 @@ __asm__("std ; repne ; scasb\n\t"
 	"1:"
 	"cld;"
 	:"=a" (__res)
-	:"0" (0),"i" (LOW_MEM),"c" (PAGING_PAGES),
+	:"0" (0),"r" (LOW_MEM),"c" (PAGING_PAGES),
 	"D" (mem_map+PAGING_PAGES-1));
 return __res;
 }
@@ -89,8 +90,10 @@ return __res;
 void free_page(unsigned long addr)
 {
 	if (addr < LOW_MEM) return;
-	if (addr >= HIGH_MEMORY)
+	if (addr >= HIGH_MEMORY){
+		printk("nonexistent page: %p, high_mem: %u \n\r", addr, HIGH_MEMORY);
 		panic("trying to free nonexistent page");
+	}
 	addr -= LOW_MEM;
 	addr >>= 12;
 	if (mem_map[addr]--) return;
@@ -109,8 +112,10 @@ int free_page_tables(unsigned long from,unsigned long size)
 
 	if (from & 0x3fffff)
 		panic("free_page_tables called with wrong alignment");
-	if (!from)
+	if (!from) {
+		printk("Free pg_dir, currentPid: %d, fid: %d \n\r", current->pid, current->father);
 		panic("Trying to free up swapper memory space");
+	}
 	size = (size + 0x3fffff) >> 22;
 	dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
 	for ( ; size-->0 ; dir++) {
@@ -157,30 +162,48 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
-	from_dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
-	to_dir = (unsigned long *) ((to>>20) & 0xffc);
-	size = ((unsigned) (size+0x3fffff)) >> 22;
+	from_dir = (unsigned long *) ((from>>20) & 0xffc);  /* _pg_dir = 0，计算该from线性地址所在的目录项，也就是落在那个页表中。 */
+	to_dir = (unsigned long *) ((to>>20) & 0xffc);      /* 计算to线性地址所在的目录项。 */
+	size = ((unsigned) (size+0x3fffff)) >> 22;          /* 因为每个页表能管理4M物理内存，所以这里(size+(4M-1))/4M确保，不够整除的部分也能被copy. */
 	for( ; size-->0 ; from_dir++,to_dir++) {
-		if (1 & *to_dir)
+		if (1 & *to_dir)      /* to线性地址所在的目录项已经存在了，则出错。 */
 			panic("copy_page_tables: already exist");
-		if (!(1 & *from_dir))
+		if (!(1 & *from_dir)) /* 判断from线性地址所在的目录项是否存在。 */
 			continue;
+		/* 读取目录项中存储的某个页表的物理地址，因为页表的地址是4K对齐的，所以要&0xfffff000擦除有可能出错的bit位。 */
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		if (!(to_page_table = (unsigned long *) get_free_page()))
+		if (!(to_page_table = (unsigned long *) get_free_page())) /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
 			return -1;	/* Out of memory, see freeing */
-		*to_dir = ((unsigned long) to_page_table) | 7;
-		nr = (from==0)?0xA0:1024;
+		*to_dir = ((unsigned long) to_page_table) | 7;  /* 将获取的新的页表物理地址，或7后赋值给to线性地址所在的目录项。 */
+		/*
+		 * 这里需要改了，原来OS加载到0x0000开始地址处的时候，当fork task1的时候，这里要copy的内核代码只需要640k,所以需要copy 640K/4K=160(0xA0)个页表项；
+		 * 注意这里是页表项，因为每个页表也占用1页4K,而每个页表项占用4字节用于记录一个物理页的地址，所以一个页表有1024个页表项，共可管理4M物理空间。
+		 * 这里把OS加载到了5M地址处，所以要copy的是从0x0000~0x500000+640K地址空间占用的页表。
+		 */
+		//nr = (from==0)?0xA0:1024;
+		nr = (from==0 && size == 0) ? 512:1024;
+
+        /* 注意：这里的from_page_table是一个页表的基地址，也就是第一个页表项的地址，所以通过*from_page_table取页表项中记录的物理页地址。 */
 		for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
-			this_page = *from_page_table;
-			if (!(1 & this_page))
+			this_page = *from_page_table;   /* 这里的this_page页表项记录的是物理页地址。 */
+			if (!(1 & this_page)) /* 判断该物理页是否存在。 */
 				continue;
-			this_page &= ~2;
-			*to_page_table = this_page;
+			this_page &= ~2;    /* 将新分配的页表项设置为只读。 */
+			*to_page_table = this_page;  /* 将该物理页地址copy到新分配的页表对应的页表项中。 */
+			/*
+			 * 这里如果要Copy的物理页地址<=LOW_MEM说明是task0 fork task1,则这时，不能把task0对应的页表项设置为只读，只能将task1的所有页表项都设置为只读，
+			 * 当task1运行的时候要进行堆栈操作时，发现共享task0的堆栈对于自己是只读的，所以为出发wp异常，这时缺页异常管理函数，会在分页内存区为其分配一页内存为其
+			 * 用户态堆栈，其内核太堆栈和task_struct占用一个分页。
+			 *
+			 * 对于要Copy的物理页地址>LOW_MEM时，这时一定是task1或其子孙执行 fork操作，这时要把父子进程的页表项都设置为只读，谁先执行先触发WP异常，在处理WP的时候，
+			 * 会将另一个进程的页表项都设置为可写。
+			 *
+			 */
 			if (this_page > LOW_MEM) {
-				*from_page_table = this_page;
+				*from_page_table = this_page;   /* 将父进程的页表项页设置为只读。 */
 				this_page -= LOW_MEM;
 				this_page >>= 12;
-				mem_map[this_page]++;
+				mem_map[this_page]++;           /* 这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。 */
 			}
 		}
 	}
@@ -201,7 +224,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 /* NOTE !!! This uses the fact that _pg_dir=0 */
 
 	if (page < LOW_MEM || page >= HIGH_MEMORY)
-		printk("Trying to put page %p at %p\n",page,address);
+		printk("Trying to put page %p at %p,low_mem: %u,high_mem: %u\n",page,address,LOW_MEM,HIGH_MEMORY);
 	if (mem_map[(page-LOW_MEM)>>12] != 1)
 		printk("mem_map disagrees with %p at %p\n",page,address);
 	page_table = (unsigned long *) ((address>>20) & 0xffc);
@@ -217,9 +240,10 @@ unsigned long put_page(unsigned long page,unsigned long address)
 /* no need for invalidate */
 	return page;
 }
-
+/* 处理写保护异常，table_entry是物理地址，不是线性地址搞清楚喽。 */
 void un_wp_page(unsigned long * table_entry)
 {
+	//printk("table_entry: %p \n\r", table_entry);
 	unsigned long old_page,new_page;
 
 	old_page = 0xfffff000 & *table_entry;
@@ -228,9 +252,17 @@ void un_wp_page(unsigned long * table_entry)
 		invalidate();
 		return;
 	}
+	/*
+	 * copy on write就是在这里开始了，有两种情况：
+	 * 1. old_page >= LOW_MEM && mem_map[MAP_NR(old_page)]==2
+	 *    说明是task1或其子孙fork后，先执行的会触发WP异常并执行写时复制操作，轮到另一个进程执行时也会触发WP，但仅仅设置为可写就行了。
+	 * 2. old_page < LOW_MEM
+	 *    说明是task0 fork task1后，task1执行时触发的WP，这时会为task1分配一页内存作为task1用户态堆栈，内核态堆栈在fork task1时就建好了，
+	 *    与task1的task_struct共同占用一页内存。
+	 */
 	if (!(new_page=get_free_page()))
 		oom();
-	if (old_page >= LOW_MEM)
+	if (old_page >= LOW_MEM)         /* 这里理解了吧，为什么要加这个判断了。 */
 		mem_map[MAP_NR(old_page)]--;
 	*table_entry = new_page | 7;
 	invalidate();
@@ -252,6 +284,14 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 	if (CODE_SPACE(address))
 		do_exit(SIGSEGV);
 #endif
+	/*
+	 * ((address>>10) & 0xffc) 得到页表项在页表中的offset
+	 * (*((unsigned long *) ((address>>20) &0xffc))) 得到页表的基地址 base。
+	 * 所以base+offset就得到该页表项的物理地址了。
+	 */
+
+	//printk("error line address: %p \n\r", address);
+
 	un_wp_page((unsigned long *)
 		(((address>>10) & 0xffc) + (0xfffff000 &
 		*((unsigned long *) ((address>>20) &0xffc)))));
@@ -402,14 +442,14 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 void mem_init(long start_mem, long end_mem)
 {
-	int i;
+	int i = 0;
 
-	HIGH_MEMORY = end_mem;
-	for (i=0 ; i<PAGING_PAGES ; i++)
+	//HIGH_MEMORY = end_mem;
+	/*for (i=0 ; i<PAGING_PAGES ; i++)
 		mem_map[i] = USED;
-	i = MAP_NR(start_mem);
+	i = MAP_NR(start_mem);*/
 	end_mem -= start_mem;
-	end_mem >>= 12;
+	//end_mem >>= 12;
 	while (end_mem-->0)
 		mem_map[i++]=0;
 }

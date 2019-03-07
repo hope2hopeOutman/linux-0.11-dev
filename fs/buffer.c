@@ -343,10 +343,10 @@ void buffer_init(long buffer_end) {
 	void * b;
 	int i;
 
-	if (buffer_end == 1 << 20)
+	if (buffer_end*0x1000 == 1 << 20)
 		b = (void *) (640 * 1024);
 	else
-		b = (void *) buffer_end;
+		b = (void *) (buffer_end*0x1000);
 	while ((b -= BLOCK_SIZE) >= ((void *) (h + 1))) {
 		h->b_dev = 0;
 		h->b_dirt = 0;
