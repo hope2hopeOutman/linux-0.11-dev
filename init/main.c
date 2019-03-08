@@ -56,6 +56,17 @@ extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
 
+long memory_end = 0;         /* Granularity is 4K */
+long buffer_memory_end = 0;  /* Granularity is 4K */
+long main_memory_start = 0;  /* Granularity is 4K */
+
+long PAGING_PAGES = 0;
+long LOW_MEM      = 0;       /* Granularity is byte */
+long HIGH_MEMORY  = 0;       /* Granularity is byte */
+
+struct drive_info { char dummy[32]; } drive_info;
+
+
 /*
  * This is set up by the setup-routine at boot-time
  */
@@ -103,16 +114,6 @@ static void time_init(void)
 	startup_time = kernel_mktime(&time);
 }
 
-long memory_end = 0;         /* Granularity is 4K */
-long buffer_memory_end = 0;  /* Granularity is 4K */
-long main_memory_start = 0;  /* Granularity is 4K */
-
-long PAGING_PAGES = 0;
-long LOW_MEM      = 0;       /* Granularity is byte */
-long HIGH_MEMORY  = 0;       /* Granularity is byte */
-
-struct drive_info { char dummy[32]; } drive_info;
-
 void main(void)		/* This really IS void, no error here. */
 {			/* The startup routine assumes (well, ...) this */
 /*
@@ -124,7 +125,7 @@ void main(void)		/* This really IS void, no error here. */
  	copy_struct((struct drive_info *)(params_table_addr+0x0080), &drive_info, 8);
 /*	memory_end = (1<<20) + (EXT_MEM_K<<10);
 	memory_end &= 0xfffff000;*/
- 	memory_end = total_memory_size;
+ 	memory_end = total_memory_size;      /* granularity 4K  */
 
 	long code_end = (long) start_buffer;
 
@@ -139,11 +140,11 @@ void main(void)		/* This really IS void, no error here. */
 	if (memory_end == 0x100000 || memory_end*0x1000 >= 16*1024*1024) {
 		unsigned long code_szie = (code_end-OS_BASE_ADDR);
 		if (code_szie < 0x100000) {
-		    buffer_memory_end = (OS_BASE_ADDR + 4*1024*1024) / 0x1000; //因为内核最终加载到以5M为基地址的内存出，所以这里要调整。
+		    buffer_memory_end = (OS_BASE_ADDR + 4*1024*1024) / 0x1000; //因为内核最终加载到以5M为基地址的内存处，所以这里要调整。
 		}
 		else {
 			//buffer_memory_end = ((code_end>>20)<<20 + 4*1024*1024);这里千万别这么写,GCC会优化成用sbb指令，造成结果有误，坑爹啊。
-			buffer_memory_end = ((code_end/0x100000)*0x100000 + 4*1024*1024) / 0x1000;
+			buffer_memory_end = ((code_end/0x100000)*0x100000 + 4*1024*1024) / 0x1000;  /* 这里给高速缓冲区分配最大4M内存 */
 		}
 	}
 	else {

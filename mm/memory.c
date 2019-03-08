@@ -49,6 +49,7 @@ extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY;
 #define MAP_NR(addr) (((addr)-LOW_MEM)>>12)
 #define USED 100
 
+
 #define CODE_SPACE(addr) ((((addr)+4095)&~4095) < \
 current->start_code + current->end_code)
 
@@ -56,26 +57,41 @@ current->start_code + current->end_code)
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
+unsigned char linear_addr_swap_map[LINEAR_ADDR_SWAP_PAGES] = {0,};
+
+/* 对>1G的物理地址进行重映射。 */
+void remap_linear_addr(unsigned long phy_addr)
+{
+
+}
 
 /*
  * Get physical address of first (actually last :-) free page, and mark it
  * used. If no free pages left, return 0.
  */
-unsigned long get_free_page(void)
+unsigned long get_free_page()
 {
 register unsigned long __res asm("ax");
 
 __asm__("std ; repne ; scasb\n\t"
-	"jne 1f\n\t"
+	"jne 2f\n\t"
 	"movb $1,1(%%edi)\n\t"
 	"sall $12,%%ecx\n\t"
 	"addl %2,%%ecx\n\t"
+
+    "cmp" \ $KERNEL_LINEAR_ADDR_PAGES \ ",%%ecx\n\t"
+    "jle 1f\n\t"
+	"pushl %%ecx\n\t"
+	"call remap_linear_addr\n\t"
+	"popl %%ecx\n\t"
+
+	"1:\n\t"
 	"movl %%ecx,%%edx\n\t"
 	"movl $1024,%%ecx\n\t"
 	"leal 4092(%%edx),%%edi\n\t"
 	"rep ; stosl\n\t"
 	"movl %%edx,%%eax\n"
-	"1:"
+	"2:"
 	"cld;"
 	:"=a" (__res)
 	:"0" (0),"r" (LOW_MEM),"c" (PAGING_PAGES),
@@ -442,16 +458,27 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 void mem_init(long start_mem, long end_mem)
 {
-	int i = 0;
+	int paging_pages_num = PAGING_PAGES,i = PAGING_PAGES;
+	int memory_end = end_mem;
 
-	//HIGH_MEMORY = end_mem;
-	/*for (i=0 ; i<PAGING_PAGES ; i++)
-		mem_map[i] = USED;
-	i = MAP_NR(start_mem);*/
-	end_mem -= start_mem;
-	//end_mem >>= 12;
-	while (end_mem-->0)
-		mem_map[i++]=0;
+	while (paging_pages_num-->0) {
+		/* 如果内存>1G的话，就得用896M~1024M作为保留线性地址空间，映射>1G的物理内存，所以这段内存不能参加分页管理，由内核单独管理。 */
+		if (end_mem > KERNEL_LINEAR_ADDR_PAGES)
+		{
+			if (memory_end <= KERNEL_LINEAR_ADDR_PAGES && memory_end > (KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES))
+			{
+				mem_map[--i]=1;  /* 内核这部分保留地址空间不参与分页管理 */
+			}
+			else {
+				mem_map[--i]=0;
+			}
+			memory_end--;
+		}
+		else
+		{
+			mem_map[--i]=0;
+		}
+	}
 }
 
 void calc_mem(void)

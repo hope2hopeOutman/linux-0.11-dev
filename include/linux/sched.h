@@ -1,6 +1,12 @@
 #ifndef _SCHED_H
 #define _SCHED_H
-
+/*
+ * GDT标的limit=2^16=64K, 64K/8=8K,GDT最大可以承载8K个段描述符，
+ * 除去第一项不用，内核段和数据段，这里可以有8K-3个段描述可以使用
+ * 这里取整只用8000个段描述符，因为一个task要占用两项段描述符(LDT和TSS)，
+ * 所以最大可以创建4000个进程。
+ */
+//#define NR_TASKS 4000
 #define NR_TASKS 64
 #define HZ 100
 
