@@ -109,9 +109,17 @@ struct task_struct {
 	unsigned long close_on_exec;
 	struct file * filp[NR_OPEN];
 /* ldt for this task 0 - zero 1 - cs 2 - ds&ss */
+/*
+ * 因为每个用户进程的地址空间都是1G～4G,所以这个LDT描述符表可以不要了，在GDT表中只保留一个LDT段即可，被所有进程共用，但是TSS段不能共享的，
+ * 这里保持原来的机制不变，每个进程还是在GDT表中分配独立的LDT和TSS段描述符，不过LDT段描述符指向的地址是相同的。
+ * 由于task0和task1是共享相同的内核代码段和数据段，所以他们是共享目录表和页表的，所以本质上他们是共享相同的地址空间，这其实就是线程了，
+ * task1一旦要对共享的堆栈就行写操作，就会触发WP异常，内核就会给task1分配一页作为task1的堆栈，这其实就是线程私有的堆栈了，想想多线程是怎么执行的啦啦啦。
+ */
 	struct desc_struct ldt[3];
 /* tss for this task */
 	struct tss_struct tss;
+	/* 目录表的基地址，每个进程都有自己的目录表 */
+	unsigned long * dir_addr;
 };
 
 /*
