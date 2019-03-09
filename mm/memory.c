@@ -44,7 +44,7 @@ __asm__("movl %%eax,%%cr3"::"a" (0))
 //#define PAGING_MEMORY (15*1024*1024)
 //#define PAGING_PAGES (PAGING_MEMORY>>12)
 #define MAX_PAGING_PAGES (1024*1024)     /* 4*1024*1024*1024=4G/4k=1M */
-extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY;
+extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY, memory_end;
 
 #define MAP_NR(addr) (((addr)-LOW_MEM)>>12)
 #define USED 100
@@ -59,18 +59,62 @@ __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 unsigned char linear_addr_swap_map[LINEAR_ADDR_SWAP_PAGES] = {0,};
 
-/* 对>1G的物理地址进行重映射。 */
-void remap_linear_addr(unsigned long phy_addr)
+/*
+ * 当完成对>1G的一页物理地址的重映射并对这一页物理内存初始化后，就会将该物理地址设置到进程用户空间对应的页表项中，这样进程在用户太就可以读写该>1G的一页物理内存了
+ * 这个时候，我们要将linear_addr_swap_map数组中对应的线性地址的占用标志位设置为0，表明该线性地址可以被映射到其他>(1G-128M)的物理地址。
+ */
+void recov_swap_map(unsigned long linear_addr)
 {
+	linear_addr_swap_map[(linear_addr>>12)+LINEAR_ADDR_SWAP_PAGES-KERNEL_LINEAR_ADDR_PAGES] = 0;
+}
 
+/* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
+void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
+{
+	unsigned long* dir_item         = (unsigned long*)((linear_addr >> 20) & 0xFFC);   /* 计算该线性地址所在的目录项，既所在的页表 */
+	unsigned long* table_base       = *dir_item;                                       /* 通过目录项获得对应页表的起始地址 */
+	unsigned long table_item_offset =  (linear_addr >> 10) & 0xFFC;                    /* 计算在页表项在页表中的位置 */
+	unsigned long* table_entry      = table_base + table_item_offset;                  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
+	*table_entry                    = phy_addr; /* 将>1G的一页物理地址，设置在该页表项中，下次再对该线性地址就行读写操作就会映射到该>(1G-128M)的物理地址了哈哈 */
+}
+
+/* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
+unsigned long remap_linear_addr(unsigned long phy_addr)
+{
+	unsigned long linear_addr = 0;
+	for (int i=0; i< LINEAR_ADDR_SWAP_PAGES; i++)
+	{
+		if (linear_addr_swap_map[i] == 0)
+		{
+			linear_addr_swap_map[i] = 1;
+			linear_addr = (KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES+i) << 12; /* 计算需要被重映射的内核空间线性地址 */
+			reset_swap_table_entry(linear_addr, phy_addr);
+			break;
+		}
+	}
+	return linear_addr;
 }
 
 /*
  * Get physical address of first (actually last :-) free page, and mark it
  * used. If no free pages left, return 0.
+ * 这里因为将保留线性地址实地址映射的那部分内存也用于分页管理了，所以当分配的没被占用的物理地址大于（1G-128M）时，
+ * 就应该用保留线性地址remap了，而不是>1G物理内存，这里有个概念一定要记住：内核地址空间是1G并不代表属于内核的物理地址就有1G，
+ * 这个1G的地址空间指的是线性地址空间是属于内核的，而不是物理地址。
+ * 所以传给%ebx寄存器的值应该是KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES，从这块物理地址开始比较，而不是从1G开始。
  */
 unsigned long get_free_page()
 {
+unsigned long compare_addr = 0;
+if (memory_end > KERNEL_LINEAR_ADDR_PAGES)
+{
+	compare_addr = KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES;
+}
+else
+{
+	compare_addr = KERNEL_LINEAR_ADDR_PAGES;
+}
+
 register unsigned long __res asm("ax");
 
 __asm__("std ; repne ; scasb\n\t"
@@ -79,11 +123,15 @@ __asm__("std ; repne ; scasb\n\t"
 	"sall $12,%%ecx\n\t"
 	"addl %2,%%ecx\n\t"
 
-    "cmp" \ $KERNEL_LINEAR_ADDR_PAGES \ ",%%ecx\n\t"
+	"shl $12,%%ebx\n\t"
+    "cmp %%ebx,%%ecx\n\t"
     "jle 1f\n\t"
 	"pushl %%ecx\n\t"
 	"call remap_linear_addr\n\t"
 	"popl %%ecx\n\t"
+	"pushl %%eax\n\t"
+    "call recov_swap_map\n\t"
+	"popl %%eax\n\t"
 
 	"1:\n\t"
 	"movl %%ecx,%%edx\n\t"
@@ -95,7 +143,7 @@ __asm__("std ; repne ; scasb\n\t"
 	"cld;"
 	:"=a" (__res)
 	:"0" (0),"r" (LOW_MEM),"c" (PAGING_PAGES),
-	"D" (mem_map+PAGING_PAGES-1));
+	"D" (mem_map+PAGING_PAGES-1), "b" (compare_addr));
 return __res;
 }
 
@@ -459,15 +507,23 @@ void do_no_page(unsigned long error_code,unsigned long address)
 void mem_init(long start_mem, long end_mem)
 {
 	int paging_pages_num = PAGING_PAGES,i = PAGING_PAGES;
-	int memory_end = end_mem;
+	//int memory_end = end_mem;
 
 	while (paging_pages_num-->0) {
-		/* 如果内存>1G的话，就得用896M~1024M作为保留线性地址空间，映射>1G的物理内存，所以这段内存不能参加分页管理，由内核单独管理。 */
-		if (end_mem > KERNEL_LINEAR_ADDR_PAGES)
+		/*
+		 * 如果内存>1G的话，就得用896M~1024M作为保留线性地址空间，映射>1G的物理内存，
+		 * 所以这段128M的物理内存的管理就有两种方式了：
+		 * 1. 不参加分页管理，由内核单独管理并使用，但内核如果要用的话，也得用896M~1024M的线性地址散射了，注意这里不能再进行实地址1对1映射了，
+		 *    因为与物理地址对应的线性地址有可能被映射到其他>1G的物理地址了。
+		 * 2. 参加分页管理，这样就可以被内核与进程共同使用了，我选择这种方式，这样内存好管理。
+		 */
+
+		/* 这是128M内存由内核单独管理和使用的方式，这里不用了，以后的使用和管理不方便 */
+		/*if (end_mem > KERNEL_LINEAR_ADDR_PAGES)
 		{
 			if (memory_end <= KERNEL_LINEAR_ADDR_PAGES && memory_end > (KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES))
 			{
-				mem_map[--i]=1;  /* 内核这部分保留地址空间不参与分页管理 */
+				mem_map[--i]=1;   内核这部分保留地址空间不参与分页管理，由内核单独使用
 			}
 			else {
 				mem_map[--i]=0;
@@ -477,7 +533,9 @@ void mem_init(long start_mem, long end_mem)
 		else
 		{
 			mem_map[--i]=0;
-		}
+		}*/
+
+		mem_map[--i] = 0;
 	}
 }
 
