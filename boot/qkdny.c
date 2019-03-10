@@ -16,6 +16,10 @@
 
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
+#define OS_PARAMS_ADDR(mem_4k_size) \
+					((mem_4k_size>=0x40000) ? ((1<<30) - 0x8000) :\
+					  ((mem_4k_size<<12)-0x8000)\
+					)
 
 typedef struct HardAllInfoT {
 	char dummy[32];
@@ -45,28 +49,46 @@ __asm__("pushl %%edx\n\t" \
 	  "m" (*((addr)+6)), \
 	  "d" (limit))
 
-/*
- *  将预先加载的32K OS code再次搬运到内核目录表和页表的后面，4k对齐,因为这里页表的个数将根据配置内存的大小动态分配了，
- *  所以当内存大于636M就会有问题了，所以这里要动态分配了，想想看为什么？
- */
-void move_code_to_pgt_tail()
-{
-
-}
-
 /* 这里也要讲内存转换成以4K为单位的总大小. */
 void move_params_to_memend() {
 	unsigned long totalMem  = 0;
 	unsigned long paramsMem = 0;
 	//如果totalMem<1M也就是内存总大小<4G
-	if (total_memory_size < 0x100000)
+	/*if (total_memory_size < 0x100000)
 	{
 		totalMem  = total_memory_size * 0x1000;
 		paramsMem = totalMem - 0x8000;
 	}
 	else {
-		paramsMem = 0xFFFF8000;  /* paramsMem=4G-32K=0xFFFF8000,最高的32K地址用来存储各种硬件参数。 */
+		paramsMem = 0xFFFF8000;   //paramsMem=4G-32K=0xFFFF8000,最高的32K地址用来存储各种硬件参数。
+	}*/
+
+	/*
+	 *  因为要支持每个进程都有4G的地址空间，所以这里为了简单起见，如果内存>=1G的话将params统一复制到(1G-128M-0x8000)处，
+	 *  因为这里有内核实地址管理，而且在内核初始化的时候是不用用到这块内存的，所以parms肯定是不会被覆盖的。
+	 *  如果内存<1G的话，那么还是复制到totalMem-0x8000处。
+	 */
+	/*if (total_memory_size < 0x40000)
+	{
+		totalMem  = total_memory_size * 0x1000;
+		paramsMem = totalMem - 0x8000;
 	}
+	else {
+		paramsMem = OS_PARAMS_ADDR;
+	}*/
+
+	/*
+	 * 这里其实还有个更简单的方法，当内存>1G的时候，直接在1G内存的最高处开辟一个0x8000字节的空间，用于存储os params,
+	 * 因为在初始化内核的目录表的时候，虽然当内存>1G时候只能实地址管理前面的896M内存，后面的内存只能通过保留的128M地址空间散射访问，
+	 * 但是在内核初始化自己的目录表的时候，还是可以把自己地址空间的后128M地址空间映射为实地址模式的，因为内核初始化的时候，是不会调用
+	 * get_free_page的，所以是不会重置这128M地址空间的，所以在执行main函数的各种init操作的时候，是可以正确访问1G地址空间的最后
+	 * 128M内存的，当初始化操作完成，fork task1的时候就会重置内核的128M地址空间用于访问>896M的内存了，当然这时的os params已经不需要了
+	 * 所以可以被覆盖了。
+	 *
+	 */
+
+	paramsMem = OS_PARAMS_ADDR(total_memory_size);
+
 	params_table_addr = paramsMem;
 	copy_struct((long*)0x90000, (long*)paramsMem, 512/4);
 }

@@ -107,7 +107,7 @@ real_entry:
 	/* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
     lss tmp_floppy_area,%esp
 
-    /* 设置内核代码段的limit,因为内核的地址空间是1G,所以当内存>1G的时候，也只能设置为1G=0x40000(4K) */
+    /* 设置内核代码段的limit,因为要支持每个进程都有4G的地址空间，所以内核的地址空间是1G,当内存>1G的时候，也只能设置为1G=0x40000(4K) */
     cmp 0x40000,%edx
     jle 1f
     movl 0x40000,%edx  /* 如果内存>1G，那么设置内核的limit为1G */
@@ -126,14 +126,9 @@ real_entry:
     push %ebx
     call set_seg_limit
     popl %ebx
-    popl %edx             /* 恢复内存的总大小，单位是4K。*/
+    popl %edx             /* 恢复内存的总大小，单位是4K,如果内存>1G这里的edx恒等于1G，注意:这里还没开启分页功能，所以地址的访问是实地址映射。 */
 
-    cmp $0x100000,%edx    /* 比较edx是否等于1M,也就是总内存大小是否是4G，如果等于4G，那么esp=(4G-4)=0xFFFF FFFC */
-    jne L4G
-    movl $0xFFFFFFFC,%edx
-    jmp init_temp_stack
-L4G:
-    shl $0x0C,%edx
+    shl $0x0C,%edx        /* 注意：这里的edx应该是<=1G/4k */
 	subl $0x4,%edx
     /* init a temp stack in the highest addr of memory for handling HD intr.  */
 init_temp_stack:
@@ -397,12 +392,20 @@ setup_paging:
 
     /* total_memory_size存储了内存的大小，但是为4K */
     movl total_memory_size,%eax
+    cmp 0x40000,%eax      /* 判断内存是否>1G，如果大于1G的话，强制设置内核目录表映射的地址空间为1G */
+    jle 1f
+    /*
+     * 设置内核实地址映射的地址空间为1G，这里可能有人会问，不是说好了896M吗，怎么又是1G了，其实这里1G的地址空间都实地址映射是没问题的，
+     * 因为，在调用get_free_page的时候会重置内核这128M地址空间对应的物理页的，所以在内核初始化的时候实地址映射内核这128M地址空间是没问题的
+     * 而且os_params放在1G-0x8000(内存>=1G)，也需要这样初始化内核目录表，这样在初始化mem和char_dev的时候才好访问这些os_params.
+     */
+    movl 0x40000,%eax
     /*
      * 计算内存占用多少页表，也就是多少个目录项。目录项个数=内存大小/4M=total_memory_size/1k,这里要判断内存是否大于1G
      * 如果大于1G的话，那么内核的1G地址空间就不能完全实地址一对一映射了，要留一部分地址空间(128M)映射>1G的物理地址。
      * 1G/4M=256=0x100所以1G内存需要0x100个页表来管理，所以只要比较内存对应的页表数是否>0x100来初始化内核的目录表。
      */
-    movl $0x400,%ebx
+1:  movl $0x400,%ebx
     xorl %edx,%edx       /* 因为divl的除数是双字，所以被除数是%edx:%eax，所以这里要把edx清零。 */
     divl %ebx            /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数 */
     cmp $0x100,%eax      /* 判断内存占用的页表数是否大于0x100,既内存是否>1G */
