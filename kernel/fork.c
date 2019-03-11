@@ -75,9 +75,9 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
-	//if (last_pid == 4) {
-		printk("task nr: %d,last_pid: %d \n\r", nr, last_pid);
-	//}
+
+	//printk("task nr: %d,last_pid: %d \n\r", nr, last_pid);
+
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->state = TASK_UNINTERRUPTIBLE;
 	p->pid = last_pid;

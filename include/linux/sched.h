@@ -78,7 +78,7 @@ struct tss_struct {
 	long	ds;		/* 16 high bits zero */
 	long	fs;		/* 16 high bits zero */
 	long	gs;		/* 16 high bits zero */
-	long	ldt;		/* 16 high bits zero */
+	long	ldt;		/* 16 high bits zero, 这里LDT表在GDT表中的索引，也称为LDT表描述符 */
 	long	trace_bitmap;	/* bits: trace 0, bitmap 16-31 */
 	struct i387_struct i387;
 };

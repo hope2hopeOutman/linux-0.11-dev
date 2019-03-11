@@ -17,7 +17,7 @@
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
 #define OS_PARAMS_ADDR(mem_4k_size) \
-					((mem_4k_size>=0x40000) ? ((1<<30) - 0x8000) :\
+					((mem_4k_size >= 0x40000) ? (1<<30 - 0x8000) :\
 					  ((mem_4k_size<<12)-0x8000)\
 					)
 
