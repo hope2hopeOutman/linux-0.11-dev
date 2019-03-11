@@ -47,7 +47,17 @@ int copy_mem(int nr, struct task_struct * p) {
 		panic("We don't support separate I&D");
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
-	new_data_base = new_code_base = nr * 0x4000000;
+
+	//new_data_base = new_code_base = nr * 0x4000000;
+	if (nr == 1) {
+		/* nr==1表明是task0首次创建init进程1，这时进程1和task0是共享地址空间的，只是用户栈不同，所以他们其实就是线程了。 */
+		new_data_base = new_code_base = 0;
+	}
+	else {
+		/* nr>1的进程都是init进程创建的普通进程，基地址都是从1G开始的 */
+		new_data_base = new_code_base = 0x40000000;
+	}
+
 	p->start_code = new_code_base;
 	set_base(p->ldt[1], new_code_base);
 	set_base(p->ldt[2], new_data_base);
