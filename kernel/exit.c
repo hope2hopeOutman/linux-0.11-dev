@@ -105,8 +105,8 @@ int do_exit(long code)
 
 	//printk("do_exit, pid: %d, fpid: %d, code: %d\n\r", current->pid, current->father, code);
 
-	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
-	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
+	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f),current);
+	free_page_tables(get_base(current->ldt[2]),get_limit(0x17),current);
 	for (i=0 ; i<NR_TASKS ; i++)
 		if (task[i] && task[i]->father == current->pid) {
 			task[i]->father = 1;

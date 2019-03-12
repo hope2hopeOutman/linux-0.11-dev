@@ -281,14 +281,17 @@ __asm__("cld\n\t" \
  * a function of its own, as there is some speed to be got by reading them
  * all at the same time, not waiting for one to be read, and then another
  * etc.
+ * 注意：这里的address是物理地址
  */
 void bread_page(unsigned long address, int dev, int b[4]) {
+	unsigned long* phy_addr = (unsigned long*)address;
+	unsigned long linear_addr = check_remap_linear_addr(&phy_addr); /* 注意：这里的phy_addr有可能是内核空间保留的线性地址，如果address超出内核的寻址空间 */
 	struct buffer_head * bh[4];
 	int i;
 
 	for (i = 0; i < 4; i++) {
 		if (b[i]) {
-			if (bh[i] = getblk(dev, b[i])) {
+			if ((bh[i] = getblk(dev, b[i]))) {
 				if (!bh[i]->b_uptodate) {
 					ll_rw_block(READ, bh[i]);
 				}
@@ -301,11 +304,12 @@ void bread_page(unsigned long address, int dev, int b[4]) {
 		if (bh[i]) {
 			wait_on_buffer(bh[i]);
 			if (bh[i]->b_uptodate) {
-				COPYBLK((unsigned long) bh[i]->b_data, address);
+				COPYBLK((unsigned long) bh[i]->b_data, phy_addr);
 			}
 			brelse(bh[i]);
 		}
 	}
+	recov_swap_map(linear_addr);
 }
 
 /*

@@ -58,6 +58,10 @@ __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 unsigned char linear_addr_swap_map[LINEAR_ADDR_SWAP_PAGES] = {0,};
+/* 如果linear_addr>=1G，说明是用户空间的缺页处理 */
+unsigned long get_dir_entry_offset(unsigned long linear_addr){
+	return (((linear_addr>=0x40000000 ? ((linear_addr-USER_LINEAR_ADDR_START) & 0xFFFFF000) : linear_addr)>>20) & 0xffc);
+}
 
 /*
  * 当完成对>1G的一页物理地址的重映射并对这一页物理内存初始化后，就会将该物理地址设置到进程用户空间对应的页表项中，这样进程在用户太就可以读写该>1G的一页物理内存了
@@ -65,8 +69,21 @@ unsigned char linear_addr_swap_map[LINEAR_ADDR_SWAP_PAGES] = {0,};
  */
 void recov_swap_map(unsigned long linear_addr)
 {
-	linear_addr_swap_map[(linear_addr>>12)+LINEAR_ADDR_SWAP_PAGES-KERNEL_LINEAR_ADDR_PAGES] = 0;
+	if (!linear_addr) {
+		linear_addr_swap_map[(linear_addr>>12)+LINEAR_ADDR_SWAP_PAGES-KERNEL_LINEAR_ADDR_PAGES] = 0;
+	}
 }
+
+void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
+	unsigned long linear_addr = 0;
+	for (int i=0;i<length;i++){
+		linear_addr = *(linear_addrs+i);
+		if (!linear_addr) {
+			recov_swap_map(linear_addr);
+		}
+	}
+}
+
 
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
@@ -88,7 +105,7 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 		{
 			linear_addr_swap_map[i] = 1;
 			linear_addr = (KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES+i) << 12; /* 计算需要被重映射的内核空间线性地址 */
-			reset_swap_table_entry(linear_addr, phy_addr);
+			reset_swap_table_entry(linear_addr, phy_addr & 0xFFFFF000);
 			break;
 		}
 	}
@@ -100,17 +117,17 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 unsigned long check_remap_linear_addr(unsigned long** phy_addr) {
 	unsigned long linear_addr = 0;
 	if (total_memory_size > 0x40000 && (unsigned long)*phy_addr >= ((1 << 30) - (128 << 20))) {
-		linear_addr = remap_linear_addr((unsigned long)(*phy_addr));
+		linear_addr = remap_linear_addr((unsigned long)(*phy_addr));    /* 映射的一定是4K对齐的物理页 */
 		*phy_addr = (unsigned long*)linear_addr;
 	}
 	return linear_addr;
 }
 /* 将被重映射的线性地址缓存起来，等到某个时机，统一释放。 */
-void caching_linear_addr(unsigned long** addr_array, int length, unsigned long linear_addr) {
+void caching_linear_addr(unsigned long* addr_array, int length, unsigned long linear_addr) {
 	if (!linear_addr) {
 		for (int i = 0; i < length; i++) {
 			if (*(addr_array + i) == 0) {
-				*(addr_array + i) = (unsigned long*) linear_addr;
+				*(addr_array + i) =  linear_addr;
 				return;
 			}
 		}
@@ -199,10 +216,12 @@ void free_page(unsigned long addr)
  * This function frees a continuos block of page tables, as needed
  * by 'exit()'. As does copy_page_tables(), this handles only 4Mb blocks.
  */
-int free_page_tables(unsigned long from,unsigned long size)
+int free_page_tables(unsigned long from,unsigned long size, struct task_struct* task_p)
 {
 	unsigned long *pg_table;
 	unsigned long * dir, nr;
+	unsigned long cached_dir_base[1] = {0};
+	int cached_dir_length = 1;
 
 	if (from & 0x3fffff)
 		panic("free_page_tables called with wrong alignment");
@@ -210,12 +229,22 @@ int free_page_tables(unsigned long from,unsigned long size)
 		printk("Free pg_dir, currentPid: %d, fid: %d \n\r", current->pid, current->father);
 		panic("Trying to free up swapper memory space");
 	}
+
+	dir = task_p->dir_addr + (((from ? (from-USER_LINEAR_ADDR_START) : from)>>20) & 0xffc);  /* 获得该任务的目录表基地址 */
+	caching_linear_addr(cached_dir_base,cached_dir_length,check_remap_linear_addr(&dir));
+
 	size = (size + 0x3fffff) >> 22;
-	dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
+	dir = (unsigned long *) ((from>>20) & 0xffc); /* dir_base_entry */
 	for ( ; size-->0 ; dir++) {
 		if (!(1 & *dir))
 			continue;
+
 		pg_table = (unsigned long *) (0xfffff000 & *dir);
+
+		unsigned long cached_pg_table_base[1] = {0};
+		int cached_pg_table_length = 1;
+		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, &pg_table);
+
 		for (nr=0 ; nr<1024 ; nr++) {
 			if (1 & *pg_table)
 				free_page(0xfffff000 & *pg_table);
@@ -224,7 +253,9 @@ int free_page_tables(unsigned long from,unsigned long size)
 		}
 		free_page(0xfffff000 & *dir);
 		*dir = 0;
+		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}
+	recov_swap_linear_addrs(cached_dir_base, cached_dir_length);
 	invalidate();
 	return 0;
 }
@@ -248,13 +279,13 @@ int free_page_tables(unsigned long from,unsigned long size)
  */
 int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_struct* new_task)
 {
-	const int length = 8;
 	unsigned long * from_page_table;
 	unsigned long * to_page_table;
 	unsigned long this_page;
 	unsigned long * from_dir, * to_dir;
 	unsigned long nr;
-	unsigned long* cached_dir_entry[length];
+	unsigned long cached_dir_base[2] = {0,0};
+	int cached_dir_length = 2;
 
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
@@ -268,15 +299,15 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	 * 因为这段代码是在内核态运行的，内核基地址base=0，所以current->dir_addr+目录项offset得到的就是目录项的实际物理地址。
 	 * 如果内存>1G,目录项的物理地址>(1G-128M),那么需要对它进行remap,麻烦啊
 	 */
-	from_dir = current->dir_addr + (((from ? (from-USER_LINEAR_ADDR_START) : from)>>20) & 0xffc);
-	caching_linear_addr(cached_dir_entry,length,check_remap_linear_addr(&from_dir));
+	from_dir = current->dir_addr + get_dir_entry_offset(from);
+	caching_linear_addr(cached_dir_base,cached_dir_length,check_remap_linear_addr(&from_dir));
 
 	/*
 	 * 计算to线性地址所在的目录项,注意：这里要加上新分配目录页的基地址.
 	 * 这里新的目录页也要判断是否需要remap。
 	 */
-	to_dir = new_dir_page + (((to ? (to - USER_LINEAR_ADDR_START) : to)>>20) & 0xffc);
-	caching_linear_addr(cached_dir_entry, length, check_remap_linear_addr(&to_dir));
+	to_dir = new_dir_page + get_dir_entry_offset(to);
+	caching_linear_addr(cached_dir_base, cached_dir_length, check_remap_linear_addr(&to_dir));
 
 	size = ((unsigned) (size+0x3fffff)) >> 22;                      /* 因为每个页表能管理4M物理内存，所以这里(size+(4M-1))/4M确保，不够整除的部分也能被copy. */
 
@@ -285,15 +316,17 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			panic("copy_page_tables: already exist");
 		if (!(1 & *from_dir))                                       /* 判断from线性地址所在的目录项是否存在。 */
 			continue;
+		unsigned long cached_page_table_base[2] = {0,0};
+		int cached_page_table_length = 2;
 		/* 读取目录项中存储的某个页表的物理地址，因为页表的地址是4K对齐的，所以要&0xfffff000擦除有可能出错的bit位。 */
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		caching_linear_addr(cached_dir_entry, length, check_remap_linear_addr(&from_page_table));
+		caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&from_page_table));
 
 		if (!(to_page_table = (unsigned long *) get_free_page())) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
 			return -1;	/* Out of memory, see freeing */
 		}
 		else {
-			caching_linear_addr(cached_dir_entry, length, check_remap_linear_addr(&to_page_table));
+			caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&to_page_table));
 		}
 		*to_dir = ((unsigned long) to_page_table) | 7;  /* 将获取的新的页表物理地址，或7后赋值给to线性地址所在的目录项。 */
 		/*
@@ -336,7 +369,9 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			    mem_map[this_page]++;            //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
 			}
 		}
+		recov_swap_linear_addrs(cached_page_table_base, cached_page_table_length);
 	}
+	recov_swap_linear_addrs(cached_dir_base,cached_dir_length);
 	invalidate();
 	return 0;
 }
@@ -346,39 +381,49 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
  * It returns the physical address of the page gotten, 0 if
  * out of memory (either when trying to access page-table or
  * page.)
+ * 这里的page是实际的物理地址，address是线性地址
  */
 unsigned long put_page(unsigned long page,unsigned long address)
 {
 	unsigned long tmp, *page_table;
 
-/* NOTE !!! This uses the fact that _pg_dir=0 */
+    /* NOTE !!! This uses the fact that kernel_pg_dir=0 */
 
 	if (page < LOW_MEM || page >= HIGH_MEMORY)
 		printk("Trying to put page %p at %p,low_mem: %u,high_mem: %u\n",page,address,LOW_MEM,HIGH_MEMORY);
-	if (mem_map[(page-LOW_MEM)>>12] != 1)
+	if (mem_map[(page-LOW_MEM)>>12] != 1)  /* 在将线性地址页和某个物理地址页关联起来之前，要通过get_free_page先占据该物理页 */
 		printk("mem_map disagrees with %p at %p\n",page,address);
-	page_table = (unsigned long *) ((address>>20) & 0xffc);
+	//page_table = (unsigned long *) ((address>>20) & 0xffc);
+	unsigned long cached_linear_addrs[2] = {0,};
+	int length = 2;
+	page_table = current->dir_addr + get_dir_entry_offset(address);   /* 获得目录项的实际物理地址 */
+	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&page_table)); /* 如果该进程的目录表的实际物理地址超出内核的地址空间，要remap */
 	if ((*page_table)&1)
-		page_table = (unsigned long *) (0xfffff000 & *page_table);
+		page_table = (unsigned long *) (0xfffff000 & *page_table);    /* 获得该线性地址所在的页表的基地址 */
 	else {
 		if (!(tmp=get_free_page()))
 			return 0;
-		*page_table = tmp|7;
-		page_table = (unsigned long *) tmp;
+		*page_table = tmp|7;                      /* 蒋新获得的物理页设置为RWX，然后将其地址复制到对应的目录项中 */
+		page_table = (unsigned long *) tmp;       /* 然后将page_table指向新分配的页表 */
 	}
-	page_table[(address>>12) & 0x3ff] = page | 7;
-/* no need for invalidate */
+	/* 到这里，page_table已经指向了对应页表的基地址了，所以也要判断该页表的物理地址是否超出内核的寻址范围，并进行必要的remap. */
+	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&page_table));
+	page_table[(address>>12) & 0x3ff] = page | 7;         /* 将该线性地址页address放置在对应的页表项中，并设置成RWX */
+	recov_swap_linear_addrs(cached_linear_addrs, length); /* 释放被占用的内核线性地址 */
+    /* no need for invalidate */
 	return page;
 }
-/* 处理写保护异常，table_entry是物理地址，不是线性地址搞清楚喽。 */
+/* 处理写保护异常，table_entry是页表中某个页表项的物理地址，不是线性地址搞清楚喽。 */
 void un_wp_page(unsigned long * table_entry)
 {
 	//printk("table_entry: %p \n\r", table_entry);
 	unsigned long old_page,new_page;
 
+	unsigned long linear_addr = check_remap_linear_addr(&table_entry);
 	old_page = 0xfffff000 & *table_entry;
 	if (old_page >= LOW_MEM && mem_map[MAP_NR(old_page)]==1) {
 		*table_entry |= 2;
+		recov_swap_map(linear_addr);
 		invalidate();
 		return;
 	}
@@ -405,6 +450,7 @@ void un_wp_page(unsigned long * table_entry)
  * and decrementing the shared-page counter for the old page.
  *
  * If it's in code space we exit with a segment error.
+ * 注意：address是线性地址
  */
 void do_wp_page(unsigned long error_code,unsigned long address)
 {
@@ -422,10 +468,13 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 
 	//printk("error line address: %p \n\r", address);
 
-	un_wp_page((unsigned long *)
-		(((address>>10) & 0xffc) + (0xfffff000 &
-		*((unsigned long *) ((address>>20) &0xffc)))));
+	unsigned long* dir_item = current->dir_addr + get_dir_entry_offset(address);
+	unsigned long linear_addr = check_remap_linear_addr(&dir_item);
 
+	un_wp_page((unsigned long *)
+		(((address>>10) & 0xffc) + (0xfffff000 & *dir_item)));
+
+	recov_swap_map(linear_addr);
 }
 
 void write_verify(unsigned long address)
@@ -458,44 +507,63 @@ void get_empty_page(unsigned long address)
  *
  * NOTE! This assumes we have checked that p != current, and that they
  * share the same executable.
+ * 注意：这里的address是相对与进程线性地址空间基地址的offset
  */
 static int try_to_share(unsigned long address, struct task_struct * p)
 {
 	unsigned long from;
 	unsigned long to;
-	unsigned long from_page;
-	unsigned long to_page;
+	unsigned long* from_page;
+	unsigned long* to_page;
 	unsigned long phys_addr;
 
-	from_page = to_page = ((address>>20) & 0xffc);
-	from_page += ((p->start_code>>20) & 0xffc);
-	to_page += ((current->start_code>>20) & 0xffc);
-/* is there a page-directory at from? */
-	from = *(unsigned long *) from_page;
+	//from_page = to_page = ((address>>20) & 0xffc);  /* 计算在目录表中的offset */
+	//from_page += ((p->start_code>>20) & 0xffc);     /* 加上该进程在目录表中所占用的64M目录项的基地址，就得到对应目录项的实际物理地址了 */
+	//to_page += ((current->start_code>>20) & 0xffc); /* 同上 */
+
+	/*
+	 * 当为每个进程都分配独立的目录表的时候，就不能项上面那样共享page了。
+	 * 如果两个进程运行相同的程序，那么他们避让共享同一个inode节点，由于他们的地址空间的基地址是一样的，都是从1G开始的，
+	 * 所以他们所产生的相同的线性地址必然对应的相同的物理页，所以只要有一个进程加载对应的物理页，另一个进程执行时就可以共享。
+	 * 这里的start_code对于task1和task0都是0，而对于NR>1的进程他们的start_code都是1G，这里就先这样操作吧。
+	 */
+	from_page = p->dir_addr + get_dir_entry_offset(address+p->start_code);            /* 这时的from_page指向的是对应的目录项的物理地址 */
+	to_page   = current->dir_addr + get_dir_entry_offset(address+current->start_code);/* 同上 */
+    /* is there a page-directory at from? */
+	unsigned long cached_linear_addrs[4];
+	int length = 4;
+	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&from_page));  /* 对from_page物理地址进行remap，如果需要的话 */
+	from = *(unsigned long *) from_page;  /* 将目录项上存储的页表的物理基地址赋值给from */
 	if (!(from & 1))
 		return 0;
-	from &= 0xfffff000;
-	from_page = from + ((address>>10) & 0xffc);
-	phys_addr = *(unsigned long *) from_page;
-/* is the page clean and present? */
+	from &= 0xfffff000;    /* 这里仅仅是为了align */
+	/* 这里的address是相对于start_code的offset，所以取其中间10位的值然后再*4就得到其在页表中的offset，既页表项的物理地址。 */
+	from_page = (unsigned long *)(from + ((address>>10) & 0xffc));
+	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&from_page)); /* 这里from_page存储的物理地址又变了，所以要再次remap */
+	phys_addr = *(unsigned long *) from_page;  /* 将页表项中存储的物理地址取出赋值给phys_addr */
+    /* is the page clean and present? */
 	if ((phys_addr & 0x41) != 0x01)
 		return 0;
 	phys_addr &= 0xfffff000;
 	if (phys_addr >= HIGH_MEMORY || phys_addr < LOW_MEM)
 		return 0;
-	to = *(unsigned long *) to_page;
+	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&to_page));
+	to = *(unsigned long *) to_page;   /* 将页表的物理基地址赋值为to */
 	if (!(to & 1))
-		if (to = get_free_page())
-			*(unsigned long *) to_page = to | 7;
+		if ((to = get_free_page()))
+			*(unsigned long *) to_page = to | 7;  /* 将新分配的页表的物理基地址赋值到对应的目录项上 */
 		else
 			oom();
 	to &= 0xfffff000;
-	to_page = to + ((address>>10) & 0xffc);
+	/* to:页表的物理基地址 + (((address>>10) & 0xffc):页表项的offset = 页表项的物理地址，这时的to_page变为页表项的物理地址了，要remap */
+	to_page = (unsigned long *)(to + ((address>>10) & 0xffc));
+	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&to_page));
 	if (1 & *(unsigned long *) to_page)
 		panic("try_to_share: to_page already exists");
 /* share them: write-protect */
-	*(unsigned long *) from_page &= ~2;
-	*(unsigned long *) to_page = *(unsigned long *) from_page;
+	*(unsigned long *) from_page &= ~2;   /* 将来自from的页表项存储的物理页地址设置为RX */
+	*(unsigned long *) to_page = *(unsigned long *) from_page;  /* 将该要共享的物理页的地址赋值给对应的to页表对应的页表项中 */
+	recov_swap_linear_addrs(cached_linear_addrs,length);
 	invalidate();
 	phys_addr -= LOW_MEM;
 	phys_addr >>= 12;
@@ -531,16 +599,16 @@ static int share_page(unsigned long address)
 	}
 	return 0;
 }
-
+/* 注意：这里的address是出错的线性地址 */
 void do_no_page(unsigned long error_code,unsigned long address)
 {
 	int nr[4];
 	unsigned long tmp;
-	unsigned long page;
+	unsigned long* page;
 	int block,i;
 
 	address &= 0xfffff000;
-	tmp = address - current->start_code;
+	tmp = address - current->start_code;  /* 这里的current.start_code等于进程地址空间的base,这里的tmp是相对于base的offset */
 	//printk("addr: %d, errcode: %d, tmp: %d \n\r", address, error_code, );
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
@@ -548,7 +616,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	}
 	if (share_page(tmp))
 		return;
-	if (!(page = get_free_page()))
+	if (!(page = (unsigned long*)get_free_page()))
 		oom();
 /* remember that 1 block is used for header */
 	block = 1 + tmp/BLOCK_SIZE;
@@ -556,17 +624,31 @@ void do_no_page(unsigned long error_code,unsigned long address)
 		nr[i] = bmap(current->executable,block);
 	}
 	//printk("nr0: %d, nr1: %d ,nr2: %d, nr3: %d\n\r", nr[0], nr[1], nr[2], nr[3]);
-	bread_page(page,current->executable->i_dev,nr);
+	bread_page((unsigned long)page,current->executable->i_dev,nr);
 	//printk("pageCode: %u\n\r", *(unsigned long*)page);
 	i = tmp + 4096 - current->end_data;
-	tmp = page + 4096;
+
+	unsigned long linear_addr = 0;
+	if (i>0) {
+		linear_addr = remap_linear_addr((unsigned long)page);
+	}
+	if (linear_addr){
+		tmp = (unsigned long)linear_addr + 4096;
+	}
+	else {
+		tmp = (unsigned long)page + 4096;
+	}
+
 	while (i-- > 0) {
 		tmp--;
 		*(char *)tmp = 0;
 	}
-	if (put_page(page,address))
+
+	recov_swap_map(linear_addr);
+
+	if (put_page((unsigned long)page,address))
 		return;
-	free_page(page);
+	free_page((unsigned long)page);
 	oom();
 }
 

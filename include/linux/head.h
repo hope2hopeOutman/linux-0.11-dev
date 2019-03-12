@@ -9,6 +9,23 @@ typedef struct desc_struct {
 extern unsigned long* pg_dir;
 extern desc_table idt,gdt;
 
+
+extern void recov_swap_map(unsigned long linear_addr);
+
+extern void recov_swap_linear_addrs(unsigned long* linear_addrs, int length);
+
+
+/* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
+extern void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr);
+
+/* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
+extern unsigned long remap_linear_addr(unsigned long phy_addr);
+
+/* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
+extern unsigned long check_remap_linear_addr(unsigned long** phy_addr);
+/* 将被重映射的线性地址缓存起来，等到某个时机，统一释放。 */
+extern void caching_linear_addr(unsigned long* addr_array, int length, unsigned long linear_addr);
+
 #define GDT_NUL 0
 #define GDT_CODE 1
 #define GDT_DATA 2

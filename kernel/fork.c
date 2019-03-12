@@ -65,7 +65,7 @@ int copy_mem(int nr, struct task_struct * p) {
 	set_base(p->ldt[2], new_data_base);
 	if (copy_page_tables(old_data_base, new_data_base, data_limit, p)) {
 		//printk("copy_page_tables error result in free page tables error. \n\r");
-		free_page_tables(new_data_base, data_limit);
+		free_page_tables(new_data_base, data_limit,p);
 		return -ENOMEM;
 	}
 	return 0;
