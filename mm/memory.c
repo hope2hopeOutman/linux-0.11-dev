@@ -68,6 +68,17 @@ void recov_swap_map(unsigned long linear_addr)
 	linear_addr_swap_map[(linear_addr>>12)+LINEAR_ADDR_SWAP_PAGES-KERNEL_LINEAR_ADDR_PAGES] = 0;
 }
 
+void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
+	unsigned long linear_addr = 0;
+	for (int i=0;i<length;i++){
+		linear_addr = *(linear_addrs+i);
+		if (!linear_addr) {
+			recov_swap_map(linear_addr);
+		}
+	}
+}
+
+
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 {
@@ -106,11 +117,11 @@ unsigned long check_remap_linear_addr(unsigned long** phy_addr) {
 	return linear_addr;
 }
 /* 将被重映射的线性地址缓存起来，等到某个时机，统一释放。 */
-void caching_linear_addr(unsigned long** addr_array, int length, unsigned long linear_addr) {
+void caching_linear_addr(unsigned long* addr_array, int length, unsigned long linear_addr) {
 	if (!linear_addr) {
 		for (int i = 0; i < length; i++) {
 			if (*(addr_array + i) == 0) {
-				*(addr_array + i) = (unsigned long*) linear_addr;
+				*(addr_array + i) =  linear_addr;
 				return;
 			}
 		}
@@ -248,13 +259,13 @@ int free_page_tables(unsigned long from,unsigned long size)
  */
 int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_struct* new_task)
 {
-	const int length = 8;
 	unsigned long * from_page_table;
 	unsigned long * to_page_table;
 	unsigned long this_page;
 	unsigned long * from_dir, * to_dir;
 	unsigned long nr;
-	unsigned long* cached_dir_entry[length];
+	unsigned long cached_dir_base[2] = {0,0};
+	int cached_dir_length = 2;
 
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
@@ -269,14 +280,14 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	 * 如果内存>1G,目录项的物理地址>(1G-128M),那么需要对它进行remap,麻烦啊
 	 */
 	from_dir = current->dir_addr + (((from ? (from-USER_LINEAR_ADDR_START) : from)>>20) & 0xffc);
-	caching_linear_addr(cached_dir_entry,length,check_remap_linear_addr(&from_dir));
+	caching_linear_addr(cached_dir_base,cached_dir_length,check_remap_linear_addr(&from_dir));
 
 	/*
 	 * 计算to线性地址所在的目录项,注意：这里要加上新分配目录页的基地址.
 	 * 这里新的目录页也要判断是否需要remap。
 	 */
 	to_dir = new_dir_page + (((to ? (to - USER_LINEAR_ADDR_START) : to)>>20) & 0xffc);
-	caching_linear_addr(cached_dir_entry, length, check_remap_linear_addr(&to_dir));
+	caching_linear_addr(cached_dir_base, cached_dir_length, check_remap_linear_addr(&to_dir));
 
 	size = ((unsigned) (size+0x3fffff)) >> 22;                      /* 因为每个页表能管理4M物理内存，所以这里(size+(4M-1))/4M确保，不够整除的部分也能被copy. */
 
@@ -285,15 +296,17 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			panic("copy_page_tables: already exist");
 		if (!(1 & *from_dir))                                       /* 判断from线性地址所在的目录项是否存在。 */
 			continue;
+		unsigned long cached_page_table_base[2] = {0,0};
+		int cached_page_table_length = 2;
 		/* 读取目录项中存储的某个页表的物理地址，因为页表的地址是4K对齐的，所以要&0xfffff000擦除有可能出错的bit位。 */
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		caching_linear_addr(cached_dir_entry, length, check_remap_linear_addr(&from_page_table));
+		caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&from_page_table));
 
 		if (!(to_page_table = (unsigned long *) get_free_page())) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
 			return -1;	/* Out of memory, see freeing */
 		}
 		else {
-			caching_linear_addr(cached_dir_entry, length, check_remap_linear_addr(&to_page_table));
+			caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&to_page_table));
 		}
 		*to_dir = ((unsigned long) to_page_table) | 7;  /* 将获取的新的页表物理地址，或7后赋值给to线性地址所在的目录项。 */
 		/*
@@ -336,7 +349,9 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			    mem_map[this_page]++;            //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
 			}
 		}
+		recov_swap_linear_addrs(cached_page_table_base, cached_page_table_length);
 	}
+	recov_swap_linear_addrs(cached_dir_base,cached_dir_length);
 	invalidate();
 	return 0;
 }
