@@ -50,18 +50,20 @@ int copy_mem(int nr, struct task_struct * p) {
 
 	//new_data_base = new_code_base = nr * 0x4000000;
 	if (nr == 1) {
-		/* nr==1表明是task0首次创建init进程1，这时进程1和task0是共享地址空间的，只是用户栈不同，所以他们其实就是线程了。 */
+		/* nr==1表明是task0首次创建init进程1，这时进程1和task0是共享地址空间的，只是用户栈不同，所以他们其实就是共享同一个地址空间的线程了。 */
 		new_data_base = new_code_base = 0;
+		code_limit = data_limit = 0x40000000;    /* 进程0和进程1的地址空间Limit都是1G */
 	}
 	else {
 		/* nr>1的进程都是init进程创建的普通进程，基地址都是从1G开始的 */
 		new_data_base = new_code_base = 0x40000000;
+		code_limit = data_limit = 0xC0000000;    /* nr>1的进程的地址空间Limit都是3G */
 	}
 
 	p->start_code = new_code_base;
 	set_base(p->ldt[1], new_code_base);
 	set_base(p->ldt[2], new_data_base);
-	if (copy_page_tables(old_data_base, new_data_base, data_limit)) {
+	if (copy_page_tables(old_data_base, new_data_base, data_limit, p)) {
 		//printk("copy_page_tables error result in free page tables error. \n\r");
 		free_page_tables(new_data_base, data_limit);
 		return -ENOMEM;

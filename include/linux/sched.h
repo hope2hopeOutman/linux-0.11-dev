@@ -34,7 +34,7 @@
 
 #define PG_DIR_ADDR 0
 
-extern int copy_page_tables(unsigned long from, unsigned long to, long size);
+extern int copy_page_tables(unsigned long from, unsigned long to, long size, struct task_struct* new_task);
 extern int free_page_tables(unsigned long from, unsigned long size);
 
 extern void sched_init(void);
@@ -151,6 +151,7 @@ struct task_struct {
 	 _LDT(0),0x80000000, \
 		{} \
 	}, \
+/*进程0的目录表基地址(注意:这个地址是实际的物理地址，对于nr>1的进程用的时候一定要记住要减去进程的线性基地址)*/    (unsigned long*)0 \
 }
 
 extern struct task_struct *task[NR_TASKS];
