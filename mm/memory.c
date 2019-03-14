@@ -84,7 +84,6 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 	}
 }
 
-
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 {
@@ -142,14 +141,21 @@ void caching_linear_addr(unsigned long* addr_array, int length, unsigned long li
  * 就应该用保留线性地址remap了，而不是>1G物理内存，这里有个概念一定要记住：内核地址空间是1G并不代表属于内核的物理地址就有1G，
  * 这个1G的地址空间指的是线性地址空间是属于内核的，而不是物理地址。
  * 所以传给%ebx寄存器的值应该是KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES，从这块物理地址开始比较，而不是从1G开始。
+ * 参数space的值有两个：0和1
+ * 这个参数的值有意义的前提是，内存>1G
+ * 1:表示分配的物理页地址<(1G-128M),也就是来自于mem_map开始部分，内核实地址映射的物理页。
+ * 0:表示分配的物理页来自于整个mem_map管理的内存页.
  */
-unsigned long get_free_page()
+unsigned long get_free_page(int space)
 {
 
 register unsigned long __res asm("ax");
 unsigned long compare_addr = 0;
 if (memory_end > KERNEL_LINEAR_ADDR_PAGES)
 {
+	if (space) {
+
+	}
 	compare_addr = KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES;
 }
 else
