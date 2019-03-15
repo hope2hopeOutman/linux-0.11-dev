@@ -16,6 +16,7 @@
 #include <linux/kernel.h>
 #include <asm/segment.h>
 #include <asm/system.h>
+#include <linux/head.h>
 
 extern void write_verify(unsigned long address);
 
@@ -41,7 +42,7 @@ int copy_mem(int nr, struct task_struct * p) {
 
 	code_limit = get_limit(0x0f);
 	data_limit = get_limit(0x17);
-	old_code_base = get_base(current->ldt[1]);
+	old_code_base = get_base(current->ldt[1]); /* 这里的current存储的task_struct地址是在内核实地址空间的，所以不需要remap */
 	old_data_base = get_base(current->ldt[2]);
 	if (old_data_base != old_code_base)
 		panic("We don't support separate I&D");
@@ -51,13 +52,13 @@ int copy_mem(int nr, struct task_struct * p) {
 	//new_data_base = new_code_base = nr * 0x4000000;
 	if (nr == 1) {
 		/* nr==1表明是task0首次创建init进程1，这时进程1和task0是共享地址空间的，只是用户栈不同，所以他们其实就是共享同一个地址空间的线程了。 */
-		new_data_base = new_code_base = 0;
-		code_limit = data_limit = 0x40000000;    /* 进程0和进程1的地址空间Limit都是1G */
+		new_data_base = new_code_base = KERNEL_LINEAR_ADDR_START;
+		code_limit = data_limit = KERNEL_LINEAR_ADDR_LIMIT;    /* 进程0和进程1的地址空间Limit都是1G */
 	}
 	else {
 		/* nr>1的进程都是init进程创建的普通进程，基地址都是从1G开始的 */
-		new_data_base = new_code_base = 0x40000000;
-		code_limit = data_limit = 0xC0000000;    /* nr>1的进程的地址空间Limit都是3G */
+		new_data_base = new_code_base = USER_LINEAR_ADDR_START;
+		code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;    /* nr>1的进程的地址空间Limit都是3G */
 	}
 
 	p->start_code = new_code_base;
@@ -82,8 +83,8 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	struct task_struct *p;
 	int i;
 	struct file *f;
-
-	p = (struct task_struct *) get_free_page();
+    /* 本版本将进程的task_struct和目录表都分配在内核实地址寻址的空间(mem>1G && mem<896M) */
+	p = (struct task_struct *) get_free_page(PAGE_IN_REAL_MEM_MAP);
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;

@@ -205,6 +205,7 @@ static char * envp[] = { "HOME=/usr/root", NULL };
 
 void init(void)
 {
+	/* 这里是task1执行的代码 */
 	int pid,i;
 
 	setup((void *) &drive_info);
@@ -214,14 +215,14 @@ void init(void)
 	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS, NR_BUFFERS*BLOCK_SIZE);
 	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
 	if (!(pid=fork())) {
-		close(0);
+		close(0);  /* 这里是task2开始执行的代码 */
 		if (open("/etc/rc",O_RDONLY,0))
 			_exit(1);
 		execve("/bin/sh",argv_rc,envp_rc);
 		_exit(2);
 	}
 	if (pid>0)
-		//printf("pid: %d \n\r", pid);
+		//printf("pid: %d \n\r", pid);  /* 这里是进程1执行的代码 */
 		while (pid != wait(&i))
 			/* nothing */;
 	while (1) {

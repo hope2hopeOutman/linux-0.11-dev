@@ -6,7 +6,7 @@
  * 这里取整只用8000个段描述符，因为一个task要占用两项段描述符(LDT和TSS)，
  * 所以最大可以创建4000个进程。
  */
-//#define NR_TASKS 4000
+//#define NR_TASKS 1k=1024
 #define NR_TASKS 64
 #define HZ 100
 

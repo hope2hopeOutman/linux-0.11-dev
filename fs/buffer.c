@@ -284,8 +284,8 @@ __asm__("cld\n\t" \
  * 注意：这里的address是物理地址
  */
 void bread_page(unsigned long address, int dev, int b[4]) {
-	unsigned long* phy_addr = (unsigned long*)address;
-	unsigned long linear_addr = check_remap_linear_addr(&phy_addr); /* 注意：这里的phy_addr有可能是内核空间保留的线性地址，如果address超出内核的寻址空间 */
+	unsigned long* phy_addr = (unsigned long*)address;              /* 这里的address就是4K对齐的，所以不需要align */
+	unsigned long linear_addr = check_remap_linear_addr(&phy_addr); /* 注意：这里的phy_addr有可能是内核空间保留的线性地址，因为当address超出内核的寻址空间会被remap为linear */
 	struct buffer_head * bh[4];
 	int i;
 
@@ -309,7 +309,7 @@ void bread_page(unsigned long address, int dev, int b[4]) {
 			brelse(bh[i]);
 		}
 	}
-	recov_swap_map(linear_addr);
+	recov_swap_linear(linear_addr);
 }
 
 /*
