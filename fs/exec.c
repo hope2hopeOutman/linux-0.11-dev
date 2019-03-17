@@ -93,10 +93,10 @@ static int count(char ** argv)
  *
  * Modified by TYT, 11/24/91 to add the from_kmem argument, which specifies
  * whether the string and the string array are from user or kernel segments:
- * 这里默认是copy一个char* argv[n]类型的字符串列表;
- * 两个条件：1.字符串指针是在用户空间还是内核空间 2.字符串本身是在内核空间还是用户空间
- * argv * : 这里的argv*可以理解为取值操作，既(*argv)，更好理解一点，*argv所存储的地址(字符串的首地址)是在用户空间还是在内核空间
- * argv **: argv**也理解为取值操作既(*(*argv))，表示字符串本身是在内核空间还是用户空间
+ * 这里默认就是copy一个char* argv[n]类型的字符串列表;
+ * 两个条件：1.数组或构成数组的成员(字符串指针)是在用户空间还是内核空间 2.字符串本身是在内核空间还是用户空间
+ * 1. argv *  : 这里的argv*可以理解为取值操作，既(*argv)更好理解一点，*argv表示从数组中取一个数组元素(字符串指针)，但要知道这个数组或数组元素本身是在内核或用户空间。
+ * 2. argv ** : argv**也理解为取值操作既(*(*argv))，表示字符串本身(数组元素指向的字符串)是在内核空间还是用户空间。
  * from_kmem     argv *        argv **       注意：这里的argv*指的是指针取值操作既(*argv)，同样 argv**也是指针取值操作既(*(*argv))
  *    0          user space    user space
  *    1          kernel space  user space
@@ -139,8 +139,8 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 		}
 		while (len) {  /* 这里的len把字符串的结束符NULL（\0）也算进去了。到这里tmp指向了字符串结束符的下一个地址了，所以要--操作。   */
 			/*
-			 *  --p  :是分配一个字节空间用于存储参数，因为p是指向参数表的头部的，起始也是可用参数空间的尾部，所以--操作分配的一个字节就是用来存储--tmp指向的结束符的。
-			 *  --tmp:指向字符串的结束符起始地址
+			 *  --p   : 是分配一个字节空间用于存储参数，因为p是指向参数表的头部的，也是可用参数空间的尾部，所以--操作分配的一个字节就是用来存储--tmp指向的结束符的。
+			 *  --tmp : 指向字符串的结束符起始地址。
 			 */
 			--p; --tmp; --len;
 			if (--offset < 0) {
@@ -317,8 +317,9 @@ restart_interp:
 		 */
 
 		/*
-		 * 注意：这里的filename指针是直接指向参数字符串的指针（而参数字符串是在用户空间），
-		 * &filename是指向内核栈中存储filename指针的指针，故“*(&filename)”得到的就是filename指针，存在于内核栈中；
+		 * 注意：这里的filename指针是指向参数字符串的指针（而参数字符串本身是在用户空间），filename指针本身是存储在内核栈中的，
+		 * &filename这样的操作就是把filename指针构造字符串成数组(char* argv[1];)的第一个元素了，&filename是指向内核栈中存储filename指针的指针，
+		 * 故“*(&filename)”得到的就是filename指针，存在于内核栈中，
 		 * 而“**(&filename)”得到的就是字符串的首字符了，存在于用户空间，所以from_kmen=1.
 		 * 这一步将example.sh脚本名称 copy到内核态参数页表，前面的arg1和arg2，已经在上一步copy完成了。
 		*/
@@ -399,7 +400,7 @@ restart_interp:
 	 *                                                                offset+p
 	 *    所以p+=offset就得到了，argv和engv在64M地址空间内的offset，注意64M地址空间的最高地址存储engv,随后是argv，所以这时的p是argv第一个参数的offset。
 	*/
-	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE; /* 得到在64M进程地址空间的offset。  */
+	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE; /* 得到argv第一个参数在64M进程地址空间的offset。*/
 	p = (unsigned long) create_tables((char *)p,argc,envc);  /* 在用户空间，高32页逻辑地址空间建立参数指针数组， 返回的p是用户空间的sp指针。   */
 	current->brk = ex.a_bss +
 		(current->end_data = ex.a_data +
