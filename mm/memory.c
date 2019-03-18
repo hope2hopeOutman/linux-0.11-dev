@@ -58,11 +58,6 @@ __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 unsigned char linear_addr_swap_map[LINEAR_ADDR_SWAP_PAGES] = {0,};
-/* 如果linear_addr>=1G，说明是用户空间的缺页处理 */
-unsigned long get_dir_entry_offset(unsigned long linear_addr){
-	return (((linear_addr>=0x40000000 ? ((linear_addr-USER_LINEAR_ADDR_START) & 0xFFFFF000) : linear_addr)>>20) & 0xffc);
-}
-
 /*
  * 当完成对>1G的一页物理地址的重映射并对这一页物理内存初始化后，就会将该物理地址设置到进程用户空间对应的页表项中，这样进程在用户太就可以读写该>1G的一页物理内存了
  * 这个时候，我们要将linear_addr_swap_map数组中对应的线性地址的占用标志位设置为0，表明该线性地址可以被映射到其他>(1G-128M)的物理地址。
@@ -417,7 +412,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
 
 	page_table = current->dir_addr;
-	page_table += get_dir_entry_offset(address);   /* 获得目录项的实际物理地址:dir_base+dir_entry_offset */
+	page_table += GET_DIR_ENTRY_OFFSET(address);   /* 获得目录项的实际物理地址:dir_base+dir_entry_offset */
 	if ((*page_table)&1)
 		page_table = (unsigned long *) (0xfffff000 & *page_table);    /* 获得该线性地址所在的页表的基地址 */
 	else {
@@ -509,22 +504,33 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 	//printk("error line address: %p \n\r", address);
 
 	unsigned long* dir_base = current->dir_addr;
-	unsigned long* dir_item = dir_base + get_dir_entry_offset(address);
+	unsigned long* dir_item = dir_base + GET_DIR_ENTRY_OFFSET(address);
 
 	un_wp_page((unsigned long *)
 		(((address>>10) & 0xffc) + (0xfffff000 & *dir_item)));
 }
 
+/* address是线性地址且是4K align */
 void write_verify(unsigned long address)
 {
-	unsigned long page;
-
-	if (!( (page = *((unsigned long *) ((address>>20) & 0xffc)) )&1))
+	unsigned long * page_table_entry;  /* 注意：该变量存储的是页表项的物理地址，不是线性地址哦。 */
+	unsigned long * page_table;
+	/* 计算该地址对应的目录项地址，从而可以获取对应页表的基地址,也是物理地址 */
+	page_table = (unsigned long *)(*((unsigned long *)(current->dir_addr + GET_DIR_ENTRY_OFFSET(address))));
+	if (!((unsigned long)page_table & 1))
 		return;
-	page &= 0xfffff000;
-	page += ((address>>10) & 0xffc);
-	if ((3 & *(unsigned long *) page) == 1)  /* non-writeable, present */
-		un_wp_page((unsigned long *) page);
+	page_table = (unsigned long*)((unsigned long)page_table & 0xfffff000);  /* 过滤掉目录项中页表基地址的RWX，这样页表基地址就是4K align了 */
+	page_table_entry = page_table; /* 保存页表的物理基地址，因为后面的remap可能会将page_table映射成内核保留的线性地址。 */
+	/* 这里要执行一下remap操作，因为不知道该页表是否在内核的实地址映射空间。 */
+	unsigned long cached_linear_addrs[1] = {0};
+	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
+	caching_linear_addr(cached_linear_addrs, length, check_remap_linear_addr(&page_table));
+	page_table += ((address>>10) & 0xffc);       /* 计算得到页表项的物理或线性地址 */
+	page_table_entry += ((address>>10) & 0xffc); /* 计算得到页表项的物理地址 */
+	if ((3 & *(unsigned long *) page_table) == 1) { /* non-writeable, present */
+		recov_swap_linear_addrs(cached_linear_addrs, length);
+		un_wp_page((unsigned long *) page_table_entry);
+	}
 	return;
 }
 
@@ -568,9 +574,9 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
 	unsigned long cached_linear_addrs[2];
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
 	from_page = p->dir_addr;
-	from_page += get_dir_entry_offset(address_offset+p->start_code);            /* 这时的from_page指向的是对应的目录项的物理地址 */
+	from_page += GET_DIR_ENTRY_OFFSET(address_offset+p->start_code);            /* 这时的from_page指向的是对应的目录项的物理地址 */
 	to_page   = current->dir_addr;
-	to_page   +=  get_dir_entry_offset(address_offset+current->start_code);     /* 同上，存储的是目录项的物理地址 */
+	to_page   +=  GET_DIR_ENTRY_OFFSET(address_offset+current->start_code);     /* 同上，存储的是目录项的物理地址 */
     /* is there a page-directory at from? */
 	from = *(unsigned long *) from_page;  /* 将目录项上存储的页表的物理基地址赋值给from */
 	if (!(from & 1))

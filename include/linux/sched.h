@@ -142,8 +142,8 @@ struct task_struct {
 /* filp */	{NULL,}, \
 	{ \
 		{0,0}, \
-/* ldt */	{0x3ffff,0xc0fa00}, \
-		{0x3ffff,0xc0f200}, \
+/* ldt */	{0x3fff,0xc0fa00}, \
+		{0x3fff,0xc0f200}, \
 	}, \
 /*tss*/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,PG_DIR_ADDR,\
 	 0,0,0,0,0,0,0,0, \

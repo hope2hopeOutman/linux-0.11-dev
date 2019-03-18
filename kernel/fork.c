@@ -26,13 +26,13 @@ void verify_area(void * addr, int size) {
 	unsigned long start;
 
 	start = (unsigned long) addr;
-	size += start & 0xfff;
-	start &= 0xfffff000;
-	start += get_base(current->ldt[2]);
+	size += start & 0xfff;               /* 计算该地址的页内offset */
+	start &= 0xfffff000;                 /* 计算该地址在进程地址空间内的页帧号，其实也是个offset，4K align */
+	start += get_base(current->ldt[2]);  /* 页帧号+进程地址空间base=CPU线性地址, 4k align */
 	while (size > 0) {
 		size -= 4096;
 		write_verify(start);
-		start += 4096;
+		start += 4096;                   /* 跳到下一页继续verify了 */
 	}
 }
 

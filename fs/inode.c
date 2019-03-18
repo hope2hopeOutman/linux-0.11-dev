@@ -240,7 +240,7 @@ struct m_inode * get_pipe_inode(void) {
 
 	if (!(inode = get_empty_inode()))
 		return NULL;
-	if (!(inode->i_size = get_free_page())) {
+	if (!(inode->i_size = get_free_page(PAGE_IN_MEM_MAP))) {
 		inode->i_count = 0;
 		return NULL;
 	}

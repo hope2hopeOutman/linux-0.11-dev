@@ -25,6 +25,7 @@ void release(struct task_struct * p)
 	for (i=1 ; i<NR_TASKS ; i++)
 		if (task[i]==p) {
 			task[i]=NULL;
+			free_page((long)(p->dir_addr));  /* 先把该进程占用的目录表释放掉 */
 			free_page((long)p);
 			schedule();
 			return;
@@ -150,9 +151,9 @@ int sys_waitpid(pid_t pid,unsigned long * stat_addr, int options)
 repeat:
 	flag=0;
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
-		if (!*p || *p == current)
+		if (!*p || *p == current)   /* 过滤掉自身 */
 			continue;
-		if ((*p)->father != current->pid)
+		if ((*p)->father != current->pid)  /* 查找当前进程的子进程 */
 			continue;
 		if (pid>0) {
 			if ((*p)->pid != pid)
@@ -193,6 +194,7 @@ repeat:
 
 		current->state=TASK_INTERRUPTIBLE;
 		schedule();
+		/* 子进程如果调用了exit会调用tell_father将father的SIG_CHILD位置1的，这里父进程就是在等这个标志。 */
 		if (!(current->signal &= ~(1<<(SIGCHLD-1))))
 			goto repeat;
 		else

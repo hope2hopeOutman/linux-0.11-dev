@@ -48,24 +48,34 @@ static unsigned long * create_tables(char * p,int argc,int envc)
 	unsigned long *argv,*envp;
 	unsigned long * sp;
 
-	sp = (unsigned long *) (0xfffffffc & (unsigned long) p);
+	sp = (unsigned long *) (0xfffffffc & (unsigned long) p);/* 将p的最后两位置0，align 4,这样做是因为栈是向低地址扩展的，所以将栈向减小的方向对齐肯定是没问题的。*/
+	/*
+	 * 知道这里为什么要多分配4个字节吗？ 因为这里建立的参数指针数组
+	 * (注意不是参数列表，这个数组中的每个参数指针是指向参数列表中每个参数的首地址的)，这样可以方便的读取参数列表中的参数(参数列表就是字符串列表，每个参数的长度是不定的)
+	 * 所以参数指针数组也要用NULL或'\0'作为结束符，来区分参数指针数组和参数列表，懂了吧。
+	 */
 	sp -= envc+1;
 	envp = sp;
-	sp -= argc+1;
+	sp -= argc+1;  /* 同上 */
 	argv = sp;
-	put_fs_long((unsigned long)envp,--sp);
-	put_fs_long((unsigned long)argv,--sp);
-	put_fs_long((unsigned long)argc,--sp);
+	put_fs_long((unsigned long)envp,--sp);  /* 将env参数指针数组的首地址入栈 */
+	put_fs_long((unsigned long)argv,--sp);  /* 将argv参数指针数组的首地址入栈 */
+	put_fs_long((unsigned long)argc,--sp);  /* 将argv参数列表中参数的个数argc入栈，到这里你应该明白了，为什么我们应用程序的入口函数main(int argc,argv)是这一个样子了吧。 */
 	while (argc-->0) {
 		put_fs_long((unsigned long) p,argv++);
 		while (get_fs_byte(p++)) /* nothing */ ;
 	}
+	/*
+	 * 看到没有，这里将0放入参数指针数组的最后一位，作为结束符。
+	 * 这时参数指针数组的，最后一个元素是指针为0的元素，不指向参数列表的任何一个参数，表示结束啦哈哈。
+	 */
 	put_fs_long(0,argv);
 	while (envc-->0) {
 		put_fs_long((unsigned long) p,envp++);
 		while (get_fs_byte(p++)) /* nothing */ ;
 	}
-	put_fs_long(0,envp);
+	put_fs_long(0,envp);  /* 同上 */
+	/* 到这里，sp就指向了argc在栈中的开始位置 */
 	return sp;
 }
 
@@ -153,12 +163,9 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 				 * 不可能在内核空间，但是物理页的指针数组是在内核空间的。
 				*/
 				if (!(pag = (char *) page[p/PAGE_SIZE]) &&
-				    !(pag = (char *) page[p/PAGE_SIZE] =
-				      (unsigned long *) get_free_page(PAGE_IN_MEM_MAP)))
+				    !(pag = (char *) (page[p/PAGE_SIZE] = (unsigned long *) get_free_page(PAGE_IN_MEM_MAP))))
 					return 0;
-
 				caching_linear_addr(cached_linear_addrs, length,check_remap_linear_addr(&pag));
-
 				if (from_kmem==2)
 					set_fs(new_fs);
 
@@ -185,7 +192,8 @@ static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 
 	code_limit = text_size+PAGE_SIZE -1;
 	code_limit &= 0xFFFFF000;
-	data_limit = 0x4000000;
+	//data_limit = 0x4000000;
+	data_limit = USER_LINEAR_ADDR_LIMIT;
 	code_base = get_base(current->ldt[1]);
 	data_base = code_base;
 	set_base(current->ldt[1],code_base);
@@ -194,11 +202,17 @@ static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 	set_limit(current->ldt[2],data_limit);
 /* make sure fs points to the NEW data segment */
 	__asm__("pushl $0x17\n\tpop %%fs"::);
-	data_base += data_limit;
+	/*
+	 * 注意：这里的env和argv参数列表是从用户地址空间的最高地址存放的，所以data_tabse+data_limit=4G，这个值超出了32位寄存器的范围，所以会有问题，
+	 * 所以这里做了调整。
+	 */
+	//data_base += data_limit;
+	data_base += (data_limit-PAGE_SIZE);
 	for (i=MAX_ARG_PAGES-1 ; i>=0 ; i--) {
-		data_base -= PAGE_SIZE;
-		if (page[i])
+		if (page[i]) {
 			put_page(page[i],data_base);
+		}
+		data_base -= PAGE_SIZE;
 	}
 	return data_limit;
 }
@@ -386,8 +400,8 @@ restart_interp:
 		if ((current->close_on_exec>>i)&1)
 			sys_close(i);
 	current->close_on_exec = 0;
-	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
-	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));  /* 因为代码段和数据段的地址空间是重合的，所以这一步是重复操作，在这里可以省去。 */
+	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f), current);
+	free_page_tables(get_base(current->ldt[2]),get_limit(0x17), current);  /* 因为代码段和数据段的地址空间是重合的，所以这一步是重复操作，在这里可以省去。 */
 	if (last_task_used_math == current)
 		last_task_used_math = NULL;
 	current->used_math = 0;
@@ -400,8 +414,13 @@ restart_interp:
 	 *                                                                offset+p
 	 *    所以p+=offset就得到了，argv和engv在64M地址空间内的offset，注意64M地址空间的最高地址存储engv,随后是argv，所以这时的p是argv第一个参数的offset。
 	*/
-	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE; /* 得到argv第一个参数在64M进程地址空间的offset。*/
-	p = (unsigned long) create_tables((char *)p,argc,envc);  /* 在用户空间，高32页逻辑地址空间建立参数指针数组， 返回的p是用户空间的sp指针。   */
+	/* 得到argv第一个参数在64M进程地址空间的offset,这里已经改为3G地址空间的offset了，加上base就是绝对线性地址了。*/
+	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
+	/*
+	 * 在用户空间，高32页逻辑地址空间建立参数指针数组， 返回的p是用户空间的sp指针。
+	 * 这里一定要注意：在x86架构这种分段机制下，所有的地址都是相对与段base的offset，最终会加上base形成最终的线性地址。
+	 */
+	p = (unsigned long) create_tables((char *)p,argc,envc);
 	current->brk = ex.a_bss +
 		(current->end_data = ex.a_data +
 		(current->end_code = ex.a_text));
@@ -411,9 +430,17 @@ restart_interp:
 	i = ex.a_text+ex.a_data;
 	while (i&0xfff)  /* 代码段+数据段的长度如果不是4k（page）的倍数。  */
 		put_fs_byte(0,(char *) (i++));  /* 在end_data后补0，直至（codeSize+dataSize）% 4k = 0 */
-	eip[0] = ex.a_entry;		/* eip, magic happens :-) */  /* 这里的eip就是系统调用中断CPU自动保存在内核态堆栈的用户态EIP，eip[1]是用户态CS，所以这里将用户态EIP设置为新执行文件的逻辑地址（offset），中断返回后就从该地址处执行。  */
-	eip[3] = p;			/* stack pointer */ /* 因为CPU会在内核栈中自动依次保存ss,esp,eflags,cs,eip；eip[0]=eip，所以eip[3]=esp，用户态的堆栈指针；eip[3]=p，就是指向我们之前费了那么大劲初始化的参数和环境列表的offset。  */
-	return 0;           /* 中断返回，在用户态执行新的可执行文件喽，心中一万个mama^_^ */
+    /*
+     * 这里的eip就是系统调用中断CPU自动保存在内核态堆栈的用户态EIP，eip[1]是用户态CS，
+     * 所以这里将用户态EIP设置为新执行文件的逻辑地址（offset），中断返回后就从该地址处执行。
+     */
+	eip[0] = ex.a_entry; /* eip, magic happens :-) */
+	/*
+	 * 因为CPU会在内核栈中自动依次保存ss,esp,eflags,cs,eip；eip[0]=eip，所以eip[3]=esp，
+	 * 用户态的堆栈指针；eip[3]=p，就是指向我们之前费了那么大劲初始化的参数和环境列表的offset。
+	 */
+	eip[3] = p;			 /* stack pointer */
+	return 0;            /* 中断返回，在用户态执行新的可执行文件喽，心中一万个mama^_^ */
 exec_error2:
 	iput(inode);
 exec_error1:
