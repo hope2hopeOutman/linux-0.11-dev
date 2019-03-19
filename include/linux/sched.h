@@ -188,9 +188,6 @@ __asm__("str %%ax\n\t" \
  * checking that n isn't the current task, in which case it does nothing.
  * This also clears the TS-flag if the task we switched to has used
  * tha math co-processor latest.
- * 这里在ljmp之前要reload CR3,指向将要运行任务的目录表，这里因为在内核态任务是不可中断的,所以不会出现任务和目录表不一致情况，
- * 但是后面如果要想将内核改为可抢占式内核的话，得确保任务和目录表的一致性了。
- * ljmp offset,segment selector (对于TSS会造成任务切换，这时offset的值无效，其他段类型offset是有效的)
  */
 #define switch_to(n) {\
 struct {long a,b;} __tmp; \
@@ -198,14 +195,13 @@ __asm__("cmpl %%ecx,current\n\t" \
 	"je 1f\n\t" \
 	"movw %%dx,%1\n\t" \
 	"xchgl %%ecx,current\n\t" \
-	"movl %%ebx,%%cr3\n\t" \
 	"ljmp %0\n\t" \
 	"cmpl %%ecx,last_task_used_math\n\t" \
 	"jne 1f\n\t" \
 	"clts\n" \
 	"1:" \
 	::"m" (*&__tmp.a),"m" (*&__tmp.b), \
-	"d" (_TSS(n)),"c" ((long) task[n]),"b" ((unsigned long)(task[n]->dir_addr))); \
+	"d" (_TSS(n)),"c" ((long) task[n])); \
 }
 
 #define PAGE_ALIGN(n) (((n)+0xfff)&0xfffff000)

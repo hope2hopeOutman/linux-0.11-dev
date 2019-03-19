@@ -299,6 +299,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 		panic("Can not allocate a physical page for new process's dir-table. \n\r ");
 	}
 	new_task->dir_addr = new_dir_page;
+	new_task->tss.cr3 = new_dir_page;
 	/*
 	 * V1: 内核pg_dir = 0，用户pg_dir存储在task_struct中，计算该from线性地址所在的目录项，也就是落在那个页表中。
 	 *     因为这段代码是在内核态运行的，内核基地址base=0，所以current->dir_addr+目录项offset得到的就是目录项的实际物理地址。
