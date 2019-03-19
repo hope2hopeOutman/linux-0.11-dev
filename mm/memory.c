@@ -36,8 +36,8 @@ static inline volatile void oom(void)
 	do_exit(SIGSEGV);
 }
 
-#define invalidate() \
-__asm__("movl %%eax,%%cr3"::"a" (0))
+#define invalidate(dir_addr) \
+__asm__("movl %%eax,%%cr3"::"a" ((unsigned long)dir_addr))
 
 /* these are not to be changed without changing head.s etc */
 //#define LOW_MEM 0x100000
@@ -103,7 +103,7 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 			break;
 		}
 	}
-	invalidate();
+	invalidate(current->dir_addr);
 	return linear_addr;
 }
 
@@ -235,15 +235,13 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		panic("Trying to free up swapper memory space");
 	}
 
-	dir = task_p->dir_addr;  /* 获得该任务的目录表基地址 */
+	/* 这里一定要注意，对于NR>1的普通进程，前面的256个目录项(1G内核空间)是不能释放的，这点一定要注意。 */
+	dir = (task_p->dir_addr + 256);  /* 获得该任务的用户地址空间目录项的起始地址 */
 
-	if (size == KERNEL_LINEAR_ADDR_LIMIT) {
-		/* size=1024, 释放用户进程的整个目录表和页表 */
-		size = (size >> 22) + (1 << (30 - 22));
-	} else {
-		size = size >> 22; /* task1, 256 dir_items，执行到这一步就有问题了 */
-		panic("Fork task1 has problem. \n\r ");
+	if (task[0] == task_p || task[1] == task_p) {
+		panic("Task0 or Task1 can not be released, fatal error.\n\r");
 	}
+	size = size >> 22;  // (size/4M)目录项个数
 
 	for ( ; size-->0 ; dir++) {
 		if (!(1 & *dir))
@@ -265,7 +263,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		*dir = 0;
 		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}
-	invalidate();
+	invalidate(current->dir_addr);
 	return 0;
 }
 
@@ -292,7 +290,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	unsigned long * to_page_table;
 	unsigned long this_page;
 	unsigned long * from_dir, * to_dir;
-	unsigned long nr;
+	unsigned long nr,size_4m;
 
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
@@ -318,10 +316,10 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 
 	if (size == 0xC0000000) {
 		/* 这里如果是fork普通进程的话，要把内核地址空间的映射页copy一份，这样从用户态进入内核态就不需要切换CR3了，size=1024,复制父进程的整个目录表和页表 */
-		size = (size >> 22) + (1<<(30-22));
+		size_4m = size = (size >> 22) + (1<<(30-22));
 	}
 	else {
-		size = size >> 22;                 /* task0 fork task1 */
+		size_4m = size = size >> 22;                 /* task0 fork task1 */
 	}
 
 	for( ; size-->0 ; from_dir++,to_dir++) {
@@ -377,7 +375,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			 * 如果是task0创建task1,那么只需将task1的页表项都设置为只读即可，task0是决不可以设置为只读的，
 			 * 如果是task1创建子进程或其他NR>1的进程创建子进程，那么两个进程的页表项都要设置为只读。
 			 */
-			if (size != 256) {                   /* size现在的单位是4M(granularity) */
+			if (size_4m != 256) {                   /* size现在的单位是4M(granularity) */
 				*from_page_table = this_page;    //将父进程的页表项页设置为只读。
 			    this_page -= LOW_MEM;
 				this_page >>= 12;
@@ -386,7 +384,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 		}
 		recov_swap_linear_addrs(cached_page_table_base, cached_page_table_length);
 	}
-	invalidate();
+	invalidate(current->dir_addr);
 	return 0;
 }
 
@@ -450,7 +448,7 @@ void un_wp_page(unsigned long * table_entry)
 	if ((unsigned long)old_page >= LOW_MEM && mem_map[MAP_NR((unsigned long)old_page)]==1) {
 		*table_entry |= 2;
 		recov_swap_linear_addrs(cached_linear_addrs, length);
-		invalidate();
+		invalidate(current->dir_addr);
 		return;
 	}
 	/*
@@ -461,8 +459,10 @@ void un_wp_page(unsigned long * table_entry)
 	 *    说明是task0 fork task1后，task1执行时触发的WP，这时会为task1分配一页内存作为task1用户态堆栈，内核态堆栈在fork task1时就建好了，
 	 *    与task1的task_struct共同占用一页内存。
 	 */
-	if (!(new_page=(unsigned long*)get_free_page(PAGE_IN_MEM_MAP)))
+	if (!(new_page=(unsigned long*)get_free_page(PAGE_IN_MEM_MAP))) {
+		printk("un_wp_page trigger oom \n\r");
 		oom();
+	}
 	/*
 	 * 这里理解了吧，为什么要加这个判断了。
 	 * 当普通的进程fork时，会共享相同的code和data物理页，但是目录表和页表是私有的，只不过页表项中存储的内容是相同的且都被设置为只读，
@@ -540,6 +540,7 @@ void get_empty_page(unsigned long address)
 
 	if (!(tmp=get_free_page(PAGE_IN_MEM_MAP)) || !put_page(tmp,address)) {
 		free_page(tmp);		/* 0 is ok - ignored */
+		printk("get_empty_page trigger oom,tmp: %u, address: %u \n\r", tmp, address);
 		oom();
 	}
 }
@@ -597,10 +598,13 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
 		return 0;
 	to = *(unsigned long *) to_page;   /* 注意:这时的to_page存储的是目录项地址，而目录项上存储的是页表的基地址，这里将页表的物理基地址赋值为to */
 	if (!(to & 1))
-		if ((to = get_free_page(PAGE_IN_MEM_MAP)))
+		if ((to = get_free_page(PAGE_IN_MEM_MAP))) {
 			*(unsigned long *) to_page = to | 7;  /* 将新分配的页表的物理基地址赋值到对应的目录项上 */
-		else
+		}
+		else {
+			printk("try_to_share trigger oom \n\r");
 			oom();
+		}
 	to &= 0xfffff000;
 
 	/* 这里to_page存储的是页表的物理基地址了，所以要重新remap，才能访问该页表 */
@@ -667,8 +671,10 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	}
 	if (share_page(tmp))
 		return;
-	if (!(page = (unsigned long*)get_free_page(PAGE_IN_MEM_MAP)))
+	if (!(page = (unsigned long*)get_free_page(PAGE_IN_MEM_MAP))) {
+		printk("do_no_page embedded trigger oom \n\r");
 		oom();
+	}
     /* remember that 1 block is used for header */
 	block = 1 + tmp/BLOCK_SIZE;
 	for (i=0 ; i<4 ; block++,i++){
@@ -699,6 +705,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	if (put_page((unsigned long)page,address))
 		return;
 	free_page((unsigned long)page);
+	printk("do_no_page trigger oom \n\r");
 	oom();
 }
 
