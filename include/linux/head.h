@@ -46,7 +46,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define PAGE_IN_MEM_MAP 0                    /* 表示分配的物理地址来自于整个mem_map管理的内存 */
 
 #define GET_ARRAY_LENGTH(array) (sizeof(array)/sizeof(array[0]))
-#define GET_DIR_ENTRY_OFFSET(linear_addr) (((linear_addr & 0xFFFFF000)>>20) & 0xffc)
+#define GET_DIR_ENTRY_OFFSET(linear_addr) (linear_addr >> 22)
 #define NR_TASKS 64
 
 #endif

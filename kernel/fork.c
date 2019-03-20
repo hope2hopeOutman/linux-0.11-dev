@@ -50,16 +50,19 @@ int copy_mem(int nr, struct task_struct * p) {
 		panic("Bad data_limit");
 
 	//new_data_base = new_code_base = nr * 0x4000000;
-	if (nr == 1) {
-		/* nr==1表明是task0首次创建init进程1，这时进程1和task0是共享地址空间的，只是用户栈不同，所以他们其实就是共享同一个地址空间的线程了。 */
+/*	if (nr == 1) {
+		 nr==1表明是task0首次创建init进程1，这时进程1和task0是共享地址空间的，只是用户栈不同，所以他们其实就是共享同一个地址空间的线程了。
 		new_data_base = new_code_base = KERNEL_LINEAR_ADDR_START;
-		code_limit = data_limit = KERNEL_LINEAR_ADDR_LIMIT;    /* 进程0和进程1的地址空间Limit都是1G */
+		code_limit = data_limit = KERNEL_LINEAR_ADDR_LIMIT;     进程0和进程1的地址空间Limit都是1G
 	}
 	else {
-		/* nr>1的进程都是init进程创建的普通进程，基地址都是从1G开始的 */
+		 nr>1的进程都是init进程创建的普通进程，基地址都是从1G开始的
 		new_data_base = new_code_base = USER_LINEAR_ADDR_START;
-		code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;    /* nr>1的进程的地址空间Limit都是3G */
-	}
+		code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;     nr>1的进程的地址空间Limit都是3G
+	}*/
+
+	new_data_base = new_code_base = USER_LINEAR_ADDR_START;
+	code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
 
 	p->start_code = new_code_base;
 	set_base(p->ldt[1], new_code_base);
@@ -98,7 +101,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	p->counter = p->priority;
 	p->signal = 0;
 	p->alarm = 0;
-	p->leader = 0; /* process leadership doesn't inherit */
+	p->leader = 0;                       /* process leadership doesn't inherit */
 	p->utime = p->stime = 0;
 	p->cutime = p->cstime = 0;
 	p->start_time = jiffies;
@@ -107,7 +110,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	p->tss.ss0 = 0x10;
 	p->tss.eip = eip;
 	p->tss.eflags = eflags;
-	p->tss.eax = 0;
+	p->tss.eax = 0;                      /* fork返回值是0的话，代表运行的是子进程，奥秘就在这里哈哈 */
 	p->tss.ecx = ecx;
 	p->tss.edx = edx;
 	p->tss.ebx = ebx;

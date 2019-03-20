@@ -287,10 +287,14 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_struct* new_task)
 {
 	unsigned long * from_page_table;
-	unsigned long * to_page_table;
+	unsigned long * to_page_table, *to_page_table_1gbase;
 	unsigned long this_page;
 	unsigned long * from_dir, * to_dir;
-	unsigned long nr,size_4m;
+	unsigned long nr,count;
+	int currentIsTask0Flag = 0;
+	if (task[0] == current) {
+		currentIsTask0Flag = 1;
+	}
 
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
@@ -315,12 +319,12 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	to_dir = new_dir_page;
 	//size = ((unsigned) (size+0x3fffff)) >> 22;                      /* 因为每个页表能管理4M物理内存，所以这里(size+(4M-1))/4M确保，不够整除的部分也能被copy. */
 
-	if (size == 0xC0000000) {
+	if (!currentIsTask0Flag) {
 		/* 这里如果是fork普通进程的话，要把内核地址空间的映射页copy一份，这样从用户态进入内核态就不需要切换CR3了，size=1024,复制父进程的整个目录表和页表 */
-		size_4m = size = (size >> 22) + (1<<(30-22));
+		count = size = 1024;
 	}
 	else {
-		size_4m = size = size >> 22;                 /* task0 fork task1 */
+		count = size = 256;                 /* task0 fork task1 */
 	}
 
 	for( ; size-->0 ; from_dir++,to_dir++) {
@@ -328,7 +332,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			panic("copy_page_tables: already exist");
 		if (!(1 & *from_dir))                                       /* 判断from线性地址所在的目录项是否存在。 */
 			continue;
-		unsigned long cached_page_table_base[2] = {0,0};
+		unsigned long cached_page_table_base[4] = {0,0};
 		int cached_page_table_length = GET_ARRAY_LENGTH(cached_page_table_base);
 		/* 读取目录项中存储的某个页表的物理地址，因为页表的地址是4K对齐的，所以要&0xfffff000擦除RWX位。 */
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
@@ -339,22 +343,44 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 		}
 		*to_dir = ((unsigned long) to_page_table) | 7;  /* 将获取的新的页表物理地址，设置RWX=7后赋值给to线性地址所在的目录项。 */
 		caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&to_page_table));
+
+		if (currentIsTask0Flag) {
+			if (!(to_page_table_1gbase = (unsigned long *) get_free_page(
+			PAGE_IN_MEM_MAP))) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
+				return -1; /* Out of memory, see freeing */
+			}
+			/*
+			 * task0 fork task1时，因为基地址是1G了所以这里要把前1G的页表复制到后面1G～2G地址空间对弈的目录。
+			 * fork返回后执行task1时，执行的还是内核的代码，但是这时已经在用户态了，所以将线性地址映射到内核代码空间就可以直接执行内核代码do_execve了。
+			 * */
+			*(to_dir + 256) = ((unsigned long) to_page_table_1gbase) | 7;
+			caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&to_page_table_1gbase));
+		}
+
 		/*
 		 * 这里需要改了，原来OS加载到0x0000开始地址处的时候，当fork task1的时候，这里要copy的内核代码只需要640k,所以需要copy 640K/4K=160(0xA0)个页表项；
 		 * 注意这里是页表项，因为每个页表也占用1页4K,而每个页表项占用4字节用于记录一个物理页的地址，所以一个页表有1024个页表项，共可管理4M物理空间。
 		 * 这里把OS加载到了5M地址处，所以要copy的是从0x0000~0x500000+640K地址空间占用的页表。
 		 */
-		//nr = (from==0)?0xA0:1024;
-		//nr = (from==0 && size == 0) ? 512:1024;
 		nr = 1024;
 
         /* 注意：这里的from_page_table是一个页表的基地址，也就是第一个页表项的地址，所以通过*from_page_table取页表项中记录的物理页地址。 */
-		for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
+		for ( ; nr-- > 0 ; from_page_table++,to_page_table++, (currentIsTask0Flag) ? to_page_table_1gbase++:0) {
 			this_page = *from_page_table;   /* 这里的this_page页表项记录的是物理页地址。 */
 			if (!(1 & this_page))        /* 判断该物理页是否存在。 */
 				continue;
-			this_page &= ~2;             /* 将即将共享的页表项设置为只读。 */
+			if ((count - size) > 256) { /* 注意：前1G的内核地址空间对应的目录项一定不要设置为只读，这里是对于新进程的,对于所有fork操作。 */
+				this_page &= ~2;
+			}
+			           /* 将即将共享的页表项设置为只读。 */
 			*to_page_table = this_page;  /* 将该物理页地址copy到新分配的页表对应的页表项中。 */
+			if (currentIsTask0Flag) {
+				/*
+				 * 如果是task0 fork task1,此时要将task1的起始地址空间1G后面的目录项设置为只读，这样它可以执行内核代码
+				 * 但当执行写操作是，会报WP错误，内核会重新分配一个stack给它。
+				 * */
+				*to_page_table_1gbase = this_page &= ~2;
+			}
 			/*
 			 * 这里如果要Copy的物理页地址<=LOW_MEM说明是task0 fork task1,则这时，不能把task0对应的页表项设置为只读，只能将task1的所有页表项都设置为只读，
 			 * 当task1运行的时候要进行堆栈操作时，发现共享task0的堆栈对于自己是只读的，所以为出发wp异常，这时缺页异常管理函数，会在分页内存区为其分配一页内存为其
@@ -362,21 +388,12 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			 *
 			 * 对于要Copy的物理页地址>LOW_MEM时，这时一定是task1或其子孙执行 fork操作，这时要把父子进程的页表项都设置为只读，谁先执行先触发WP异常，在处理WP的时候，
 			 * 会将另一个进程的页表项都设置为可写。
-			 *
-			 */
-			/*if (this_page > LOW_MEM) {
-				*from_page_table = this_page;    将父进程的页表项页设置为只读。
-				this_page -= LOW_MEM;
-				this_page >>= 12;
-				mem_map[this_page]++;            这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
-			}*/
 
-			/*
 			 * 这里判断是不是task0创建task1可以根据limit size的大小来判定，如果size=1G那么肯定是task0 fork task1了,
 			 * 如果是task0创建task1,那么只需将task1的页表项都设置为只读即可，task0是决不可以设置为只读的，
 			 * 如果是task1创建子进程或其他NR>1的进程创建子进程，那么两个进程的页表项都要设置为只读。
 			 */
-			if (size_4m != 256) {                   /* size现在的单位是4M(granularity) */
+			if (!currentIsTask0Flag && (count - size) > 256) {           /* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
 				*from_page_table = this_page;    //将父进程的页表项页设置为只读。
 			    this_page -= LOW_MEM;
 				this_page >>= 12;
