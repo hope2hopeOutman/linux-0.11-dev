@@ -132,9 +132,9 @@ int sys_open(const char * filename, int flag, int mode) {
 	struct file * f;
 	int i, fd;
 
-	/*char kstr[32] = { 0 };
+	char kstr[32] = { 0 };
 	 cpy_str_to_kernel(kstr, filename);
-	 printk("open a file name: %s \n\r", kstr);*/
+	 printk("open a file name: %s \n\r", kstr);
 
 	mode &= 0777 & ~current->umask;
 	for (fd = 0; fd < NR_OPEN; fd++) {

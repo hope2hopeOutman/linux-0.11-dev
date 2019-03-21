@@ -49,4 +49,10 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define GET_DIR_ENTRY_OFFSET(linear_addr) (linear_addr >> 22)
 #define NR_TASKS 64
 
+#define MAX_ARG_PAGES 32
+#define OPERATION_DOEXECVE_OR_BEFORE 1
+#define OPERATION_AFTER_DOEXECVE     2
+
+
+
 #endif

@@ -43,7 +43,7 @@ extern int sys_close(int fd);
  * memory and creates the pointer tables from them, and puts their
  * addresses on the "stack", returning the new stack pointer value.
  */
-static unsigned long * create_tables(char * p,int argc,int envc)
+unsigned long * create_tables(char * p,int argc,int envc)
 {
 	unsigned long *argv,*envp;
 	unsigned long * sp;
@@ -163,7 +163,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 				 * 不可能在内核空间，但是物理页的指针数组是在内核空间的。
 				*/
 				if (!(pag = (char *) page[p/PAGE_SIZE]) &&
-				    !(pag = (char *) (page[p/PAGE_SIZE] = (unsigned long *) get_free_page(PAGE_IN_MEM_MAP))))
+				    !(pag = (char *) (page[p/PAGE_SIZE] = get_free_page(PAGE_IN_MEM_MAP))))
 					return 0;
 				caching_linear_addr(cached_linear_addrs, length,check_remap_linear_addr(&pag));
 				if (from_kmem==2)
@@ -185,7 +185,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 	return p;
 }
 
-static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
+unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 {
 	unsigned long code_limit,data_limit,code_base,data_base;
 	int i;
@@ -208,12 +208,14 @@ static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 	 */
 	//data_base += data_limit;
 	data_base += (data_limit-PAGE_SIZE);
+	//printk("putpage error before. \n\r");
 	for (i=MAX_ARG_PAGES-1 ; i>=0 ; i--) {
 		if (page[i]) {
 			put_page(page[i],data_base);
 		}
 		data_base -= PAGE_SIZE;
 	}
+	//printk("putpage error after. \n\r");
 	return data_limit;
 }
 
@@ -400,8 +402,10 @@ restart_interp:
 		if ((current->close_on_exec>>i)&1)
 			sys_close(i);
 	current->close_on_exec = 0;
-	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f), current);
-	free_page_tables(get_base(current->ldt[2]),get_limit(0x17), current);  /* 因为代码段和数据段的地址空间是重合的，所以这一步是重复操作，在这里可以省去。 */
+	//printk("do_execve call free_page_tables before\n\r");
+	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f), current, OPERATION_DOEXECVE_OR_BEFORE);
+	free_page_tables(get_base(current->ldt[2]),get_limit(0x17), current, OPERATION_DOEXECVE_OR_BEFORE);  /* 因为代码段和数据段的地址空间是重合的，所以这一步是重复操作，在这里可以省去。 */
+	//printk("do_execve call free_page_tables after\n\r");
 	if (last_task_used_math == current)
 		last_task_used_math = NULL;
 	current->used_math = 0;
@@ -416,6 +420,7 @@ restart_interp:
 	*/
 	/* 得到argv第一个参数在64M进程地址空间的offset,这里已经改为3G地址空间的offset了，加上base就是绝对线性地址了。*/
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
+	printk("changed LDt \n\r");
 	/*
 	 * 在用户空间，高32页逻辑地址空间建立参数指针数组， 返回的p是用户空间的sp指针。
 	 * 这里一定要注意：在x86架构这种分段机制下，所有的地址都是相对与段base的offset，最终会加上base形成最终的线性地址。
@@ -444,7 +449,9 @@ restart_interp:
 exec_error2:
 	iput(inode);
 exec_error1:
-	for (i=0 ; i<MAX_ARG_PAGES ; i++)
-		free_page(page[i]);
+	for (i=0 ; i<MAX_ARG_PAGES ; i++) {
+		if (!free_page(page[i]))
+			panic("do_execve: trying to free free page");
+	}
 	return(retval);
 }

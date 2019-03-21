@@ -35,7 +35,7 @@
 #define PG_DIR_ADDR 0
 
 extern int copy_page_tables(unsigned long from, unsigned long to, long size, struct task_struct* new_task);
-extern int free_page_tables(unsigned long from, unsigned long size, struct task_struct* task);
+extern int free_page_tables(unsigned long from, unsigned long size, struct task_struct* task, int operation);
 
 extern void sched_init(void);
 extern void schedule(void);

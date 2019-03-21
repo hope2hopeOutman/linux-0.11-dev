@@ -205,28 +205,36 @@ return __res;
  * Free a page of memory at physical address 'addr'. Used by
  * 'free_page_tables()'
  */
-void free_page(unsigned long addr)
+int free_page(unsigned long addr)
 {
-	if (addr < LOW_MEM) return;
+	unsigned long addr_bk = addr;
+	if (addr < LOW_MEM) return 1;
 	if (addr >= HIGH_MEMORY){
 		printk("nonexistent page: %p, high_mem: %u \n\r", addr, HIGH_MEMORY);
 		panic("trying to free nonexistent page");
 	}
 	addr -= LOW_MEM;
 	addr >>= 12;
-	if (mem_map[addr]--) return;
-	mem_map[addr]=0;
-	panic("trying to free free page");
+
+	if (mem_map[addr]--) {
+		return 1;
+	}
+	else {
+		mem_map[addr]=0;
+	}
+	printk("free free address: %u \n\r", addr_bk);
+	return 0;
+	//panic("trying to free free page");
 }
 
 /*
  * This function frees a continuos block of page tables, as needed
  * by 'exit()'. As does copy_page_tables(), this handles only 4Mb blocks.
  */
-int free_page_tables(unsigned long from,unsigned long size, struct task_struct* task_p)
+int free_page_tables(unsigned long from,unsigned long size, struct task_struct* task_p, int operation)
 {
 	unsigned long *pg_table;
-	unsigned long * dir, nr;
+	unsigned long * dir, nr, pti_size = 1024;
 
 	if (from & 0x3fffff)
 		panic("free_page_tables called with wrong alignment");
@@ -241,6 +249,8 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 	if (task[0] == task_p || task[1] == task_p) {
 		panic("Task0 or Task1 can not be released, fatal error.\n\r");
 	}
+	printk("limit size: %u \n\r", size);
+	size = USER_LINEAR_ADDR_LIMIT;
 	size = size >> 22;  // (size/4M)目录项个数
 
 	for ( ; size-->0 ; dir++) {
@@ -253,14 +263,29 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		int cached_pg_table_length = GET_ARRAY_LENGTH(cached_pg_table_base);
 		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, &pg_table);
 
-		for (nr=0 ; nr<1024 ; nr++) {
-			if (1 & *pg_table)
-				free_page(0xfffff000 & *pg_table);
+		if (operation == OPERATION_DOEXECVE_OR_BEFORE && size == 0) {
+			pti_size -= MAX_ARG_PAGES;
+		}
+
+		for (nr=0 ; nr<pti_size ; nr++) {
+			if (((operation == OPERATION_DOEXECVE_OR_BEFORE) && ((3 & *pg_table) == 3))
+					|| (operation == OPERATION_AFTER_DOEXECVE)) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
+				//free_page(0xfffff000 & *pg_table);
+				if (!free_page(0xfffff000 & *pg_table)) {
+					printk("error linear addr: %p \n\r", pg_table);
+					panic("free_page_tables1: trying to free free page");
+				}
+			}
 			*pg_table = 0;
 			pg_table++;
 		}
-		free_page(0xfffff000 & *dir);
-		*dir = 0;
+		//free_page(0xfffff000 & *dir);
+		if (((operation != OPERATION_DOEXECVE_OR_BEFORE)
+				|| size != 0)) {
+			if (!free_page(0xfffff000 & *dir))
+				panic("free_page_tables2: trying to free free page");
+			*dir = 0;
+		}
 		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}
 	invalidate(current->dir_addr);
@@ -292,8 +317,12 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	unsigned long * from_dir, * to_dir;
 	unsigned long nr,count;
 	int currentIsTask0Flag = 0;
+	int currentIsTask1Flag = 0;
 	if (task[0] == current) {
 		currentIsTask0Flag = 1;
+	}
+	if (task[1] == current) {
+		currentIsTask1Flag = 1;
 	}
 
 	if ((from&0x3fffff) || (to&0x3fffff))
@@ -393,11 +422,13 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			 * 如果是task0创建task1,那么只需将task1的页表项都设置为只读即可，task0是决不可以设置为只读的，
 			 * 如果是task1创建子进程或其他NR>1的进程创建子进程，那么两个进程的页表项都要设置为只读。
 			 */
-			if (!currentIsTask0Flag && (count - size) > 256) {           /* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
+			if (!currentIsTask0Flag && (count - size) > 256) {/* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
 				*from_page_table = this_page;    //将父进程的页表项页设置为只读。
-			    this_page -= LOW_MEM;
-				this_page >>= 12;
-			    mem_map[this_page]++;            //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
+				if (!currentIsTask1Flag && this_page >= LOW_MEM) {
+					this_page -= LOW_MEM;
+					this_page >>= 12;
+					mem_map[this_page]++;   //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
+				}
 			}
 		}
 		recov_swap_linear_addrs(cached_page_table_base, cached_page_table_length);
@@ -422,7 +453,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 	if (page < LOW_MEM || page >= HIGH_MEMORY)
 		printk("Trying to put page %p at %p,low_mem: %u,high_mem: %u\n",page,address,LOW_MEM,HIGH_MEMORY);
 	if (mem_map[(page-LOW_MEM)>>12] != 1)  /* 在将线性地址页和某个物理地址页关联起来之前，要通过get_free_page先占据该物理页 */
-		printk("mem_map disagrees with %p at %p\n",page,address);
+		printk("mem_map disagrees with %p at %p, value: %u\n",page,address,mem_map[(page-LOW_MEM)>>12]);
 	//page_table = (unsigned long *) ((address>>20) & 0xffc);
 	unsigned long cached_linear_addrs[1] = {0};
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
@@ -557,7 +588,9 @@ void get_empty_page(unsigned long address)
 	unsigned long tmp;
 
 	if (!(tmp=get_free_page(PAGE_IN_MEM_MAP)) || !put_page(tmp,address)) {
-		free_page(tmp);		/* 0 is ok - ignored */
+		//free_page(tmp);		/* 0 is ok - ignored */
+		if (!free_page(tmp))
+			panic("get_empty_page: trying to free free page");
 		printk("get_empty_page trigger oom,tmp: %u, address: %u \n\r", tmp, address);
 		oom();
 	}
@@ -723,6 +756,8 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	if (put_page((unsigned long)page,address))
 		return;
 	free_page((unsigned long)page);
+	if (!free_page((unsigned long)page))
+		panic("do_no_page: trying to free free page");
 	printk("do_no_page trigger oom \n\r");
 	oom();
 }

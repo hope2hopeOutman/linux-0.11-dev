@@ -40,14 +40,14 @@ int copy_mem(int nr, struct task_struct * p) {
 	unsigned long old_data_base, new_data_base, data_limit;
 	unsigned long old_code_base, new_code_base, code_limit;
 
-	code_limit = get_limit(0x0f);
+	/*code_limit = get_limit(0x0f);
 	data_limit = get_limit(0x17);
-	old_code_base = get_base(current->ldt[1]); /* 这里的current存储的task_struct地址是在内核实地址空间的，所以不需要remap */
+	old_code_base = get_base(current->ldt[1]);  这里的current存储的task_struct地址是在内核实地址空间的，所以不需要remap
 	old_data_base = get_base(current->ldt[2]);
 	if (old_data_base != old_code_base)
 		panic("We don't support separate I&D");
 	if (data_limit < code_limit)
-		panic("Bad data_limit");
+		panic("Bad data_limit");*/
 
 	//new_data_base = new_code_base = nr * 0x4000000;
 /*	if (nr == 1) {
@@ -69,7 +69,9 @@ int copy_mem(int nr, struct task_struct * p) {
 	set_base(p->ldt[2], new_data_base);
 	if (copy_page_tables(old_data_base, new_data_base, data_limit, p)) {
 		//printk("copy_page_tables error result in free page tables error. \n\r");
-		free_page_tables(new_data_base, data_limit,p);
+		printk("copy_mem call free_page_tables after\n\r");
+		free_page_tables(new_data_base, data_limit,p,OPERATION_DOEXECVE_OR_BEFORE);
+		printk("copy_mem call free_page_tables after\n\r");
 		return -ENOMEM;
 	}
 	return 0;
@@ -130,7 +132,9 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		__asm__("clts ; fnsave %0"::"m" (p->tss.i387));
 	if (copy_mem(nr, p)) {
 		task[nr] = NULL;
-		free_page((long) p);
+		//free_page((long) p);
+		if (!free_page((long)p))
+			panic("fork.copy_process: trying to free free page");
 		return -EAGAIN;
 	}
 	for (i = 0; i < NR_OPEN; i++)
