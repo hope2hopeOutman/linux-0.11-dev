@@ -263,9 +263,9 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		int cached_pg_table_length = GET_ARRAY_LENGTH(cached_pg_table_base);
 		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, &pg_table);
 
-		if (operation == OPERATION_DOEXECVE_OR_BEFORE && size == 0) {
+		/*if (operation == OPERATION_DOEXECVE_OR_BEFORE && size == 0) {
 			pti_size -= MAX_ARG_PAGES;
-		}
+		}*/
 
 		for (nr=0 ; nr<pti_size ; nr++) {
 			if (((operation == OPERATION_DOEXECVE_OR_BEFORE) && ((3 & *pg_table) == 3))
@@ -280,12 +280,9 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 			pg_table++;
 		}
 		//free_page(0xfffff000 & *dir);
-		if (((operation != OPERATION_DOEXECVE_OR_BEFORE)
-				|| size != 0)) {
-			if (!free_page(0xfffff000 & *dir))
-				panic("free_page_tables2: trying to free free page");
-			*dir = 0;
-		}
+		if (!free_page(0xfffff000 & *dir))
+			panic("free_page_tables2: trying to free free page");
+		*dir = 0;
 		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}
 	invalidate(current->dir_addr);
@@ -423,12 +420,12 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			 * 如果是task1创建子进程或其他NR>1的进程创建子进程，那么两个进程的页表项都要设置为只读。
 			 */
 			if (!currentIsTask0Flag && (count - size) > 256) {/* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
-				*from_page_table = this_page;    //将父进程的页表项页设置为只读。
-				if (!currentIsTask1Flag && this_page >= LOW_MEM) {
+				if ((!currentIsTask1Flag || (currentIsTask1Flag && (*from_page_table & 2))) && this_page >= LOW_MEM) { //这块有问题，对于task1的stack这个页表项应该是可写的且>low_mem的,所以要++，不然后面两个进程会共用一个栈的，有问题。
 					this_page -= LOW_MEM;
 					this_page >>= 12;
 					mem_map[this_page]++;   //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
 				}
+				*from_page_table = this_page;    //将父进程的页表项页设置为只读。
 			}
 		}
 		recov_swap_linear_addrs(cached_page_table_base, cached_page_table_length);

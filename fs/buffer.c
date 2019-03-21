@@ -304,7 +304,7 @@ void bread_page(unsigned long address, int dev, int b[4]) {
 		if (bh[i]) {
 			wait_on_buffer(bh[i]);
 			if (bh[i]->b_uptodate) {
-				COPYBLK((unsigned long) bh[i]->b_data, phy_addr);
+				COPYBLK((unsigned long) bh[i]->b_data, (unsigned long)phy_addr);
 			}
 			brelse(bh[i]);
 		}
