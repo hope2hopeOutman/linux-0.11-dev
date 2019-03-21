@@ -449,13 +449,13 @@ void un_wp_page(unsigned long * table_entry)
 {
 	//printk("table_entry: %p \n\r", table_entry);
 	unsigned long* old_page,new_page;
-	unsigned long table_entry_offset = (unsigned long)table_entry & 0xFFC;  /* table_entry存储的是页表项的绝对物理地址，所以这里要将页表项相对于页表的offset先计算出来 */
+	unsigned long table_entry_offset = (unsigned long)table_entry & 0xFFF;  /* table_entry存储的是页表项的绝对物理地址，所以这里要将页表项相对于页表的offset先计算出来 */
 	unsigned long cached_linear_addrs[3] = {0,};
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
 	unsigned long table_base_linear_addr = 0;
 	caching_linear_addr(cached_linear_addrs,length,table_base_linear_addr = check_remap_linear_addr(&table_entry));
 	if (table_base_linear_addr) { /* table_base_linear_addr!=0 说明该页表的物理地址超出内核地址空间了，已经remap到内核table_base_linear_addr线性地址页了 */
-		table_entry += table_entry_offset; /* 因为映射后table_entry就指向线性地址页的首地址了，所以这里要+offset,得到页表项的线性地址 */
+		table_entry += (table_entry_offset / 4); /* 因为映射后table_entry就指向线性地址页的首地址了，所以这里要+offset,得到页表项的线性地址 */
 	}
 	old_page = (unsigned long*)(0xfffff000 & *table_entry);  /* 取出页表项中存储的物理页地址 */
 	/*
@@ -478,7 +478,7 @@ void un_wp_page(unsigned long * table_entry)
 	 *    与task1的task_struct共同占用一页内存。
 	 */
 	if (!(new_page=(unsigned long*)get_free_page(PAGE_IN_MEM_MAP))) {
-		printk("un_wp_page trigger oom \n\r");
+		panic("un_wp_page trigger oom \n\r");
 		oom();
 	}
 	/*
@@ -605,7 +605,7 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
 	/* 这里from_page存储的物理地址又变了，存储的是页表的物理基地址了，所以要remap，remap后from_page存储的是页表的基地址(物理或线性,不解释了你懂得哈哈) */
 	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&from_page));
 	/* 这里的address_offset是相对于start_code的offset，所以取其中间10位的值然后再*4就得到其在页表中的offset，既页表项的物理地址。 */
-	from_page += ((address_offset>>10) & 0xffc);  /* 这里的获得页表项的物理或线性地址 */
+	from_page += ((address_offset>>12) & 0x3FF);  /* 这里的获得页表项的物理或线性地址 */
 
 	phys_addr = *(unsigned long *) from_page;     /* 将页表项中存储的物理地址取出赋值给phys_addr */
     /* is the page clean and present? */
@@ -629,7 +629,7 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
 	to_page = (unsigned long *)to;
 	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&to_page));
 	/* （to_page:页表的基地址)+ (((address>>10) & 0xffc):页表项的offset) = 页表项的地址，这时的to_page变为页表项的物理或线性地址了 */
-	to_page += ((address_offset>>10) & 0xffc);  /* 这里的获得了页表项的物理或线性地址 */
+	to_page += ((address_offset>>12) & 0x3FF);  /* 这里的获得了页表项的物理或线性地址 */
 	if (1 & *(unsigned long *) to_page)         /* 这里物理页要是已经存在了，是不合理的 */
 		panic("try_to_share: to_page already exists");
     /* share them: write-protect */
