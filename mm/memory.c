@@ -424,7 +424,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			 */
 			if (!currentIsTask0Flag && (count - size) > 256) {/* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
 				*from_page_table = this_page;    //将父进程的页表项页设置为只读。
-				if (!currentIsTask1Flag && this_page >= LOW_MEM) {
+				if (!currentIsTask1Flag && this_page >= LOW_MEM) { //这块有问题，对于task1的stack这个页表项应该是可写的且>low_mem的,所以要++，不然后面两个进程会共用一个栈的，有问题。
 					this_page -= LOW_MEM;
 					this_page >>= 12;
 					mem_map[this_page]++;   //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
