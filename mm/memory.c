@@ -263,14 +263,8 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		int cached_pg_table_length = GET_ARRAY_LENGTH(cached_pg_table_base);
 		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, &pg_table);
 
-		/*if (operation == OPERATION_DOEXECVE_OR_BEFORE && size == 0) {
-			pti_size -= MAX_ARG_PAGES;
-		}*/
-
 		for (nr=0 ; nr<pti_size ; nr++) {
-			if (((operation == OPERATION_DOEXECVE_OR_BEFORE) && ((3 & *pg_table) == 3))
-					|| (operation == OPERATION_AFTER_DOEXECVE)) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
-				//free_page(0xfffff000 & *pg_table);
+			if (*pg_table >= LOW_MEM) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
 				if (!free_page(0xfffff000 & *pg_table)) {
 					printk("error linear addr: %p \n\r", pg_table);
 					panic("free_page_tables1: trying to free free page");
@@ -279,7 +273,6 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 			*pg_table = 0;
 			pg_table++;
 		}
-		//free_page(0xfffff000 & *dir);
 		if (!free_page(0xfffff000 & *dir))
 			panic("free_page_tables2: trying to free free page");
 		*dir = 0;
@@ -308,20 +301,15 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
  */
 int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_struct* new_task)
 {
-	unsigned long * from_page_table;
-	unsigned long * to_page_table, *to_page_table_1gbase;
+	unsigned long * from_page_table = 0;
+	unsigned long * to_page_table = 0;
 	unsigned long this_page;
 	unsigned long * from_dir, * to_dir;
-	unsigned long nr,count;
+	unsigned long nr,dir_count;
 	int currentIsTask0Flag = 0;
-	int currentIsTask1Flag = 0;
 	if (task[0] == current) {
 		currentIsTask0Flag = 1;
 	}
-	if (task[1] == current) {
-		currentIsTask1Flag = 1;
-	}
-
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
 	unsigned long *new_dir_page = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);  /* 为新进程分配一页物理内存用于存储目录表 */
@@ -345,15 +333,17 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	to_dir = new_dir_page;
 	//size = ((unsigned) (size+0x3fffff)) >> 22;                      /* 因为每个页表能管理4M物理内存，所以这里(size+(4M-1))/4M确保，不够整除的部分也能被copy. */
 
-	if (!currentIsTask0Flag) {
-		/* 这里如果是fork普通进程的话，要把内核地址空间的映射页copy一份，这样从用户态进入内核态就不需要切换CR3了，size=1024,复制父进程的整个目录表和页表 */
-		count = size = 1024;
+	if (currentIsTask0Flag) {
+		size = 256;
+		//size = ((unsigned) (size+0x3fffff)) >> 22; /* task0 fork task1 */
 	}
 	else {
-		count = size = 256;                 /* task0 fork task1 */
+		/* 这里如果是fork普通进程的话，要把内核地址空间的映射页copy一份，这样从用户态进入内核态就不需要切换CR3了，size=1024,复制父进程的整个目录表和页表 */
+		size = 1024;
 	}
 
 	for( ; size-->0 ; from_dir++,to_dir++) {
+		dir_count++;      /* 记录遍历过的目录数 */
 		if (1 & *to_dir)                                            /* to线性地址所在的目录项已经存在了，则出错。 */
 			panic("copy_page_tables: already exist");
 		if (!(1 & *from_dir))                                       /* 判断from线性地址所在的目录项是否存在。 */
@@ -364,23 +354,30 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
 		caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&from_page_table));
 
-		if (!(to_page_table = (unsigned long *) get_free_page(PAGE_IN_MEM_MAP))) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
-			return -1;	/* Out of memory, see freeing */
-		}
-		*to_dir = ((unsigned long) to_page_table) | 7;  /* 将获取的新的页表物理地址，设置RWX=7后赋值给to线性地址所在的目录项。 */
-		caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&to_page_table));
-
-		if (currentIsTask0Flag) {
-			if (!(to_page_table_1gbase = (unsigned long *) get_free_page(
-			PAGE_IN_MEM_MAP))) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
-				return -1; /* Out of memory, see freeing */
-			}
+		if (dir_count <= 256) {   /* 对于每个新进程来说，前面的256目录页是内核空间都一样的，共享task0的目录页，所以不需要分配相应的页表。 */
+			*to_dir = *from_dir;
 			/*
-			 * task0 fork task1时，因为基地址是1G了所以这里要把前1G的页表复制到后面1G～2G地址空间对弈的目录。
-			 * fork返回后执行task1时，执行的还是内核的代码，但是这时已经在用户态了，所以将线性地址映射到内核代码空间就可以直接执行内核代码do_execve了。
+			 * task0 fork task1有点特殊，因为task1在用户态运行的时候还是执行内核代码，因此要把内核空间的代码复制一份到task1的用户空间
+			 * dir_count <= ((LOW_MEM+0x3fffff)>>22)加上这个条件这里好危险啊，当dir_count>((LOW_MEM+0x3fffff)>>22)时，没有分配分配新的页表，
+			 * 这时to_page_table指向上一次分配的老的页表的末尾(也就是新分配的)，这样就把老的页表覆盖了
 			 * */
-			*(to_dir + 256) = ((unsigned long) to_page_table_1gbase) | 7;
-			caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&to_page_table_1gbase));
+			if (currentIsTask0Flag && dir_count <= ((LOW_MEM+0x3fffff)>>22)) {
+			    if (!(to_page_table = (unsigned long *) get_free_page(PAGE_IN_MEM_MAP))) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
+					return -1; /* Out of memory, see freeing */
+				}
+				/*
+				 * task0 fork task1时，因为基地址是1G了所以这里要把前1G的页表复制到后面1G～2G地址空间对弈的目录。
+				 * fork返回后执行task1时，执行的还是内核的代码，但是这时已经在用户态了，所以将线性地址映射到内核代码空间就可以直接执行内核代码do_execve了。
+				 * */
+				*(to_dir + 256) = ((unsigned long) to_page_table) | 7;
+				caching_linear_addr(cached_page_table_base,	cached_page_table_length,check_remap_linear_addr(&to_page_table));
+			}
+		} else {
+			if (!(to_page_table = (unsigned long *) get_free_page(PAGE_IN_MEM_MAP))) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
+				return -1;	/* Out of memory, see freeing */
+			}
+			*to_dir = ((unsigned long) to_page_table) | 7;  /* 将获取的新的页表物理地址，设置RWX=7后赋值给to线性地址所在的目录项。 */
+			caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&to_page_table));
 		}
 
 		/*
@@ -391,43 +388,46 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 		nr = 1024;
 
         /* 注意：这里的from_page_table是一个页表的基地址，也就是第一个页表项的地址，所以通过*from_page_table取页表项中记录的物理页地址。 */
-		for ( ; nr-- > 0 ; from_page_table++,to_page_table++, (currentIsTask0Flag) ? to_page_table_1gbase++:0) {
-			this_page = *from_page_table;   /* 这里的this_page页表项记录的是物理页地址。 */
-			if (!(1 & this_page))        /* 判断该物理页是否存在。 */
-				continue;
-			if ((count - size) > 256) { /* 注意：前1G的内核地址空间对应的目录项一定不要设置为只读，这里是对于新进程的,对于所有fork操作。 */
-				this_page &= ~2;
-			}
-			           /* 将即将共享的页表项设置为只读。 */
-			*to_page_table = this_page;  /* 将该物理页地址copy到新分配的页表对应的页表项中。 */
-			if (currentIsTask0Flag) {
-				/*
-				 * 如果是task0 fork task1,此时要将task1的起始地址空间1G后面的目录项设置为只读，这样它可以执行内核代码
-				 * 但当执行写操作是，会报WP错误，内核会重新分配一个stack给它。
-				 * */
-				*to_page_table_1gbase = this_page &= ~2;
-			}
-			/*
-			 * 这里如果要Copy的物理页地址<=LOW_MEM说明是task0 fork task1,则这时，不能把task0对应的页表项设置为只读，只能将task1的所有页表项都设置为只读，
-			 * 当task1运行的时候要进行堆栈操作时，发现共享task0的堆栈对于自己是只读的，所以为出发wp异常，这时缺页异常管理函数，会在分页内存区为其分配一页内存为其
-			 * 用户态堆栈，其内核太堆栈和task_struct占用一个分页。
-			 *
-			 * 对于要Copy的物理页地址>LOW_MEM时，这时一定是task1或其子孙执行 fork操作，这时要把父子进程的页表项都设置为只读，谁先执行先触发WP异常，在处理WP的时候，
-			 * 会将另一个进程的页表项都设置为可写。
+		if (((currentIsTask0Flag && dir_count <= ((LOW_MEM+0x3fffff)>>22)) || !currentIsTask0Flag) && to_page_table) {
+			for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
+				this_page = *from_page_table;   /* 这里的this_page页表项记录的是物理页地址。 */
+				if (!(1 & this_page))        /* 判断该物理页是否存在。 */
+					continue;
+				//if (this_page >= LOW_MEM) { /* 注意：前1G的内核地址空间对应的目录项一定不要设置为只读，这里是对于新进程的,对于所有fork操作。 */
+				this_page &= ~2;   /* 对于子进程来说，所有的页表项都设置为只读。 */
 
-			 * 这里判断是不是task0创建task1可以根据limit size的大小来判定，如果size=1G那么肯定是task0 fork task1了,
-			 * 如果是task0创建task1,那么只需将task1的页表项都设置为只读即可，task0是决不可以设置为只读的，
-			 * 如果是task1创建子进程或其他NR>1的进程创建子进程，那么两个进程的页表项都要设置为只读。
-			 */
-			if (!currentIsTask0Flag && (count - size) > 256) {/* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
-				if ((!currentIsTask1Flag || (currentIsTask1Flag && (*from_page_table & 2))) && this_page >= LOW_MEM) { //这块有问题，对于task1的stack这个页表项应该是可写的且>low_mem的,所以要++，不然后面两个进程会共用一个栈的，有问题。
-					this_page -= LOW_MEM;
-					this_page >>= 12;
-					mem_map[this_page]++;   //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
+				//}
+				/* 将即将共享的页表项设置为只读。 */
+				*to_page_table = this_page;  /* 将该物理页地址copy到新分配的页表对应的页表项中。 */
+				/*
+				 * 这里如果要Copy的物理页地址<=LOW_MEM说明是task0 fork task1,则这时，不能把task0对应的页表项设置为只读，只能将task1的所有页表项都设置为只读，
+				 * 当task1运行的时候要进行堆栈操作时，发现共享task0的堆栈对于自己是只读的，所以为出发wp异常，这时缺页异常管理函数，会在分页内存区为其分配一页内存为其
+				 * 用户态堆栈，其内核太堆栈和task_struct占用一个分页。
+				 *
+				 * 对于要Copy的物理页地址>LOW_MEM时，这时一定是task1或其子孙执行 fork操作，这时要把父子进程的页表项都设置为只读，谁先执行先触发WP异常，在处理WP的时候，
+				 * 会将另一个进程的页表项都设置为可写。
+
+				 * 这里判断是不是task0创建task1可以根据limit size的大小来判定，如果size=1G那么肯定是task0 fork task1了,
+				 * 如果是task0创建task1,那么只需将task1的页表项都设置为只读即可，task0是决不可以设置为只读的，
+				 * 如果是task1创建子进程或其他NR>1的进程创建子进程，那么两个进程的页表项都要设置为只读。
+				 */
+				/*
+				 * 在fork操作中，父进程在什么情况下页表项也设置为只读呢？
+				 * 1. task0 fork task1的时候，task0的页表项不能设置为只读。
+				 * 2. task1 fork taskN的时候，task1中(>1G的地址空间)所有可写的页表项都要设置为只读（这部分是被重映射过的，且物理地址>LOW_MEM）
+				 * 3. taskN(N>1) fork taskM的时候，taskN和tasKM的页表项都设置为只读。
+				 */
+				if (!currentIsTask0Flag) {/* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
+					if (this_page >= LOW_MEM) {
+						//this_page -= LOW_MEM;
+						//this_page >>= 12;
+						mem_map[((this_page-LOW_MEM)>>12)]++; //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
+						*from_page_table = this_page;    //将父进程的页表项页设置为只读。
+					}
 				}
-				*from_page_table = this_page;    //将父进程的页表项页设置为只读。
 			}
 		}
+
 		recov_swap_linear_addrs(cached_page_table_base, cached_page_table_length);
 	}
 	invalidate(current->dir_addr);

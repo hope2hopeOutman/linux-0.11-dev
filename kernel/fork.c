@@ -19,6 +19,7 @@
 #include <linux/head.h>
 
 extern void write_verify(unsigned long address);
+extern long LOW_MEM;
 
 long last_pid = 0;
 
@@ -62,7 +63,13 @@ int copy_mem(int nr, struct task_struct * p) {
 	}*/
 
 	new_data_base = new_code_base = USER_LINEAR_ADDR_START;
-	code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
+	if (nr == 1) {
+	    code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
+	}
+	else {
+		code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
+	}
+
 
 	p->start_code = new_code_base;
 	set_base(p->ldt[1], new_code_base);
