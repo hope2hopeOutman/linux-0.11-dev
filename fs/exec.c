@@ -420,7 +420,7 @@ restart_interp:
 	*/
 	/* 得到argv第一个参数在64M进程地址空间的offset,这里已经改为3G地址空间的offset了，加上base就是绝对线性地址了。*/
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
-	printk("changed LDt \n\r");
+	printk("changedLDt \n\r");
 	/*
 	 * 在用户空间，高32页逻辑地址空间建立参数指针数组， 返回的p是用户空间的sp指针。
 	 * 这里一定要注意：在x86架构这种分段机制下，所有的地址都是相对与段base的offset，最终会加上base形成最终的线性地址。

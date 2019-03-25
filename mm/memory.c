@@ -103,7 +103,7 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 			break;
 		}
 	}
-	invalidate(current->dir_addr);
+	invalidate(current->tss.cr3);
 	return linear_addr;
 }
 
@@ -244,12 +244,12 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 	}
 
 	/* 这里一定要注意，对于NR>1的普通进程，前面的256个目录项(1G内核空间)是不能释放的，这点一定要注意。 */
-	dir = (task_p->dir_addr + 256);  /* 获得该任务的用户地址空间目录项的起始地址 */
+	dir = (task_p->tss.cr3 + 256);  /* 获得该任务的用户地址空间目录项的起始地址 */
 
 	if (task[0] == task_p || task[1] == task_p) {
 		panic("Task0 or Task1 can not be released, fatal error.\n\r");
 	}
-	printk("limit size: %u \n\r", size);
+	//printk("limit size: %u \n\r", size);
 	size = USER_LINEAR_ADDR_LIMIT;
 	size = size >> 22;  // (size/4M)目录项个数
 
@@ -278,7 +278,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		*dir = 0;
 		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}
-	invalidate(current->dir_addr);
+	invalidate(current->tss.cr3);
 	return 0;
 }
 
@@ -302,10 +302,10 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_struct* new_task)
 {
 	unsigned long * from_page_table = 0;
-	unsigned long * to_page_table = 0;
+	unsigned long * to_page_table = 0;  /* 这两个变量也是，一定要初始化为0，凡是有++或--操作的一定要先初始化，不然栈上的old_value会是你的噩梦。 */
 	unsigned long this_page;
 	unsigned long * from_dir, * to_dir;
-	unsigned long nr,dir_count;
+	unsigned long nr,dir_count = 0;    /* 这里dir_count一定要初始化为0，不然会有问题的，这是个巨坑啊 */
 	int currentIsTask0Flag = 0;
 	if (task[0] == current) {
 		currentIsTask0Flag = 1;
@@ -316,15 +316,14 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	if (!new_dir_page) {
 		panic("Can not allocate a physical page for new process's dir-table. \n\r ");
 	}
-	new_task->dir_addr = new_dir_page;
-	new_task->tss.cr3 = new_dir_page;
+	new_task->tss.cr3 = (long)new_dir_page;
 	/*
 	 * V1: 内核pg_dir = 0，用户pg_dir存储在task_struct中，计算该from线性地址所在的目录项，也就是落在那个页表中。
 	 *     因为这段代码是在内核态运行的，内核基地址base=0，所以current->dir_addr+目录项offset得到的就是目录项的实际物理地址。
 	 *     如果内存>1G,目录项的物理地址>(1G-128M),那么需要对它进行remap,麻烦啊
 	 * V2: 嘿嘿这里将进程的task_struct和目录表都分配在了内核实地址寻址空间了，不用麻烦了，访问他俩不用remap了mm.
 	 */
-	from_dir = current->dir_addr;
+	from_dir = (unsigned long*)current->tss.cr3;
 	/*
 	 * V1: 计算to线性地址所在的目录项,注意：这里要加上新分配目录页的基地址.
 	 *     这里新的目录页也要判断是否需要remap。
@@ -373,6 +372,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 				caching_linear_addr(cached_page_table_base,	cached_page_table_length,check_remap_linear_addr(&to_page_table));
 			}
 		} else {
+			//printk("start to allocate pg_table, dir_count: %u \n\r", dir_count);
 			if (!(to_page_table = (unsigned long *) get_free_page(PAGE_IN_MEM_MAP))) { /* 获取一页空闲的物理内存，用于存储要copy来自from的页表。 */
 				return -1;	/* Out of memory, see freeing */
 			}
@@ -419,8 +419,6 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 				 */
 				if (!currentIsTask0Flag) {/* 如果不是task0 fork task1的话且目录项>=1G，父进程的页表项也要设置为只读。 */
 					if (this_page >= LOW_MEM) {
-						//this_page -= LOW_MEM;
-						//this_page >>= 12;
 						mem_map[((this_page-LOW_MEM)>>12)]++; //这时内存占用计数等于2，说明有两个进程的页表项指向同一块物理内存页。
 						*from_page_table = this_page;    //将父进程的页表项页设置为只读。
 					}
@@ -430,7 +428,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 
 		recov_swap_linear_addrs(cached_page_table_base, cached_page_table_length);
 	}
-	invalidate(current->dir_addr);
+	invalidate(current->tss.cr3);
 	return 0;
 }
 
@@ -455,7 +453,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 	unsigned long cached_linear_addrs[1] = {0};
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
 
-	page_table = current->dir_addr;
+	page_table = current->tss.cr3;
 	page_table += GET_DIR_ENTRY_OFFSET(address);   /* 获得目录项的实际物理地址:dir_base+dir_entry_offset */
 	if ((*page_table)&1)
 		page_table = (unsigned long *) (0xfffff000 & *page_table);    /* 获得该线性地址所在的页表的基地址 */
@@ -494,7 +492,7 @@ void un_wp_page(unsigned long * table_entry)
 	if ((unsigned long)old_page >= LOW_MEM && mem_map[MAP_NR((unsigned long)old_page)]==1) {
 		*table_entry |= 2;
 		recov_swap_linear_addrs(cached_linear_addrs, length);
-		invalidate(current->dir_addr);
+		invalidate(current->tss.cr3);
 		return;
 	}
 	/*
@@ -518,7 +516,7 @@ void un_wp_page(unsigned long * table_entry)
 	if ((unsigned long)old_page >= LOW_MEM)
 		mem_map[MAP_NR((unsigned long)old_page)]--;
 	*table_entry = (unsigned long)new_page | 7;
-	//invalidate();
+	invalidate(current->tss.cr3);
 	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&old_page));
 	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&new_page));
 	copy_page((unsigned long)old_page,(unsigned long)new_page);
@@ -549,7 +547,7 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 
 	//printk("error line address: %p \n\r", address);
 
-	unsigned long* dir_base = current->dir_addr;
+	unsigned long* dir_base = current->tss.cr3;
 	unsigned long* dir_item = dir_base + GET_DIR_ENTRY_OFFSET(address);
 
 	un_wp_page((unsigned long *)
@@ -562,7 +560,7 @@ void write_verify(unsigned long address)
 	unsigned long * page_table_entry;  /* 注意：该变量存储的是页表项的物理地址，不是线性地址哦。 */
 	unsigned long * page_table;
 	/* 计算该地址对应的目录项地址，从而可以获取对应页表的基地址,也是物理地址 */
-	page_table = (unsigned long *)(*((unsigned long *)(current->dir_addr + GET_DIR_ENTRY_OFFSET(address))));
+	page_table = (unsigned long *)(*((unsigned long *)(current->tss.cr3 + GET_DIR_ENTRY_OFFSET(address))));
 	if (!((unsigned long)page_table & 1))
 		return;
 	page_table = (unsigned long*)((unsigned long)page_table & 0xfffff000);  /* 过滤掉目录项中页表基地址的RWX，这样页表基地址就是4K align了 */
@@ -622,9 +620,9 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
 	 */
 	unsigned long cached_linear_addrs[2];
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
-	from_page = p->dir_addr;
+	from_page = p->tss.cr3;
 	from_page += GET_DIR_ENTRY_OFFSET(address_offset+p->start_code);            /* 这时的from_page指向的是对应的目录项的物理地址 */
-	to_page   = current->dir_addr;
+	to_page   = current->tss.cr3;
 	to_page   +=  GET_DIR_ENTRY_OFFSET(address_offset+current->start_code);     /* 同上，存储的是目录项的物理地址 */
     /* is there a page-directory at from? */
 	from = *(unsigned long *) from_page;  /* 将目录项上存储的页表的物理基地址赋值给from */
@@ -666,7 +664,7 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
 	*(unsigned long *) from_page &= ~2;                         /* 将来自from的页表项存储的物理页地址设置为RX，如果是读操作可以共享，如果是写操作会触发WP */
 	*(unsigned long *) to_page = *(unsigned long *) from_page;  /* 将该要共享的物理页的地址赋值给对应的to页表对应的页表项中 */
 	recov_swap_linear_addrs(cached_linear_addrs,length);
-	//invalidate();
+	invalidate(current->tss.cr3);
 	phys_addr -= LOW_MEM;
 	phys_addr >>= 12;
 	mem_map[phys_addr]++;
@@ -723,7 +721,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 		printk("do_no_page embedded trigger oom \n\r");
 		oom();
 	}
-    /* remember that 1 block is used for header */
+    /* remember that 1 block is used for header as exec file */
 	block = 1 + tmp/BLOCK_SIZE;
 	for (i=0 ; i<4 ; block++,i++){
 		nr[i] = bmap(current->executable,block);

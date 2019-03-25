@@ -76,7 +76,7 @@ int copy_mem(int nr, struct task_struct * p) {
 	set_base(p->ldt[2], new_data_base);
 	if (copy_page_tables(old_data_base, new_data_base, data_limit, p)) {
 		//printk("copy_page_tables error result in free page tables error. \n\r");
-		printk("copy_mem call free_page_tables after\n\r");
+		printk("copy_mem call free_page_tables before\n\r");
 		free_page_tables(new_data_base, data_limit,p,OPERATION_DOEXECVE_OR_BEFORE);
 		printk("copy_mem call free_page_tables after\n\r");
 		return -ENOMEM;
@@ -101,7 +101,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		return -EAGAIN;
 	task[nr] = p;
 
-	printk("task nr: %d,last_pid: %d \n\r", nr, last_pid);
+	printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
 
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->state = TASK_UNINTERRUPTIBLE;

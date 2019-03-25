@@ -118,8 +118,8 @@ struct task_struct {
 	struct desc_struct ldt[3];
 /* tss for this task */
 	struct tss_struct tss;
-	/* 目录表的基地址，每个进程都有自己的目录表 */
-	unsigned long * dir_addr;
+	/* 目录表的基地址，每个进程都有自己的目录表, tss_struct中的cr3存储的就是目录表基地址，所以这里可以注释掉了 */
+	//unsigned long * dir_addr;
 };
 
 /*

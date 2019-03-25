@@ -81,6 +81,7 @@ static void die(char * str,long esp_ptr,long nr)
 	for(i=0;i<10;i++)
 		printk("%02x ",0xff & get_seg_byte(esp[1],(i+(char *)esp[0])));
 	printk("\n\r");
+	panic("First general protection exception. \n\r");
 	do_exit(11);		/* play segment exception */
 }
 
