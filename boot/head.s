@@ -100,7 +100,8 @@ startup_32:
     jmp *%ecx
 /* 下面计算内存的大小统一用4K作为粒度。 */
 real_entry:
-	movl %ds:0x90002,%edx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K */
+    xor %edx,%edx
+	movw %ds:0x90002,%edx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K, 这里也是个小坑，mem长度是2字节，之前用movl是4字节有问题啊 */
 	shl  $0x04,%edx               /* 左移4位乘以16*/
 	addl $0x1000,%edx             /* +16M得到总的内存大小，以4K为单位。 */
 	movl %edx,total_memory_size   /* 将内存总大小(4K granularity)存储到全局变量total_memory_size */
@@ -462,7 +463,7 @@ idt_descr:
 .align 4
 .word 0
 gdt_descr:
-	.word 256*8-1		# so does gdt (not that that's any
+	.word 256*8		# so does gdt (not that that's any
 	.long gdt		# magic number, but it works for me :^)
 
 	.align 8

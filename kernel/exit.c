@@ -25,9 +25,7 @@ void release(struct task_struct * p)
 	for (i=1 ; i<NR_TASKS ; i++)
 		if (task[i]==p) {
 			task[i]=NULL;
-			//free_page((long)(p->dir_addr));  /* 先把该进程占用的目录表释放掉 */
-			//free_page((long)p);
-			if (!free_page((long)(p->tss.cr3)))
+			if (!free_page((long)(p->tss.cr3)))  /* 先把该进程占用的目录表释放掉 */
 				panic("exit.release dir: trying to free free page");
 			if (!free_page((long)p))
 				panic("exit.release: trying to free free page");
@@ -109,10 +107,10 @@ int do_exit(long code)
 	int i;
 
 	//printk("do_exit, pid: %d, fpid: %d, code: %d\n\r", current->pid, current->father, code);
-	//printk("do_exit call free_page_tables after\n\r");
+	//printk("do_exit call free_page_tables before\n\r");
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f),current,OPERATION_AFTER_DOEXECVE);
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17),current,OPERATION_AFTER_DOEXECVE);
-	//printk("do_exit call free_page_tables after\n\r");
+    //printk("do_exit call free_page_tables after\n\r");
 	for (i=0 ; i<NR_TASKS ; i++)
 		if (task[i] && task[i]->father == current->pid) {
 			task[i]->father = 1;

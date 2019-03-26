@@ -244,7 +244,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 	}
 
 	/* 这里一定要注意，对于NR>1的普通进程，前面的256个目录项(1G内核空间)是不能释放的，这点一定要注意。 */
-	dir = (task_p->tss.cr3 + 256);  /* 获得该任务的用户地址空间目录项的起始地址 */
+	dir = (task_p->tss.cr3 + 256*4);  /* 获得该任务的用户地址空间目录项的起始地址,这里的cr3是long类型所以要*4计算offset,这点又被坑了 */
 
 	if (task[0] == task_p || task[1] == task_p) {
 		panic("Task0 or Task1 can not be released, fatal error.\n\r");
@@ -303,8 +303,8 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 {
 	unsigned long * from_page_table = 0;
 	unsigned long * to_page_table = 0;  /* 这两个变量也是，一定要初始化为0，凡是有++或--操作的一定要先初始化，不然栈上的old_value会是你的噩梦。 */
-	unsigned long this_page;
-	unsigned long * from_dir, * to_dir;
+	unsigned long this_page = 0;
+	unsigned long * from_dir = 0, * to_dir = 0;
 	unsigned long nr,dir_count = 0;    /* 这里dir_count一定要初始化为0，不然会有问题的，这是个巨坑啊 */
 	int currentIsTask0Flag = 0;
 	if (task[0] == current) {
