@@ -14,11 +14,15 @@
 #include <asm/io.h>
 #include <asm/system.h>
 
+#define KERNEL_LINEAR_ADDR_SPACE  0x20000  /* granularity 4K,内核线性地址空间大小512M */
+#define KERNEL_REMAP_ADDR_SPACE   0x4000   /* granularity 4K,内核保留的用于remap的线性地址空间大小64M */
+#define OS_INIT_PARAMS_LIMIT      0x0008   /* granularity 4K,系统初始化参数总大小设置为32K，足够了。 */
+
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
-#define OS_PARAMS_ADDR(mem_4k_size) \
-					((mem_4k_size >= 0x40000) ? (1<<30 - 0x8000) :\
-					  ((mem_4k_size<<12)-0x8000)\
+#define OS_PARAMS_ADDR(total_mem_4k_size) \
+					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\
+					  ((total_mem_4k_size-OS_INIT_PARAMS_LIMIT)<<12)\
 					)
 
 typedef struct HardAllInfoT {
@@ -78,13 +82,12 @@ void move_params_to_memend() {
 	}*/
 
 	/*
-	 * 这里其实还有个更简单的方法，当内存>1G的时候，直接在1G内存的最高处开辟一个0x8000字节的空间，用于存储os_params,
-	 * 因为在初始化内核的目录表的时候，虽然当内存>1G时候只能实地址管理前面的896M内存，后面的内存只能通过保留的128M地址空间散射访问，
-	 * 但是在内核初始化自己的目录表的时候，还是可以把自己地址空间的后128M地址空间映射为实地址模式的，因为内核初始化的时候，是不会调用
-	 * get_free_page的，所以是不会重置这128M地址空间的，所以在执行main函数的各种init操作的时候，是可以正确访问1G地址空间的最后
-	 * 128M内存的，当初始化操作完成，fork task1的时候就会重置内核的128M地址空间用于访问>896M的内存了，当然这时的os_params已经不需要了
+	 * 这里其实还有个更简单的方法，当内存>KERNEL_LINEAR_ADDR_SPACE时候，直接在KERNEL_LINEAR_ADDR_SPACE内存的最高处开辟一个0x8000(32K)字节的空间，用于存储os_params,
+	 * 因为在初始化内核的目录表的时候，虽然当内存>KERNEL_LINEAR_ADDR_SPACE时候只能实地址管理前面的KERNEL_LINEAR_ADDR_SPACE-64M内存，后面的内存只能通过保留的64M地址空间散射访问，
+	 * 但是在内核初始化自己的目录表的时候，还是可以把自己地址空间的后128M地址空间映射为实地址模式的，因为内核初始化的时候，是不会调用get_free_page的，
+	 * 所以是不会remap这64M地址空间的，所以在执行main函数的各种init操作的时候，是可以正确访问KERNEL_LINEAR_ADDR_SPACE地址空间的最后64M内存的，
+	 * 当初始化操作完成，fork task1的时候就会重置内核的64M地址空间用于访问>(KERNEL_LINEAR_ADDR_SPACE-64M)的内存了，当然这时的os_params已经不需要了,
 	 * 所以可以被覆盖了。
-	 *
 	 */
 
 	paramsMem = OS_PARAMS_ADDR(total_memory_size);

@@ -71,6 +71,12 @@ HD_INTERRUPT_READ  = 0x20
 OS_BASE_ADDR       = 0x500000
 PG_DIR_BASE_ADDR   = 0x000000
 PG_TAB_BASE_ADDR   = 0x100000
+/*
+ * 这里将内核线性地址空间设置为512M是为了验证利用内核保留线性空间访问>512M的高地址物理内存，
+ * 因为bochs模拟>1G的内存有问题，不是很稳定，我在linux上自己重编了bochs并将--enable-large-mem选项也加上了，但是>1G还是有问题，这里不纠结了，
+ * 设置megs=992M(4M的倍数)是可以的，所以就把内核线性地址空间设置为512M这样就能验证了。
+ */
+KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K */
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
@@ -108,10 +114,10 @@ real_entry:
 	/* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
     lss tmp_floppy_area,%esp
 
-    /* 设置内核代码段的limit,因为要支持每个进程都有4G的地址空间，所以内核的地址空间是1G,当内存>1G的时候，也只能设置为1G=0x40000(4K) */
-    cmp $0x40000,%edx
+    /* 设置内核代码段的limit,因为要支持每个进程都有4G的地址空间，所以内核的地址空间是512M,当内存>512M的时候，也只能设置为512M=0x20000(4K) */
+    cmp $KERNEL_LINEAR_ADDR_SPACE,%edx
     jle 1f
-    movl $0x40000,%edx  /* 如果内存>1G，那么设置内核的limit为1G */
+    movl $KERNEL_LINEAR_ADDR_SPACE,%edx  /* 如果内存>512M，那么设置内核的limit为512M */
 1:  lea gdt,%ebx
     add $0x08,%ebx
     push %edx
@@ -129,7 +135,12 @@ real_entry:
     popl %ebx
     popl %edx             /* 恢复内存的总大小，单位是4K,如果内存>1G这里的edx恒等于1G，注意:这里还没开启分页功能，所以地址的访问是实地址映射。 */
 
-    shl $0x0C,%edx        /* 注意：这里的edx应该是<=1G/4k */
+    shl $0x0C,%edx        /* 注意：这里的edx应该是<=(512M/4k) */
+    /*
+     * 此时将内核能实地址映射的内存的(最高地址-4)处设置为临时栈顶，注意“此时”的含义，
+     * 因为如果内存>512M的话，内核实地址映射的内存是(512-64)M，因为要留64M地址空间映射>512M内存以及保留空间的物理地址。
+     * 此时还没开启分页，所以整个物理内存都可以实地址访问。
+     */
 	subl $0x4,%edx
     /* init a temp stack in the highest addr of memory for handling HD intr.  */
 init_temp_stack:
@@ -391,17 +402,22 @@ setup_paging:
 	xorl %edi,%edi			/* pg_dir is at 0x000 */
 	cld;rep;stosl           /* 将这4K空间初始化为0 */
 
-    /* total_memory_size存储了内存的大小，但是为4K */
+    /* total_memory_size存储了内存的大小，但是granularity=4K */
     movl total_memory_size,%eax
-    cmp $0x40000,%eax      /* 判断内存是否>1G，如果大于1G的话，强制设置内核目录表映射的地址空间为1G，且是实地址映射模式 */
+    /*
+     * 判断内存是否>512M，如果大于512M的话，强制设置内核目录表映射的地址空间为512M，且是实地址映射模式,
+     * 注意:此时的内核空间512M是可以完全实地址映射的，因为在内核初始化阶段是不会调用get_free_page，所以也不会remap保留地址空间，
+     * 因此保留地址空间的实地址映射还是有效的，可以直接访问。
+     */
+    cmp $KERNEL_LINEAR_ADDR_SPACE,%eax
     jle 1f
     /*
-     * 设置内核实地址映射的地址空间为1G，这里可能有人会问，不是说好了896M吗，怎么又是1G了，其实这里1G的地址空间都实地址映射是没问题的，
-     * 因为，在调用get_free_page的时候会重置内核这128M地址空间对应的物理页的，所以在内核初始化的时候实地址映射内核这128M地址空间是没问题的
-     * 而且os_params放在1G-0x8000开始处(内存>=1G)，也需要这样初始化内核目录表，这样在初始化mem和char_dev的时候才好访问这些os_params，
-     * 一旦内核完成了初始化，后面的内存分配都要通过get_free_page来管理，这时896M~1G这个128M地址空间就无效了，会被remap的。
+     * 设置内核实地址映射的地址空间为512M，这里可能有人会问，不是说好了(KERNEL_LINEAR_ADDR_SPACE-64M)的吗，怎么又是了512M了，其实这里512M的地址空间都实地址映射是没问题的，
+     * 因为，在调用get_free_page的时候会重置内核保留的64M地址空间对应的物理页的，所以在内核初始化的时候实地址映射内核这64M地址空间是没问题的
+     * 而且os_params放在512M-0x8000开始处(内存>=512M)，也需要这样初始化内核目录表，这样在初始化mem和char_dev的时候才好访问这些os_params，
+     * 一旦内核完成了初始化，后面的内存分配都要通过get_free_page来管理，这时448M~512M这个64M地址空间就无效了，会被remap的。
      */
-    movl $0x40000,%eax
+    movl $KERNEL_LINEAR_ADDR_SPACE,%eax
     /*
      * 计算内核实地址映射的内存占用多少页表或目录项，也就是多少个目录项。目录项个数=内存大小/4M=total_memory_size/1k
      */
