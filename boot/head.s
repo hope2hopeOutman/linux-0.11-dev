@@ -69,8 +69,8 @@
 
 HD_INTERRUPT_READ  = 0x20
 OS_BASE_ADDR       = 0x500000
-PG_DIR_BASE_ADDR   = 0x000000
-PG_TAB_BASE_ADDR   = 0x100000
+PG_DIR_BASE_ADDR   = 0x000000   /* 内核目录表基地址 */
+PG_TAB_BASE_ADDR   = 0x100000   /* 内核页表起始地址,4M大小可以管理4G内存 */
 /*
  * 这里将内核线性地址空间设置为512M是为了验证利用内核保留线性空间访问>512M的高地址物理内存，
  * 因为bochs模拟>1G的内存有问题，不是很稳定，我在linux上自己重编了bochs并将--enable-large-mem选项也加上了，但是>1G还是有问题，这里不纠结了，
@@ -133,12 +133,12 @@ real_entry:
     push %ebx
     call set_seg_limit
     popl %ebx
-    popl %edx             /* 恢复内存的总大小，单位是4K,如果内存>1G这里的edx恒等于1G，注意:这里还没开启分页功能，所以地址的访问是实地址映射。 */
+    popl %edx             /* 恢复内存的总大小，单位是4K,如果内存>512M这里的edx恒等于512M，注意:这里还没开启分页功能，所以地址的访问是实地址映射。 */
 
     shl $0x0C,%edx        /* 注意：这里的edx应该是<=(512M/4k) */
     /*
      * 此时将内核能实地址映射的内存的(最高地址-4)处设置为临时栈顶，注意“此时”的含义，
-     * 因为如果内存>512M的话，内核实地址映射的内存是(512-64)M，因为要留64M地址空间映射>512M内存以及保留空间的物理地址。
+     * 因为如果内存>512M的话，内核实地址映射的内存是(512-64)M，因为要留64M地址空间映射>512M内存以及保留空间(64M)的物理地址。
      * 此时还没开启分页，所以整个物理内存都可以实地址访问。
      */
 	subl $0x4,%edx
@@ -442,23 +442,14 @@ init_dir:
     addl $4,%ebx
     jmp init_dir
 
-//	movl $pg0+7,pg_dir		    /* set present bit/user r/w */
-//	movl $pg1+7,pg_dir+4		/*  --------- " " --------- */
-//	movl $pg2+7,pg_dir+8		/*  --------- " " --------- */
-//	movl $pg3+7,pg_dir+12		/*  --------- " " --------- */
-
 /* 初始化所有页表，从最后一个页表的最后一个页表项初始化。 */
 init_pgt:
-//	movl $pg3+4092,%edi
     addl $4092,%edx         /* 注意：这里的edx经过上面的init_dir操作后，存储的就是最后一个页表的首地址，所以+4094就得到了最后一个页表项的首地址了。*/
     movl %edx,%edi
-
-//	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
-
 	movl %ecx,%eax       /* 获取内核要实地址映射的内存对应的目录项个数 */
     shl $22,%eax         /* 获得内核要实地址映射的的内存的大小(*4M),单位是byte */
     subl $4096,%eax      /* 计算得到要实地址映射的最后一页的基地址 */
-    /* 将内存最后一页的起始地址+7，赋值给eax */
+    /* 将内存最后一页的起始地址+7(设置为RWX)，赋值给eax */
     addl $7,%eax
 	std                 /* 重置方向为地址递减操作 */
 1:	stosl			    /* fill pages backwards - more efficient :-) ，类似功能：movl %eax,%ss:%edi;subl $4,%edi*/
@@ -487,7 +478,7 @@ idt:	.fill 256,8,0		# idt is uninitialized
 
 gdt:
 	.quad 0x0000000000000000	/* NULL descriptor */
-	.quad 0x00c09a0000000fff	/* Code seg, limit default size: 16Mb */
+	.quad 0x00c09a0000000fff	/* Code seg, limit default size: 16Mb,it will be changed by set_limit */
 	.quad 0x00c0920000000fff	/* Data seg, limit default size: 16Mb */
 	.quad 0x0000000000000000	/* TEMPORARY - don't use */
 	.fill 252,8,0			    /* space for LDT's and TSS's etc */

@@ -208,14 +208,14 @@ unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 	 */
 	//data_base += data_limit;
 	data_base += (data_limit-PAGE_SIZE);
-	//printk("putpage error before. \n\r");
+	printk("put_page error before. \n\r");
 	for (i=MAX_ARG_PAGES-1 ; i>=0 ; i--) {
 		if (page[i]) {
 			put_page(page[i],data_base);
 		}
 		data_base -= PAGE_SIZE;
 	}
-	//printk("putpage error after. \n\r");
+	printk("put_page error after. \n\r");
 	return data_limit;
 }
 
@@ -402,10 +402,10 @@ restart_interp:
 		if ((current->close_on_exec>>i)&1)
 			sys_close(i);
 	current->close_on_exec = 0;
-	//printk("do_execve call free_page_tables before\n\r");
+	printk("do_execve call free_page_tables before\n\r");
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f), current, OPERATION_DOEXECVE_OR_BEFORE);
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17), current, OPERATION_DOEXECVE_OR_BEFORE);  /* 因为代码段和数据段的地址空间是重合的，所以这一步是重复操作，在这里可以省去。 */
-	//printk("do_execve call free_page_tables after\n\r");
+	printk("do_execve call free_page_tables after\n\r");
 	if (last_task_used_math == current)
 		last_task_used_math = NULL;
 	current->used_math = 0;

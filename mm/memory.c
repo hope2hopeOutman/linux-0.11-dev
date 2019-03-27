@@ -82,11 +82,11 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 {
-	unsigned long* dir_item         = (unsigned long*)((linear_addr >> 20) & 0xFFC);   /* 计算该线性地址所在的目录项，既所在的页表 */
-	unsigned long* table_base       = *dir_item;                                       /* 通过目录项获得对应页表的起始地址 */
-	unsigned long table_item_offset =  (linear_addr >> 10) & 0xFFC;                    /* 计算页表项在页表中的位置 */
-	unsigned long* table_entry      = table_base + table_item_offset;                  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
-	*table_entry                    = phy_addr; /* 将>1G的一页物理地址，设置在该页表项中，下次再对该线性地址就行读写操作就会映射到该>(1G-128M)的物理地址了哈哈 */
+	unsigned long* dir_item         = (unsigned long*)((linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
+	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);                          /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
+	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
+	unsigned long* table_entry      = (unsigned long*)(table_base + table_item_offset);  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
+	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
 }
 
 /* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
@@ -98,7 +98,7 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 		if (linear_addr_swap_map[i] == 0)
 		{
 			linear_addr_swap_map[i] = 1;
-			linear_addr = (KERNEL_LINEAR_ADDR_PAGES - LINEAR_ADDR_SWAP_PAGES + i) << 12; /* 计算需要被重映射的内核空间线性地址 */
+			linear_addr = ((KERNEL_LINEAR_ADDR_PAGES - LINEAR_ADDR_SWAP_PAGES) + i) << 12; /* 计算需要被重映射的内核空间线性地址 */
 			reset_swap_table_entry(linear_addr, phy_addr & 0xFFFFF000);
 			break;
 		}
@@ -110,7 +110,8 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 /* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long check_remap_linear_addr(unsigned long** phy_addr) {
 	unsigned long linear_addr = 0;
-	if (total_memory_size > 0x40000 && (unsigned long)*phy_addr >= ((1 << 30) - (128 << 20))) {
+	if (total_memory_size > KERNEL_LINEAR_ADDR_PAGES &&
+	   (unsigned long)*phy_addr >= ((KERNEL_LINEAR_ADDR_PAGES-KERNEL_REMAP_ADDR_PAGES) << 12)) {
 		linear_addr = remap_linear_addr((unsigned long)(*phy_addr));    /* 映射的一定是4K对齐的物理页 */
 		*phy_addr = (unsigned long*)linear_addr;
 	}
@@ -133,13 +134,14 @@ unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigne
 /*
  * Get physical address of first (actually last :-) free page, and mark it
  * used. If no free pages left, return 0.
- * 这里因为将保留线性地址实地址映射的那部分内存也用于分页管理了，所以当分配的没被占用的物理地址大于（1G-128M）时，
- * 就应该用保留线性地址remap了，而不是>1G物理内存，这里有个概念一定要记住：内核地址空间是1G并不代表属于内核的物理地址就有1G，
- * 这个1G的地址空间指的是线性地址空间是属于内核的，而不是物理地址。
- * 所以传给%ebx寄存器的值应该是KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES，从这块物理地址开始比较，而不是从1G开始。
+ * 这里因为将保留线性地址实地址映射的那部分内存也用于分页管理了，所以当分配的未被占用的物理地址>(512-64)M时，
+ * 就应该用保留线性地址remap了，而不是>512M物理内存才需要映射，这里有个概念一定要记住：内核地址空间是512M并不代表属于内核的物理地址就有512M，
+ * 这个512M的地址空间指的是线性地址空间是属于内核的，而不是物理地址。
+ * 所以传给%ebx寄存器的值应该是KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES，从这块物理地址开始比较，而不是从512M开始。
  * 参数real_space的值有两个：0和1
- * 这个参数的值有意义的前提是，内存>1G,本版本规定的最大进程数为1K，一个进程占用8K(task_struct+dir)内核实地址映射的内存,总共占用8M。
- * 1:表示分配的物理页地址<(main_memory_start+8M/4K),也就是来自于mem_map开始部分，内核实地址映射的物理页。
+ * 这个参数的值有意义的前提是，内存>512M,本版本规定的最大进程数为1K，一个进程占用8K(task_struct+dir)内核实地址映射的内存,总共占用8M。
+ * 1:表示分配的物理页地址<(main_memory_start+8M/4K),也就是来自于mem_map开始8M部分，内核实地址映射的物理页,
+ *   本系统是将进程的task_struct和目录表分配在开始的8M空间，是实地址映射的可以直接访问，不需要remap。
  * 0:表示分配的物理页来自于整个mem_map管理的内存页,可以来自于实地址或非实地址映射的物理页。
  */
 unsigned long get_free_page(int real_space)
@@ -150,17 +152,18 @@ unsigned long compare_addr = KERNEL_LINEAR_ADDR_PAGES;
 unsigned long paging_num = PAGING_PAGES;
 unsigned long paging_end = mem_map+PAGING_PAGES-1;
 
-if (memory_end > KERNEL_LINEAR_ADDR_PAGES)
+if (memory_end > KERNEL_LINEAR_ADDR_PAGES)  /* 判断实际的物理内存是否>512M,只有>512M才会在内核空间开辟保留空间用于映射>(512M-64M)的物理内存。 */
 {
-	if (real_space) {
+	if (real_space) { /* 这里将会在分页内存区的开始8M(这个值由最大进程数确定)空间，寻找空闲页，用于存储task_struct和目录表 */
 		paging_num = NR_TASKS*2;               /* Granularity is 4K. */
 		/* 从main_memory_start开始的paging_num个物理页专用于存储进程的task_struc和dir的，这部分物理页是肯定在内核的实地址寻址空间的 */
 		paging_end = mem_map + paging_num -1;
 	}
 	else {
-		/* 如果分配的物理页不是用于task_struct和dir, 那么还是从内存的最高物理页开始查找，但查找的页数应该减去专属于task_struct+dir那部分物理页 */
+		/* 如果分配的物理页不是用于task_struct和dir, 那么要从内存的最高物理页开始查找，查找的总的物理页数不包括task_struc和dir专用的物理页。 */
 		paging_num = (PAGING_PAGES-NR_TASKS*2);
 	}
+	/* 当分配的物理页大于(512-64)M的时候，就得remap了，才能对该物理页进行初始化操作。 */
 	compare_addr = KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES;
 }
 
@@ -172,7 +175,7 @@ __asm__("std ; repne ; scasb\n\t"
 	"shl $12,%%ebx\n\t"
     "cmp %%ebx,%%ecx\n\t"          /* 根据内存的实际大小和要访问的物理地址页，决定是否需要remap该物理地址才能初始化它 */
     "jle 1f\n\t"
-	"pushl %%ecx\n\t"              /* 可用的物理页地址且>(1G-128M) */
+	"pushl %%ecx\n\t"              /* 可用的物理页地址且>(512M-64M),ecx中存储的新分配物理页地址的granularity是byte */
 	"call remap_linear_addr\n\t"   /* 将该物理页地址与内核的后128M(1G线性地址空间)某个线性地址页绑定  */
 	"popl %%ecx\n\t"               /* 弹出要被remap的>(1G-128)的物理地址 */
 	"movl %%ecx,%%ebx\n\t"         /* 将被重映射的>1G-128M的物理地址存储在ebx中，后面的函数返回值会用到 */
@@ -233,7 +236,7 @@ int free_page(unsigned long addr)
  */
 int free_page_tables(unsigned long from,unsigned long size, struct task_struct* task_p, int operation)
 {
-	unsigned long *pg_table;
+	unsigned long *pg_table = 0;
 	unsigned long * dir, nr, pti_size = 1024;
 
 	if (from & 0x3fffff)
@@ -243,8 +246,11 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		panic("Trying to free up swapper memory space");
 	}
 
-	/* 这里一定要注意，对于NR>1的普通进程，前面的256个目录项(1G内核空间)是不能释放的，这点一定要注意。 */
-	dir = (task_p->tss.cr3 + 256*4);  /* 获得该任务的用户地址空间目录项的起始地址,这里的cr3是long类型所以要*4计算offset,这点又被坑了 */
+	/*
+	 * 这里一定要注意，对于NR>1的普通进程，前面的KERNEL_LINEAR_ADDR_LIMIT/PAGE_TABLE_SIZE个目录项(1G内核空间)是不能释放的，这点一定要注意。
+	 * 获得该任务的用户地址空间目录项的起始地址,这里的cr3是long类型所以要*4计算offset,这点又被坑了 *
+	 */
+	dir = (unsigned long *)(task_p->tss.cr3 + (KERNEL_LINEAR_ADDR_LIMIT/PAGE_TABLE_SIZE)*4);
 
 	if (task[0] == task_p || task[1] == task_p) {
 		panic("Task0 or Task1 can not be released, fatal error.\n\r");
@@ -261,7 +267,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 
 		unsigned long cached_pg_table_base[1] = {0};
 		int cached_pg_table_length = GET_ARRAY_LENGTH(cached_pg_table_base);
-		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, &pg_table);
+		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, check_remap_linear_addr(&pg_table));
 
 		for (nr=0 ; nr<pti_size ; nr++) {
 			if (*pg_table >= LOW_MEM) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
@@ -306,6 +312,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	unsigned long this_page = 0;
 	unsigned long * from_dir = 0, * to_dir = 0;
 	unsigned long nr,dir_count = 0;    /* 这里dir_count一定要初始化为0，不然会有问题的，这是个巨坑啊 */
+	int kernel_dir_item_num = KERNEL_LINEAR_ADDR_LIMIT / PAGE_TABLE_SIZE; /* 内核地址空间/4M得到内核占用的目录项个数 */
 	int currentIsTask0Flag = 0;
 	if (task[0] == current) {
 		currentIsTask0Flag = 1;
@@ -333,8 +340,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	//size = ((unsigned) (size+0x3fffff)) >> 22;                      /* 因为每个页表能管理4M物理内存，所以这里(size+(4M-1))/4M确保，不够整除的部分也能被copy. */
 
 	if (currentIsTask0Flag) {
-		size = 256;
-		//size = ((unsigned) (size+0x3fffff)) >> 22; /* task0 fork task1 */
+		size = kernel_dir_item_num;
 	}
 	else {
 		/* 这里如果是fork普通进程的话，要把内核地址空间的映射页copy一份，这样从用户态进入内核态就不需要切换CR3了，size=1024,复制父进程的整个目录表和页表 */
@@ -353,7 +359,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
 		caching_linear_addr(cached_page_table_base, cached_page_table_length, check_remap_linear_addr(&from_page_table));
 
-		if (dir_count <= 256) {   /* 对于每个新进程来说，前面的256目录页是内核空间都一样的，共享task0的目录页，所以不需要分配相应的页表。 */
+		if (dir_count <= kernel_dir_item_num) {   /* 对于每个新进程来说，前面的kernel_dir_item_num个目录页是内核空间都一样的，共享task0的目录页，所以不需要分配相应的页表。 */
 			*to_dir = *from_dir;
 			/*
 			 * task0 fork task1有点特殊，因为task1在用户态运行的时候还是执行内核代码，因此要把内核空间的代码复制一份到task1的用户空间
@@ -368,7 +374,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 				 * task0 fork task1时，因为基地址是1G了所以这里要把前1G的页表复制到后面1G～2G地址空间对弈的目录。
 				 * fork返回后执行task1时，执行的还是内核的代码，但是这时已经在用户态了，所以将线性地址映射到内核代码空间就可以直接执行内核代码do_execve了。
 				 * */
-				*(to_dir + 256) = ((unsigned long) to_page_table) | 7;
+				*(to_dir + kernel_dir_item_num) = ((unsigned long) to_page_table) | 7;
 				caching_linear_addr(cached_page_table_base,	cached_page_table_length,check_remap_linear_addr(&to_page_table));
 			}
 		} else {
@@ -582,6 +588,8 @@ void get_empty_page(unsigned long address)
 {
 	unsigned long tmp;
 
+	printk("Come to get_empty_page. \n\r");
+
 	if (!(tmp=get_free_page(PAGE_IN_MEM_MAP)) || !put_page(tmp,address)) {
 		//free_page(tmp);		/* 0 is ok - ignored */
 		if (!free_page(tmp))
@@ -710,7 +718,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	address &= 0xfffff000;
 	tmp = address - current->start_code;  /* 这里的start_code等于进程地址空间的base,这里的tmp是相对于base的offset */
-	//printk("addr: %d, errcode: %d, tmp: %d \n\r", address, error_code, );
+	printk("addr: %d, errcode: %d, tmp: %d \n\r", address, error_code,tmp );
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;

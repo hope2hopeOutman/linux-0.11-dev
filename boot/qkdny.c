@@ -14,14 +14,10 @@
 #include <asm/io.h>
 #include <asm/system.h>
 
-#define KERNEL_LINEAR_ADDR_SPACE  0x20000  /* granularity 4K,内核线性地址空间大小512M */
-#define KERNEL_REMAP_ADDR_SPACE   0x4000   /* granularity 4K,内核保留的用于remap的线性地址空间大小64M */
-#define OS_INIT_PARAMS_LIMIT      0x0008   /* granularity 4K,系统初始化参数总大小设置为32K，足够了。 */
-
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
 #define OS_PARAMS_ADDR(total_mem_4k_size) \
-					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\
+					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_PAGES) ? ((KERNEL_LINEAR_ADDR_PAGES-OS_INIT_PARAMS_LIMIT)<<12) :\
 					  ((total_mem_4k_size-OS_INIT_PARAMS_LIMIT)<<12)\
 					)
 
@@ -57,30 +53,6 @@ __asm__("pushl %%edx\n\t" \
 void move_params_to_memend() {
 	unsigned long totalMem  = 0;
 	unsigned long paramsMem = 0;
-	//如果totalMem<1M也就是内存总大小<4G
-	/*if (total_memory_size < 0x100000)
-	{
-		totalMem  = total_memory_size * 0x1000;
-		paramsMem = totalMem - 0x8000;
-	}
-	else {
-		paramsMem = 0xFFFF8000;   //paramsMem=4G-32K=0xFFFF8000,最高的32K地址用来存储各种硬件参数。
-	}*/
-
-	/*
-	 *  因为要支持每个进程都有4G的地址空间，所以这里为了简单起见，如果内存>=1G的话将params统一复制到(1G-128M-0x8000)处，
-	 *  因为这里有内核实地址管理，而且在内核初始化的时候是不用用到这块内存的，所以parms肯定是不会被覆盖的。
-	 *  如果内存<1G的话，那么还是复制到totalMem-0x8000处。
-	 */
-	/*if (total_memory_size < 0x40000)
-	{
-		totalMem  = total_memory_size * 0x1000;
-		paramsMem = totalMem - 0x8000;
-	}
-	else {
-		paramsMem = OS_PARAMS_ADDR;
-	}*/
-
 	/*
 	 * 这里其实还有个更简单的方法，当内存>KERNEL_LINEAR_ADDR_SPACE时候，直接在KERNEL_LINEAR_ADDR_SPACE内存的最高处开辟一个0x8000(32K)字节的空间，用于存储os_params,
 	 * 因为在初始化内核的目录表的时候，虽然当内存>KERNEL_LINEAR_ADDR_SPACE时候只能实地址管理前面的KERNEL_LINEAR_ADDR_SPACE-64M内存，后面的内存只能通过保留的64M地址空间散射访问，
@@ -93,7 +65,7 @@ void move_params_to_memend() {
 	paramsMem = OS_PARAMS_ADDR(total_memory_size);
 
 	params_table_addr = paramsMem;
-	copy_struct((long*)0x90000, (long*)paramsMem, 512/4);
+	copy_struct((long*)OS_INIT_PARAMS_ADDR, (long*)paramsMem, 512/4);
 }
 
 int do_controller_ready(int retries) {

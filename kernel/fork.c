@@ -41,41 +41,15 @@ int copy_mem(int nr, struct task_struct * p) {
 	unsigned long old_data_base, new_data_base, data_limit;
 	unsigned long old_code_base, new_code_base, code_limit;
 
-	/*code_limit = get_limit(0x0f);
-	data_limit = get_limit(0x17);
-	old_code_base = get_base(current->ldt[1]);  这里的current存储的task_struct地址是在内核实地址空间的，所以不需要remap
-	old_data_base = get_base(current->ldt[2]);
-	if (old_data_base != old_code_base)
-		panic("We don't support separate I&D");
-	if (data_limit < code_limit)
-		panic("Bad data_limit");*/
-
-	//new_data_base = new_code_base = nr * 0x4000000;
-/*	if (nr == 1) {
-		 nr==1表明是task0首次创建init进程1，这时进程1和task0是共享地址空间的，只是用户栈不同，所以他们其实就是共享同一个地址空间的线程了。
-		new_data_base = new_code_base = KERNEL_LINEAR_ADDR_START;
-		code_limit = data_limit = KERNEL_LINEAR_ADDR_LIMIT;     进程0和进程1的地址空间Limit都是1G
-	}
-	else {
-		 nr>1的进程都是init进程创建的普通进程，基地址都是从1G开始的
-		new_data_base = new_code_base = USER_LINEAR_ADDR_START;
-		code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;     nr>1的进程的地址空间Limit都是3G
-	}*/
-
 	new_data_base = new_code_base = USER_LINEAR_ADDR_START;
-	if (nr == 1) {
-	    code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
-	}
-	else {
-		code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
-	}
-
+	code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
 
 	p->start_code = new_code_base;
 	set_base(p->ldt[1], new_code_base);
 	set_base(p->ldt[2], new_data_base);
+	set_limit(p->ldt[1], data_limit);
+	set_limit(p->ldt[2], data_limit);
 	if (copy_page_tables(old_data_base, new_data_base, data_limit, p)) {
-		//printk("copy_page_tables error result in free page tables error. \n\r");
 		printk("copy_mem call free_page_tables before\n\r");
 		free_page_tables(new_data_base, data_limit,p,OPERATION_DOEXECVE_OR_BEFORE);
 		printk("copy_mem call free_page_tables after\n\r");
@@ -101,7 +75,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		return -EAGAIN;
 	task[nr] = p;
 
-	//printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
+	printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
 
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->state = TASK_UNINTERRUPTIBLE;
