@@ -126,6 +126,7 @@ unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigne
 				return;
 			}
 		}
+		printk("addr_array.length=%d \n\r", length);
 		panic("cache for linear_addr is full. \n\r");
 	}
 	return linear_addr;
@@ -356,7 +357,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 			panic("copy_page_tables: already exist");
 		if (!(1 & *from_dir))                                       /* 判断from线性地址所在的目录项是否存在。 */
 			continue;
-		unsigned long cached_page_table_base[4] = {0,0};
+		unsigned long cached_page_table_base[4] = {0,};
 		int cached_page_table_length = GET_ARRAY_LENGTH(cached_page_table_base);
 		/* 读取目录项中存储的某个页表的物理地址，因为页表的地址是4K对齐的，所以要&0xfffff000擦除RWX位。 */
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
@@ -629,7 +630,7 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
 	 * 所以他们所产生的相同的线性地址必然对应的相同的物理页，所以只要有一个进程加载对应的物理页，另一个进程执行时就可以共享。
 	 * 这里的start_code对于task1和task0都是0，而对于NR>1的进程他们的start_code都是1G，这里就先这样操作吧。
 	 */
-	unsigned long cached_linear_addrs[2];
+	unsigned long cached_linear_addrs[2] = {0,0};
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
 	from_page = p->tss.cr3;
 	from_page += GET_DIR_ENTRY_OFFSET(address_offset+p->start_code);            /* 这时的from_page指向的是对应的目录项的物理地址 */
@@ -721,7 +722,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	address &= 0xfffff000;
 	tmp = address - current->start_code;  /* 这里的start_code等于进程地址空间的base,这里的tmp是相对于base的offset */
-	printk("addr: %u, errcode: %d \n\r", address, error_code);
+	//printk("addr: %u, errcode: %d \n\r", address, error_code);
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;
