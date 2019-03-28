@@ -404,6 +404,7 @@ restart_interp:
 	current->close_on_exec = 0;
 	printk("do_execve call free_page_tables before\n\r");
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f), current, OPERATION_DOEXECVE_OR_BEFORE);
+	printk("do_execve call free_page_tables intermediate\n\r");
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17), current, OPERATION_DOEXECVE_OR_BEFORE);  /* 因为代码段和数据段的地址空间是重合的，所以这一步是重复操作，在这里可以省去。 */
 	printk("do_execve call free_page_tables after\n\r");
 	if (last_task_used_math == current)
@@ -420,7 +421,7 @@ restart_interp:
 	*/
 	/* 得到argv第一个参数在64M进程地址空间的offset,这里已经改为3G地址空间的offset了，加上base就是绝对线性地址了。*/
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
-	printk("changedLDt \n\r");
+	printk("changedLDt, executable: %p \n\r",current->executable);
 	/*
 	 * 在用户空间，高32页逻辑地址空间建立参数指针数组， 返回的p是用户空间的sp指针。
 	 * 这里一定要注意：在x86架构这种分段机制下，所有的地址都是相对与段base的offset，最终会加上base形成最终的线性地址。

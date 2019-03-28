@@ -151,6 +151,7 @@ register unsigned long __res asm("ax");
 unsigned long compare_addr = KERNEL_LINEAR_ADDR_PAGES;
 unsigned long paging_num = PAGING_PAGES;
 unsigned long paging_end = mem_map+PAGING_PAGES-1;
+unsigned long paging_start = LOW_MEM;
 
 if (memory_end > KERNEL_LINEAR_ADDR_PAGES)  /* 判断实际的物理内存是否>512M,只有>512M才会在内核空间开辟保留空间用于映射>(512M-64M)的物理内存。 */
 {
@@ -162,6 +163,7 @@ if (memory_end > KERNEL_LINEAR_ADDR_PAGES)  /* 判断实际的物理内存是否
 	else {
 		/* 如果分配的物理页不是用于task_struct和dir, 那么要从内存的最高物理页开始查找，查找的总的物理页数不包括task_struc和dir专用的物理页。 */
 		paging_num = (PAGING_PAGES-NR_TASKS*2);
+		paging_start += ((NR_TASKS*2)<<12);
 	}
 	/* 当分配的物理页大于(512-64)M的时候，就得remap了，才能对该物理页进行初始化操作。 */
 	compare_addr = KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES;
@@ -170,7 +172,7 @@ if (memory_end > KERNEL_LINEAR_ADDR_PAGES)  /* 判断实际的物理内存是否
 __asm__("std ; repne ; scasb\n\t"
 	"jne 2f\n\t"
 	"movb $1,1(%%edi)\n\t"
-	"sall $12,%%ecx\n\t"
+	"sall $12,%%ecx\n\t"          /* 这里自己动手挖了个大坑，差点把自己埋了，当paging_num = (PAGING_PAGES-NR_TASKS*2)时，计算地址的时候要加上NR_TASKS*2，mama */
 	"addl %2,%%ecx\n\t"
 	"shl $12,%%ebx\n\t"
     "cmp %%ebx,%%ecx\n\t"          /* 根据内存的实际大小和要访问的物理地址页，决定是否需要remap该物理地址才能初始化它 */
@@ -183,6 +185,7 @@ __asm__("std ; repne ; scasb\n\t"
 	"movl $0x0,%%ecx\n\t"
 	"movl %%ecx,%%cr3\n\t"         /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
 	"movl %%eax,%%edx\n\t"         /* 将内核地址空间后128M的被重映射的线性地址，放入edx */
+	"xorl %%eax,%%eax\n\t"         /* 将eax清零，后面的rep stosl指令要用eax中的值初始化这个物理页,这又是自己挖的坑啊想哭 */
 	"movl $1024,%%ecx\n\t"
 	"leal 4092(%%edx),%%edi\n\t"   /* 将该线性地址对应的实际物理地址(>(1G-128M))初始化为0 */
 	"rep ; stosl\n\t"
@@ -199,7 +202,7 @@ __asm__("std ; repne ; scasb\n\t"
 	"2:"
 	"cld;"
 	:"=a" (__res)
-	:"0" (0),"r" (LOW_MEM),"c" (paging_num),
+	:"0" (0),"r" (paging_start),"c" (paging_num),
 	"D" (paging_end), "b" (compare_addr));
 return __res;
 }
@@ -250,7 +253,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 	 * 这里一定要注意，对于NR>1的普通进程，前面的KERNEL_LINEAR_ADDR_LIMIT/PAGE_TABLE_SIZE个目录项(1G内核空间)是不能释放的，这点一定要注意。
 	 * 获得该任务的用户地址空间目录项的起始地址,这里的cr3是long类型所以要*4计算offset,这点又被坑了 *
 	 */
-	dir = (unsigned long *)(task_p->tss.cr3 + (KERNEL_LINEAR_ADDR_LIMIT/PAGE_TABLE_SIZE)*4);
+	dir = (unsigned long *)(task_p->tss.cr3 + (KERNEL_LINEAR_ADDR_LIMIT / PAGE_TABLE_SIZE) * 4);
 
 	if (task[0] == task_p || task[1] == task_p) {
 		panic("Task0 or Task1 can not be released, fatal error.\n\r");
@@ -588,7 +591,7 @@ void get_empty_page(unsigned long address)
 {
 	unsigned long tmp;
 
-	printk("Come to get_empty_page. \n\r");
+	//printk("Come to get_empty_page. \n\r");
 
 	if (!(tmp=get_free_page(PAGE_IN_MEM_MAP)) || !put_page(tmp,address)) {
 		//free_page(tmp);		/* 0 is ok - ignored */
@@ -688,7 +691,7 @@ static int try_to_share(unsigned long address_offset, struct task_struct * p)
  * It should be >1 if there are other tasks sharing this inode.
  * 注意：这里的address是相对与进程线性地址空间基地址的offset
  */
-static int share_page(unsigned long address_offset)
+int share_page(unsigned long address_offset)
 {
 	struct task_struct ** p;
 
@@ -718,7 +721,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	address &= 0xfffff000;
 	tmp = address - current->start_code;  /* 这里的start_code等于进程地址空间的base,这里的tmp是相对于base的offset */
-	printk("addr: %d, errcode: %d, tmp: %d \n\r", address, error_code,tmp );
+	printk("addr: %u, errcode: %d \n\r", address, error_code);
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;
@@ -741,6 +744,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	unsigned long linear_addr = 0;
 	if (i > 0) {
+		printk("directly remap maybe have some problem \n\r");
 		linear_addr = remap_linear_addr((unsigned long) page);
 		if (linear_addr) {
 			tmp = (unsigned long) linear_addr + 4096;
@@ -758,7 +762,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	if (put_page((unsigned long)page,address))
 		return;
-	free_page((unsigned long)page);
+	printk("do_no_page. put_page encounter errors.\n\r");
 	if (!free_page((unsigned long)page))
 		panic("do_no_page: trying to free free page");
 	printk("do_no_page trigger oom \n\r");
