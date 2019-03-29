@@ -79,7 +79,7 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 {
-	unsigned long* dir_item         = (unsigned long*)((linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
+	unsigned long* dir_item         = (unsigned long*)(current->tss.cr3 + (linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
 	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
 	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
 	unsigned long* table_entry      = (unsigned long*)(table_base + table_item_offset);  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
@@ -186,8 +186,8 @@ __asm__("std ; repne ; scasb\n\t"
 	"popl %%ecx\n\t"               /* 弹出要被remap的>(1G-128)的物理地址 */
 	"pushl %%ecx\n\t"              /* 将被重映射的>(512-64)M的物理地址存储栈中，后面的函数返回值会用到 */
 	"pushl %%eax\n\t"              /* 将被remap的线性地址入栈,调用remap_linear_addr后的返回值放在eax中，为后面调用recov_swap_linear做准备 */
-	"movl $0x0,%%ecx\n\t"
-	"movl %%ecx,%%cr3\n\t"         /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
+	//"movl $0x0,%%ecx\n\t"        /* 这里不能用目录地址0了，应该根据current->tss.cr3设置，从而让TLB失效。这里也是个巨坑，其实在remap_linear_addr中已经刷新过了，这里再设置成dir=0ss就有问题了。 */
+	//"movl %%ecx,%%cr3\n\t"       /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
 	"movl %%eax,%%edx\n\t"         /* 将内核地址空间后128M的被重映射的线性地址，放入edx */
 	"xorl %%eax,%%eax\n\t"         /* 将eax清零，后面的rep stosl指令要用eax中的值初始化这个物理页,这又是自己挖的坑啊想哭 */
 	"movl $1024,%%ecx\n\t"
@@ -498,7 +498,7 @@ void un_wp_page(unsigned long * table_entry)
 	caching_linear_addr(cached_linear_addrs,length,table_base_linear_addr = check_remap_linear_addr(&table_entry));
 	if (table_base_linear_addr) { /* table_base_linear_addr!=0 说明该页表的物理地址超出内核地址空间了，已经remap到内核table_base_linear_addr线性地址页了 */
 		table_entry += (table_entry_offset / 4); /* 因为映射后table_entry就指向线性地址页的首地址了，所以这里要+offset,得到页表项的线性地址 */
-		printk("table_base_linear_addr: %u, table_entry: %p, table_entry_offset: %u \n\r",table_base_linear_addr,  table_entry, table_entry_offset);
+		//printk("table_base_linear_addr: %u, table_entry: %p, table_entry_offset: %u \n\r",table_base_linear_addr,  table_entry, table_entry_offset);
 	}
 	old_page = (unsigned long*)(0xfffff000 & *table_entry);  /* 取出页表项中存储的物理页地址 */
 	/*
@@ -749,7 +749,6 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	}
 	//printk("nr0: %d, nr1: %d ,nr2: %d, nr3: %d\n\r", nr[0], nr[1], nr[2], nr[3]);
 	bread_page((unsigned long)page,current->executable->i_dev,nr);
-	//printk("pageCode: %u\n\r", *(unsigned long*)page);
 	i = tmp + 4096 - current->end_data;
 
 	unsigned long linear_addr = 0;

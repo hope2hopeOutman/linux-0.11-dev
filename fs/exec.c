@@ -165,7 +165,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 				if (!(pag = (char *) page[p/PAGE_SIZE]) &&
 				    !(pag = (char *) (page[p/PAGE_SIZE] = get_free_page(PAGE_IN_MEM_MAP))))
 					return 0;
-				caching_linear_addr(cached_linear_addrs, length,check_remap_linear_addr(&pag));
+				caching_linear_addr(cached_linear_addrs, length,check_remap_linear_addr((unsigned long*)&pag));
 				if (from_kmem==2)
 					set_fs(new_fs);
 
