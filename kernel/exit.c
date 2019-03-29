@@ -107,10 +107,10 @@ int do_exit(long code)
 	int i;
 
 	//printk("do_exit, pid: %d, fpid: %d, code: %d\n\r", current->pid, current->father, code);
-	//printk("do_exit call free_page_tables before\n\r");
+	printk("do_exit call free_page_tables before\n\r");
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f),current,OPERATION_AFTER_DOEXECVE);
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17),current,OPERATION_AFTER_DOEXECVE);
-    //printk("do_exit call free_page_tables after\n\r");
+    printk("do_exit call free_page_tables after\n\r");
 	for (i=0 ; i<NR_TASKS ; i++)
 		if (task[i] && task[i]->father == current->pid) {
 			task[i]->father = 1;
@@ -179,7 +179,7 @@ repeat:
 				current->cstime += (*p)->stime;
 				flag = (*p)->pid;
 				code = (*p)->exit_code;
-				//printk("pid: %d, fpid: %d, exitCode: %d\n\r", flag,(*p)->father, code);
+				printk("pid: %d, fpid: %d, exitCode: %d\n\r", flag,(*p)->father, code);
 				release(*p);
 				put_fs_long(code,stat_addr);
 				return flag;

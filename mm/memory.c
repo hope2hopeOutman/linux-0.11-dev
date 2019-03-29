@@ -40,9 +40,6 @@ static inline volatile void oom(void)
 __asm__("movl %%eax,%%cr3"::"a" ((unsigned long)dir_addr))
 
 /* these are not to be changed without changing head.s etc */
-//#define LOW_MEM 0x100000
-//#define PAGING_MEMORY (15*1024*1024)
-//#define PAGING_PAGES (PAGING_MEMORY>>12)
 #define MAX_PAGING_PAGES (1024*1024)     /* 4*1024*1024*1024=4G/4k=1M */
 extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY, memory_end, total_memory_size;
 
@@ -64,7 +61,7 @@ unsigned char linear_addr_swap_map[LINEAR_ADDR_SWAP_PAGES] = {0,};
  */
 void recov_swap_linear(unsigned long linear_addr)
 {
-	if (!linear_addr) {
+	if (linear_addr) {
 		linear_addr_swap_map[(linear_addr>>12)+LINEAR_ADDR_SWAP_PAGES-KERNEL_LINEAR_ADDR_PAGES] = 0;
 	}
 }
@@ -73,7 +70,7 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 	unsigned long linear_addr = 0;
 	for (int i=0;i<length;i++){
 		linear_addr = *(linear_addrs+i);
-		if (!linear_addr) {
+		if (linear_addr) {
 			recov_swap_linear(linear_addr);
 		}
 	}
@@ -83,7 +80,7 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 {
 	unsigned long* dir_item         = (unsigned long*)((linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
-	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);                          /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
+	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
 	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
 	unsigned long* table_entry      = (unsigned long*)(table_base + table_item_offset);  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
 	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
@@ -103,6 +100,9 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 			break;
 		}
 	}
+	if (!linear_addr) {
+		panic("Linear address has been full \n\r");
+	}
 	invalidate(current->tss.cr3);
 	return linear_addr;
 }
@@ -114,6 +114,9 @@ unsigned long check_remap_linear_addr(unsigned long** phy_addr) {
 	   (unsigned long)*phy_addr >= ((KERNEL_LINEAR_ADDR_PAGES-KERNEL_REMAP_ADDR_PAGES) << 12)) {
 		linear_addr = remap_linear_addr((unsigned long)(*phy_addr));    /* 映射的一定是4K对齐的物理页 */
 		*phy_addr = (unsigned long*)linear_addr;
+		if (!linear_addr) {
+			panic("check_remap_linear_addr is error. \n\r");
+		}
 	}
 	return linear_addr;
 }
@@ -151,7 +154,7 @@ unsigned long get_free_page(int real_space)
 register unsigned long __res asm("ax");
 unsigned long compare_addr = KERNEL_LINEAR_ADDR_PAGES;
 unsigned long paging_num = PAGING_PAGES;
-unsigned long paging_end = mem_map+PAGING_PAGES-1;
+unsigned long paging_end = mem_map+(PAGING_PAGES-1);
 unsigned long paging_start = LOW_MEM;
 
 if (memory_end > KERNEL_LINEAR_ADDR_PAGES)  /* 判断实际的物理内存是否>512M,只有>512M才会在内核空间开辟保留空间用于映射>(512M-64M)的物理内存。 */
@@ -159,7 +162,7 @@ if (memory_end > KERNEL_LINEAR_ADDR_PAGES)  /* 判断实际的物理内存是否
 	if (real_space) { /* 这里将会在分页内存区的开始8M(这个值由最大进程数确定)空间，寻找空闲页，用于存储task_struct和目录表 */
 		paging_num = NR_TASKS*2;               /* Granularity is 4K. */
 		/* 从main_memory_start开始的paging_num个物理页专用于存储进程的task_struc和dir的，这部分物理页是肯定在内核的实地址寻址空间的 */
-		paging_end = mem_map + paging_num -1;
+		paging_end = mem_map + (paging_num -1);
 	}
 	else {
 		/* 如果分配的物理页不是用于task_struct和dir, 那么要从内存的最高物理页开始查找，查找的总的物理页数不包括task_struc和dir专用的物理页。 */
@@ -177,11 +180,11 @@ __asm__("std ; repne ; scasb\n\t"
 	"addl %2,%%ecx\n\t"
 	"shl $12,%%ebx\n\t"
     "cmp %%ebx,%%ecx\n\t"          /* 根据内存的实际大小和要访问的物理地址页，决定是否需要remap该物理地址才能初始化它 */
-    "jle 1f\n\t"
+    "jl 1f\n\t"
 	"pushl %%ecx\n\t"              /* 可用的物理页地址且>(512M-64M),ecx中存储的新分配物理页地址的granularity是byte */
 	"call remap_linear_addr\n\t"   /* 将该物理页地址与内核的后128M(1G线性地址空间)某个线性地址页绑定  */
 	"popl %%ecx\n\t"               /* 弹出要被remap的>(1G-128)的物理地址 */
-	"movl %%ecx,%%ebx\n\t"         /* 将被重映射的>1G-128M的物理地址存储在ebx中，后面的函数返回值会用到 */
+	"pushl %%ecx\n\t"              /* 将被重映射的>(512-64)M的物理地址存储栈中，后面的函数返回值会用到 */
 	"pushl %%eax\n\t"              /* 将被remap的线性地址入栈,调用remap_linear_addr后的返回值放在eax中，为后面调用recov_swap_linear做准备 */
 	"movl $0x0,%%ecx\n\t"
 	"movl %%ecx,%%cr3\n\t"         /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
@@ -191,16 +194,16 @@ __asm__("std ; repne ; scasb\n\t"
 	"leal 4092(%%edx),%%edi\n\t"   /* 将该线性地址对应的实际物理地址(>(1G-128M))初始化为0 */
 	"rep ; stosl\n\t"
 	"call recov_swap_linear\n\t"   /* 释放该被remap的线性地址，这样该线性地址就可以被映射到其他>1G-128M的物理地址了 */
-	"popl %%eax\n\t"               /* 这时弹出被remap的线性地址 */
-	"movl %%ebx,%%eax\n\t"         /* 将被重映射到物理地址>1G-128M放在eax中作为返回值 */
+	"popl %%eax\n\t"               /* 这时弹出是被选定的用于remap的线性地址 */
+	"popl %%eax\n\t"               /* 这时弹出的是被remp的物理地址>512M-64M */
 	"jmp 2f\n\t"
 	"1:\n\t"
 	"movl %%ecx,%%edx\n\t"         /* 这时ecx存储是的内核实地址映射的物理地址 */
 	"movl $1024,%%ecx\n\t"
 	"leal 4092(%%edx),%%edi\n\t"   /* 将该物理地址页初始化为0 */
 	"rep ; stosl\n\t"
-	"movl %%edx,%%eax\n"           /* 将该物理地址页放入eax，作为返回值。 */
-	"2:"
+	"movl %%edx,%%eax\n\t"         /* 将该物理地址页放入eax，作为返回值。 */
+	"2:\n\t"
 	"cld;"
 	:"=a" (__res)
 	:"0" (0),"r" (paging_start),"c" (paging_num),
@@ -230,8 +233,9 @@ int free_page(unsigned long addr)
 		mem_map[addr]=0;
 	}
 	printk("free free address: %u \n\r", addr_bk);
+	panic("trying to free free page");
 	return 0;
-	//panic("trying to free free page");
+
 }
 
 /*
@@ -241,7 +245,8 @@ int free_page(unsigned long addr)
 int free_page_tables(unsigned long from,unsigned long size, struct task_struct* task_p, int operation)
 {
 	unsigned long *pg_table = 0;
-	unsigned long * dir, nr, pti_size = 1024;
+	unsigned long * dir = 0;
+	unsigned long nr = 0, pti_size = 1024;
 
 	if (from & 0x3fffff)
 		panic("free_page_tables called with wrong alignment");
@@ -484,7 +489,8 @@ unsigned long put_page(unsigned long page,unsigned long address)
 void un_wp_page(unsigned long * table_entry)
 {
 	//printk("table_entry: %p \n\r", table_entry);
-	unsigned long* old_page,new_page;
+	unsigned long* old_page = 0;
+	unsigned long* new_page = 0;
 	unsigned long table_entry_offset = (unsigned long)table_entry & 0xFFF;  /* table_entry存储的是页表项的绝对物理地址，所以这里要将页表项相对于页表的offset先计算出来 */
 	unsigned long cached_linear_addrs[3] = {0,};
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
@@ -492,6 +498,7 @@ void un_wp_page(unsigned long * table_entry)
 	caching_linear_addr(cached_linear_addrs,length,table_base_linear_addr = check_remap_linear_addr(&table_entry));
 	if (table_base_linear_addr) { /* table_base_linear_addr!=0 说明该页表的物理地址超出内核地址空间了，已经remap到内核table_base_linear_addr线性地址页了 */
 		table_entry += (table_entry_offset / 4); /* 因为映射后table_entry就指向线性地址页的首地址了，所以这里要+offset,得到页表项的线性地址 */
+		printk("table_base_linear_addr: %u, table_entry: %p, table_entry_offset: %u \n\r",table_base_linear_addr,  table_entry, table_entry_offset);
 	}
 	old_page = (unsigned long*)(0xfffff000 & *table_entry);  /* 取出页表项中存储的物理页地址 */
 	/*
@@ -570,7 +577,7 @@ void write_verify(unsigned long address)
 	unsigned long * page_table_entry;  /* 注意：该变量存储的是页表项的物理地址，不是线性地址哦。 */
 	unsigned long * page_table;
 	/* 计算该地址对应的目录项地址，从而可以获取对应页表的基地址,也是物理地址 */
-	page_table = (unsigned long *)(*((unsigned long *)(current->tss.cr3 + GET_DIR_ENTRY_OFFSET(address))));
+	page_table = (unsigned long *)(*((unsigned long *)(current->tss.cr3 + GET_DIR_ENTRY_OFFSET(address) * 4)));
 	if (!((unsigned long)page_table & 1))
 		return;
 	page_table = (unsigned long*)((unsigned long)page_table & 0xfffff000);  /* 过滤掉目录项中页表基地址的RWX，这样页表基地址就是4K align了 */
@@ -579,11 +586,14 @@ void write_verify(unsigned long address)
 	unsigned long cached_linear_addrs[1] = {0};
 	int length = GET_ARRAY_LENGTH(cached_linear_addrs);
 	caching_linear_addr(cached_linear_addrs, length, check_remap_linear_addr(&page_table));
-	page_table += ((address>>10) & 0xffc);       /* 计算得到页表项的物理或线性地址 */
-	page_table_entry += ((address>>10) & 0xffc); /* 计算得到页表项的物理地址 */
-	if ((3 & *(unsigned long *) page_table) == 1) { /* non-writeable, present */
+	page_table += ((address>>12) & 0x3FF);       /* 计算得到页表项的物理或线性地址 */
+	page_table_entry += ((address>>12) & 0x3FF); /* 计算得到页表项的物理地址 */
+	if ((3 & *page_table) == 1) { /* non-writeable, present */
 		recov_swap_linear_addrs(cached_linear_addrs, length);
-		un_wp_page((unsigned long *) page_table_entry);
+		un_wp_page(page_table_entry);
+	}
+	else {
+		recov_swap_linear_addrs(cached_linear_addrs, length);
 	}
 	return;
 }
@@ -595,8 +605,7 @@ void get_empty_page(unsigned long address)
 	//printk("Come to get_empty_page. \n\r");
 
 	if (!(tmp=get_free_page(PAGE_IN_MEM_MAP)) || !put_page(tmp,address)) {
-		//free_page(tmp);		/* 0 is ok - ignored */
-		if (!free_page(tmp))
+		if (!free_page(tmp)) /* 0 is ok - ignored */
 			panic("get_empty_page: trying to free free page");
 		printk("get_empty_page trigger oom,tmp: %u, address: %u \n\r", tmp, address);
 		oom();
@@ -612,7 +621,7 @@ void get_empty_page(unsigned long address)
  * share the same executable.
  * 注意：这里的address是相对与进程线性地址空间基地址的offset
  */
-static int try_to_share(unsigned long address_offset, struct task_struct * p)
+int try_to_share(unsigned long address_offset, struct task_struct * p)
 {
 	unsigned long from;
 	unsigned long to;
