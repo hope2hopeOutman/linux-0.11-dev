@@ -31,8 +31,16 @@ int read_pipe(struct m_inode * inode, char * buf, int count)
 		size = PIPE_TAIL(*inode);
 		PIPE_TAIL(*inode) += chars;
 		PIPE_TAIL(*inode) &= (PAGE_SIZE-1);
-		while (chars-->0)
-			put_fs_byte(((char *)inode->i_size)[size++],buf++);
+
+		unsigned long * remap_addr = (unsigned long *) inode->i_size;
+		unsigned long cached_pg_table_base[1] = {0};
+		int cached_pg_table_length = GET_ARRAY_LENGTH(cached_pg_table_base);
+		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, check_remap_linear_addr(&remap_addr));
+		while (chars-->0) {
+			//put_fs_byte(((char *)inode->i_size)[size++],buf++);
+			put_fs_byte(((char *)remap_addr)[size++],buf++);
+		}
+		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}
 	wake_up(&inode->i_wait);
 	return read;
@@ -61,8 +69,18 @@ int write_pipe(struct m_inode * inode, char * buf, int count)
 		size = PIPE_HEAD(*inode);
 		PIPE_HEAD(*inode) += chars;
 		PIPE_HEAD(*inode) &= (PAGE_SIZE-1);
-		while (chars-->0)
-			((char *)inode->i_size)[size++]=get_fs_byte(buf++);
+
+		unsigned long * remap_addr = (unsigned long *) inode->i_size;
+		unsigned long cached_pg_table_base[1] = {0};
+		int cached_pg_table_length = GET_ARRAY_LENGTH(cached_pg_table_base);
+		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, check_remap_linear_addr(&remap_addr));
+		while (chars-->0) {
+			//printk("inode->i_size: %u\n\r", inode->i_size);
+			///((char *)inode->i_size)[size++]=get_fs_byte(buf++);
+			((char *)remap_addr)[size++]=get_fs_byte(buf++);
+			/* 这个bug搞了有2天时间，也是最后一个bug，内核保留空间映射高地址内存终于成功了，真是不疯魔不成佛啊，打完收工O(∩_∩)O哈哈~ */
+		}
+		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}
 	wake_up(&inode->i_wait);
 	return written;
