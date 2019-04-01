@@ -30,12 +30,17 @@
 	 *
 	 * 2. 终于想到了另一种方式了：可以将内核的地址空间设置为4G,但还是只使用开始的1G线性空间，内核目录表的前1G还是实地址一对一映射，后面的3G内存空间先不设置。
 	 *    这样就可以管理和读写整个内存了，这里可能有人会问内核的地址空间只有1G大小，如何产生超过1G的线性地址（既访问用户空间的线性地址），
-	 *    还记得FS段吗，它可是一直保留了用户态的段选择符的，通过FS:offset就可以访问用户空间的任何一个地址了，而且当进程从用户态进入内核态还不用切换目录表
-	 *    因为在创建进程的目录表的时候，会将前1G的内核空间自动初始化为实地址一对一映射，或直接复制内核的目录表。
-	 *    但这样做实际上是将内核的地址空间设置为4G大小了，只不过内核实际只用前面的1G，后面的3G让所有进程共享，由内核动态管理，而不像前面的1G映射已经固定下来了。
-	 *    不过这样做就带来了巨大的风险，因为内核态就没有段长保护机制了，好危险啊哈哈
+	 *    还记得FS段吗，它可是一直保留了用户态的段选择符的，通过FS:offset就可以访问用户空间的任何一个地址了，当然这种方式访问>1G物理内存的前提是该进程已经存在且
+	 *    用户空间线性地址已经映射了物理地址了，这时内核通过fs:offset的方式访问，在做段限长检查的时候用的是进程的limit而不是内核的，所以可以访问>1G的物理内存，
+	 *    但是当内核在处理sys_fork中断创建新进程的时候，用户空间内存映射还没开始呢，这时内核要是通过mem_map找到了一页空闲物理内存且地址>1G，用作新进程的task_struct
+	 *    的话，这时就是用内核的DS段去读写了，因为内核的DS和CS的limit都设置为4G了，所以段检查没问题，但是这就得要求内核的4G地址空间映射都得1:1实地址映射了，
+	 *    这样的话就麻烦了，当进程从用户态切换到内核态时，要根据内核具体的操作来区分是否切换CR3，有如下几种情况：
+	 *       (1)如果内核仅仅是读写用户空间的数据，这时不用切花CR3，因为用户空间的地址映射可不是实地址1:1映射的，要切换到内核目录表反而有问题，
+	 *          还是用用户态的目录表，内核可以通过用户态的FS来访问用户态数据。
+     *       (2)如果是处理缺页操作的话，这时说明相应的用户空间线性地址还没映射呢，这时就要将CR3切换到内核的目录表了，这样分配实际的物理地址并更新用户态的目录表。
+     *       (3)如果在内核态频繁处理1,2两步操作的话，可以想想CR3就得得频繁的切换，而且还得用临时变量来存储用户空间线性地址实际映射到的物理地址，这样内核才好去访问，太烦了。
 	 *
-	 * 3. 我打算两种方式都实现一把，自认为第二种方式实现起来相对简单也很高效的。
+	 * 3. 开始实施的时候才发现，第二种方式有问题而且实现起来更麻烦，要在用户态和内核态频繁切花CR3才能实现，效率反而太差。
 
  * 5.2 内核目录表和页表的初始化
  *     5.2.1 用部分内核空间映射剩余3G用户空间
@@ -64,8 +69,25 @@
 
 HD_INTERRUPT_READ  = 0x20
 OS_BASE_ADDR       = 0x500000
-PG_DIR_BASE_ADDR   = 0x000000
-PG_TAB_BASE_ADDR   = 0x100000
+PG_DIR_BASE_ADDR   = 0x000000   /* 内核目录表基地址 */
+PG_TAB_BASE_ADDR   = 0x100000   /* 内核页表起始地址,4M大小可以管理4G内存 */
+
+/* boot实地址模式下，预加载的OS大小，这里设置为32K，可以自己调整，但最好不要超过64K，因为实地址模式的段限长是64K，
+ * 如果必须要加载>64K的OS代码的话，最好是64K的倍数，这要好处理，不过目前预加载的32K OS代码足够内核初始化了。
+ */
+OS_PRELOAD_SIZE    = 0x8000
+
+/*
+ * 1. Bochs linux版本
+ * Deprecated: 因为bochs模拟>1G的内存有问题，不是很稳定，我在linux上自己重编了bochs并将--enable-large-mem选项也加上了，但是>1G还是有问题，这里不纠结了。
+ * AP: 问题找到了，是我给vmware虚拟机分配的物理内存有点小了(才2G)，vmware的内存调整为8G,设置bochs配置文件：guest=2044(注意guest设置为2048还是有问题的)，host=1024就可以。
+ * 2. Bochs window版本
+ * windows版本的bochs我没有加上--enable-large-mem重编过，感兴趣的朋友可以试一下。
+ * 不想重编的话，设置megs=1024(4M的倍数)，然后把内核线性地址空间(KERNEL_LINEAR_ADDR_SPACE)设置为512M，这样也能验证用内核保留空间访问>512M的高地址内存。
+ * 当然head.h中的6个有关内核线性地址空间的参数也要作相应的调整，将 (#if 0) 改为 (#if 1) 即可。
+ */
+//KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K (512M) */
+KERNEL_LINEAR_ADDR_SPACE = 0x40000  /* granularity 4K (1G) */
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
@@ -83,7 +105,7 @@ startup_32:
 	 * 5M后加载OS，如果内存<4G意味着4M页表空间是用不完的，所以也可以用来当作高速buffer，内核态用实地址模式管理整个物理内存。
 	 * 这样做的目的是为了能根据内存实际大小，动态分配页表，管理最大4G的内存，并且最大化利用物理内存，同时利于物理内存管理。
 	 */
-    movl $0x8000,%ecx            /* 总共要复制的字节数0x8000=32k */
+    movl $OS_PRELOAD_SIZE,%ecx   /* 总共要复制的字节数0x8000=32k */
     movl $0x0000,%esi            /* origin addr */
     movl $OS_BASE_ADDR,%edi      /* dest addr */
     cld
@@ -95,15 +117,18 @@ startup_32:
     jmp *%ecx
 /* 下面计算内存的大小统一用4K作为粒度。 */
 real_entry:
-	movl %ds:0x90002,%edx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K */
+    xor %edx,%edx
+	movw %ds:0x90002,%edx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K, 这里也是个小坑，mem长度是2字节，之前用movl是4字节有问题啊 */
 	shl  $0x04,%edx               /* 左移4位乘以16*/
 	addl $0x1000,%edx             /* +16M得到总的内存大小，以4K为单位。 */
 	movl %edx,total_memory_size   /* 将内存总大小(4K granularity)存储到全局变量total_memory_size */
-	/* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
-    lss tmp_floppy_area,%esp
+    lss tmp_floppy_area,%esp      /* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
 
-    /* 设置内核代码段的limit */
-    lea gdt,%ebx
+    /* 设置内核代码段的limit,因为要支持每个进程都有4G的地址空间，所以内核的地址空间是512M,当内存>512M的时候，也只能设置为512M=0x20000(4K) */
+    cmp $KERNEL_LINEAR_ADDR_SPACE,%edx
+    jle 1f
+    movl $KERNEL_LINEAR_ADDR_SPACE,%edx  /* 如果内存>512M，那么设置内核的limit为512M */
+1:  lea gdt,%ebx
     add $0x08,%ebx
     push %edx
     push %ebx
@@ -118,14 +143,14 @@ real_entry:
     push %ebx
     call set_seg_limit
     popl %ebx
-    popl %edx             /* 恢复内存的总大小，单位是4K。*/
+    popl %edx             /* 恢复内存的总大小，单位是4K,如果内存>512M这里的edx恒等于512M，注意:这里还没开启分页功能，所以地址的访问是实地址映射。 */
 
-    cmp $0x100000,%edx    /* 比较edx是否等于1M,也就是总内存大小是否是4G，如果等于4G，那么esp=(4G-4)=0xFFFF FFFC */
-    jne L4G
-    movl $0xFFFFFFFC,%edx
-    jmp init_temp_stack
-L4G:
-    shl $0x0C,%edx
+    shl $0x0C,%edx        /* 注意：这里的edx应该是<=(512M/4k) */
+    /*
+     * 此时将内核能实地址映射的内存的(最高地址-4)处设置为临时栈顶，注意“此时”的含义，
+     * 因为如果内存>512M的话，内核实地址映射的内存是(512-64)M，因为要留64M地址空间映射>512M内存以及保留空间(64M)的物理地址。
+     * 此时还没开启分页，所以整个物理内存都可以实地址访问。
+     */
 	subl $0x4,%edx
     /* init a temp stack in the highest addr of memory for handling HD intr.  */
 init_temp_stack:
@@ -153,7 +178,7 @@ init_temp_stack:
 
 	lss stack_start,%esp
 	xorl %eax,%eax
-1:	incl %eax		# check that A20 really IS enabled
+1:	incl %eax		    # check that A20 really IS enabled
 	movl %eax,0x000000	# loop forever if it isn't
 	cmpl %eax,0x100000
 	je 1b
@@ -272,11 +297,11 @@ temp_stack:
 /*
  * Record the beginning address for loading the left OS code to here,
  * because in bootsect.s we have loaded 32K os code to 0x10000 and move it to 0x0000,
- * so here the init value should be 0x8000.
+ * so here the init value should be OS_BASE_ADDR+0x8000.
  */
 .align 4
 load_os_addr:
-    .long OS_BASE_ADDR+0x8000
+    .long OS_BASE_ADDR+OS_PRELOAD_SIZE
 
 /*
  * This variable will filter all other Intrs from HD, just read intr can be work, it's used in hd_read_interrupt.
@@ -289,6 +314,7 @@ hd_intr_cmd:
  * I put the kernel page tables right after the page directory,
  * using 4 of them to span 16 Mb of physical memory. People with
  * more than 16MB will have to expand this.
+ * 现在已经修改为根据内存实际大小动态初始化和分配目录表和页表了，所以这里就废弃了。
  */
 
 /*
@@ -311,6 +337,7 @@ pg3:
  * tmp_floppy_area is used by the floppy-driver when DMA cannot
  * reach to a buffer-block. It needs to be aligned, so that it isn't
  * on a 64kB border.
+ * 该地址空间被用作临时堆栈了。
  */
 .org 0x1000
 tmp_floppy_area:
@@ -382,17 +409,34 @@ ignore_int:
  */
 .align 4
 setup_paging:
-	movl $1024,%ecx		     /* 1 page - pg_dir，目录表占用一页4K,且在内存开始出0x0000～0x0FFF */
+	movl $1024,%ecx		    /* 1 page - pg_dir，目录表占用一页4K,且在内存开始出0x0000～0x0FFF */
 	xorl %eax,%eax
 	xorl %edi,%edi			/* pg_dir is at 0x000 */
 	cld;rep;stosl           /* 将这4K空间初始化为0 */
 
-    /* 首先计算获得内存的大小，注意这时0x90002还没有被覆盖，此处存储的还是扩展内存的大小。 */
+    /* total_memory_size存储了内存的大小，但是granularity=4K */
     movl total_memory_size,%eax
-    /* 计算内存占用多少页表，也就是多少个目录项。 */
-    movl $0x400,%ebx
+    /*
+     * 判断内存是否>512M，如果大于512M的话，强制设置内核目录表映射的地址空间为512M，且是实地址映射模式,
+     * 注意:此时的内核空间512M是可以完全实地址映射的，因为在内核初始化阶段是不会调用get_free_page，所以也不会remap保留地址空间，
+     * 因此保留地址空间的实地址映射还是有效的，可以直接访问。
+     */
+    cmp $KERNEL_LINEAR_ADDR_SPACE,%eax
+    jle 1f
+    /*
+     * 设置内核实地址映射的地址空间为512M，这里可能有人会问，不是说好了(KERNEL_LINEAR_ADDR_SPACE-64M)的吗，怎么又是了512M了，其实这里512M的地址空间都实地址映射是没问题的，
+     * 因为，在调用get_free_page的时候会重置内核保留的64M地址空间对应的物理页的，所以在内核初始化的时候实地址映射内核这64M地址空间是没问题的
+     * 而且os_params放在512M-0x8000开始处(内存>=512M)，也需要这样初始化内核目录表，这样在初始化mem和char_dev的时候才好访问这些os_params，
+     * 一旦内核完成了初始化，后面的内存分配都要通过get_free_page来管理，这时448M~512M这个64M地址空间就无效了，会被remap的。
+     */
+    movl $KERNEL_LINEAR_ADDR_SPACE,%eax
+    /*
+     * 计算内核实地址映射的内存占用多少页表或目录项，也就是多少个目录项。目录项个数=内存大小/4M=total_memory_size/1k
+     */
+1:  movl $0x400,%ebx
     xorl %edx,%edx       /* 因为divl的除数是双字，所以被除数是%edx:%eax，所以这里要把edx清零。 */
-    divl %ebx            /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数。 */
+    divl %ebx            /* 商存储在eax中，余数存储在edx中；因为一个页表可以管理4M物理内存所以，内存总大小/4M 就得到页表数了，也是目录项个数 */
+    movl %eax,%ecx       /* 备份要初始化目录项个数，因为后面%eax中的值会改变 */
     movl $PG_TAB_BASE_ADDR,%edx
     movl $PG_DIR_BASE_ADDR,%ebx
 
@@ -410,30 +454,14 @@ init_dir:
     addl $4,%ebx
     jmp init_dir
 
-//	movl $pg0+7,pg_dir		    /* set present bit/user r/w */
-//	movl $pg1+7,pg_dir+4		/*  --------- " " --------- */
-//	movl $pg2+7,pg_dir+8		/*  --------- " " --------- */
-//	movl $pg3+7,pg_dir+12		/*  --------- " " --------- */
-
 /* 初始化所有页表，从最后一个页表的最后一个页表项初始化。 */
 init_pgt:
-//	movl $pg3+4092,%edi
     addl $4092,%edx         /* 注意：这里的edx经过上面的init_dir操作后，存储的就是最后一个页表的首地址，所以+4094就得到了最后一个页表项的首地址了。*/
     movl %edx,%edi
-
-//	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
-
-	/* 首先获取内存总大小。 */
-    movl total_memory_size,%eax
-	/* 将内存最后一页的起始地址+7，赋值给eax */
-	cmp $0x100000,%eax
-    jne l4g
-	movl $0xFFFFF000,%eax
-	jmp rwx
-l4g:
-    shl $0x0C,%eax
-    subl $4096,%eax
-rwx:
+	movl %ecx,%eax       /* 获取内核要实地址映射的内存对应的目录项个数 */
+    shl $22,%eax         /* 获得内核要实地址映射的的内存的大小(*4M),单位是byte */
+    subl $4096,%eax      /* 计算得到要实地址映射的最后一页的基地址 */
+    /* 将内存最后一页的起始地址+7(设置为RWX)，赋值给eax */
     addl $7,%eax
 	std                 /* 重置方向为地址递减操作 */
 1:	stosl			    /* fill pages backwards - more efficient :-) ，类似功能：movl %eax,%ss:%edi;subl $4,%edi*/
@@ -454,7 +482,7 @@ idt_descr:
 .align 4
 .word 0
 gdt_descr:
-	.word 256*8-1		# so does gdt (not that that's any
+	.word 256*8		# so does gdt (not that that's any
 	.long gdt		# magic number, but it works for me :^)
 
 	.align 8
@@ -462,7 +490,7 @@ idt:	.fill 256,8,0		# idt is uninitialized
 
 gdt:
 	.quad 0x0000000000000000	/* NULL descriptor */
-	.quad 0x00c09a0000000fff	/* Code seg, limit default size: 16Mb */
+	.quad 0x00c09a0000000fff	/* Code seg, limit default size: 16Mb,it will be changed by set_limit */
 	.quad 0x00c0920000000fff	/* Data seg, limit default size: 16Mb */
 	.quad 0x0000000000000000	/* TEMPORARY - don't use */
 	.fill 252,8,0			    /* space for LDT's and TSS's etc */

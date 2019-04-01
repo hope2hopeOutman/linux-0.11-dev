@@ -39,11 +39,12 @@ EDX		= 0x0C
 FS		= 0x10
 ES		= 0x14
 DS		= 0x18
+/* 以下的值是终端发生后CPU自动保存的寄存器值 */
 EIP		= 0x1C
 CS		= 0x20
-EFLAGS		= 0x24
-OLDESP		= 0x28
-OLDSS		= 0x2C
+EFLAGS	= 0x24
+OLDESP	= 0x28
+OLDSS	= 0x2C
 
 state	= 0		# these are offsets into the task-struct.
 counter	= 4
@@ -189,8 +190,8 @@ timer_interrupt:
 	incl jiffies
 	movb $0x20,%al		# EOI to interrupt controller #1
 	outb %al,$0x20
-	movl CS(%esp),%eax
-	andl $3,%eax		# %eax is CPL (0 or 3, 0=supervisor)
+	movl CS(%esp),%eax  /* 这里将CS段选择符的值复制到eax,大家知道，段选择符的低3位分别是:(高1位: tableIndex(0-GDT表，1-LDT表)，低2位: CPL) */
+	andl $3,%eax		# %eax is CPL (0 or 3, 0=supervisor) 这里把CPL当作参数传递给do_timer，如果当前进程在内核态的话，是不会导致任务切换的。
 	pushl %eax
 	call do_timer		# 'do_timer(long CPL)' does everything from
 	addl $4,%esp		# task switching to accounting ...

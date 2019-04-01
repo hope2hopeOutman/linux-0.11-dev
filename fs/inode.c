@@ -151,7 +151,9 @@ void iput(struct m_inode * inode) {
 		wake_up(&inode->i_wait);
 		if (--inode->i_count)
 			return;
-		free_page(inode->i_size);
+		if (!free_page(inode->i_size))
+					panic("iput: trying to free free page");
+		//free_page(inode->i_size);
 		inode->i_count = 0;
 		inode->i_dirt = 0;
 		inode->i_pipe = 0;
@@ -240,7 +242,7 @@ struct m_inode * get_pipe_inode(void) {
 
 	if (!(inode = get_empty_inode()))
 		return NULL;
-	if (!(inode->i_size = get_free_page())) {
+	if (!(inode->i_size = get_free_page(PAGE_IN_MEM_MAP))) {
 		inode->i_count = 0;
 		return NULL;
 	}

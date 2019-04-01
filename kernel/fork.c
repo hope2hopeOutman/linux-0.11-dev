@@ -16,22 +16,22 @@
 #include <linux/kernel.h>
 #include <asm/segment.h>
 #include <asm/system.h>
+#include <linux/head.h>
 
 extern void write_verify(unsigned long address);
-
 long last_pid = 0;
 
 void verify_area(void * addr, int size) {
 	unsigned long start;
 
 	start = (unsigned long) addr;
-	size += start & 0xfff;
-	start &= 0xfffff000;
-	start += get_base(current->ldt[2]);
+	size += start & 0xfff;               /* 计算该地址的页内offset */
+	start &= 0xfffff000;                 /* 计算该地址在进程地址空间内的页帧号，其实也是个offset，4K align */
+	start += get_base(current->ldt[2]);  /* 页帧号+进程地址空间base=CPU线性地址, 4k align */
 	while (size > 0) {
 		size -= 4096;
 		write_verify(start);
-		start += 4096;
+		start += 4096;                   /* 跳到下一页继续verify了 */
 	}
 }
 
@@ -39,21 +39,19 @@ int copy_mem(int nr, struct task_struct * p) {
 	unsigned long old_data_base, new_data_base, data_limit;
 	unsigned long old_code_base, new_code_base, code_limit;
 
-	code_limit = get_limit(0x0f);
-	data_limit = get_limit(0x17);
-	old_code_base = get_base(current->ldt[1]);
-	old_data_base = get_base(current->ldt[2]);
-	if (old_data_base != old_code_base)
-		panic("We don't support separate I&D");
-	if (data_limit < code_limit)
-		panic("Bad data_limit");
-	new_data_base = new_code_base = nr * 0x4000000;
+	/* 所有fork出来的进程的基地址和limit都是一样，所以到这你应该理解当所有进程都有相同的4G地址空间的时候，在GDT表中只需要一个LDT描述符即可，但进程的TSS还是每个进程私有的。 */
+	new_data_base = new_code_base = USER_LINEAR_ADDR_START;
+	code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
+
 	p->start_code = new_code_base;
 	set_base(p->ldt[1], new_code_base);
 	set_base(p->ldt[2], new_data_base);
-	if (copy_page_tables(old_data_base, new_data_base, data_limit)) {
-		//printk("copy_page_tables error result in free page tables error. \n\r");
-		free_page_tables(new_data_base, data_limit);
+	set_limit(p->ldt[1], data_limit);
+	set_limit(p->ldt[2], data_limit);
+	if (copy_page_tables(old_data_base, new_data_base, data_limit, p)) {
+		//printk("copy_mem call free_page_tables before\n\r");
+		free_page_tables(new_data_base, data_limit,p);
+		//printk("copy_mem call free_page_tables after\n\r");
 		return -ENOMEM;
 	}
 	return 0;
@@ -70,14 +68,14 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	struct task_struct *p;
 	int i;
 	struct file *f;
-
-	p = (struct task_struct *) get_free_page();
+    /* 此版本将进程的task_struct和目录表都分配在内核实地址寻址的空间(mem>512M && mem<(512-64)M) */
+	p = (struct task_struct *) get_free_page(PAGE_IN_REAL_MEM_MAP);
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
-	//if (last_pid == 4) {
-		printk("task nr: %d,last_pid: %d \n\r", nr, last_pid);
-	//}
+
+	//printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
+
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->state = TASK_UNINTERRUPTIBLE;
 	p->pid = last_pid;
@@ -85,7 +83,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	p->counter = p->priority;
 	p->signal = 0;
 	p->alarm = 0;
-	p->leader = 0; /* process leadership doesn't inherit */
+	p->leader = 0;                       /* process leadership doesn't inherit */
 	p->utime = p->stime = 0;
 	p->cutime = p->cstime = 0;
 	p->start_time = jiffies;
@@ -94,7 +92,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	p->tss.ss0 = 0x10;
 	p->tss.eip = eip;
 	p->tss.eflags = eflags;
-	p->tss.eax = 0;
+	p->tss.eax = 0;                   /* fork返回值是0的话，代表运行的是子进程，奥秘就在这里哈哈 */
 	p->tss.ecx = ecx;
 	p->tss.edx = edx;
 	p->tss.ebx = ebx;
@@ -114,7 +112,8 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		__asm__("clts ; fnsave %0"::"m" (p->tss.i387));
 	if (copy_mem(nr, p)) {
 		task[nr] = NULL;
-		free_page((long) p);
+		if (!free_page((long)p))
+			panic("fork.copy_process: trying to free free page");
 		return -EAGAIN;
 	}
 	for (i = 0; i < NR_OPEN; i++)

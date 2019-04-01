@@ -1,6 +1,12 @@
 #ifndef _SCHED_H
 #define _SCHED_H
-
+/*
+ * GDT标的limit=2^16=64K, 64K/8=8K,GDT最大可以承载8K个段描述符，
+ * 除去第一项不用，内核段和数据段，这里可以有8K-3个段描述可以使用
+ * 这里取整只用8000个段描述符，因为一个task要占用两项段描述符(LDT和TSS)，
+ * 所以最大可以创建4000个进程。
+ */
+//#define NR_TASKS 1k=1024
 #define NR_TASKS 64
 #define HZ 100
 
@@ -28,8 +34,8 @@
 
 #define PG_DIR_ADDR 0
 
-extern int copy_page_tables(unsigned long from, unsigned long to, long size);
-extern int free_page_tables(unsigned long from, unsigned long size);
+extern int copy_page_tables(unsigned long from, unsigned long to, long size, struct task_struct* new_task);
+extern int free_page_tables(unsigned long from, unsigned long size, struct task_struct* task);
 
 extern void sched_init(void);
 extern void schedule(void);
@@ -72,7 +78,7 @@ struct tss_struct {
 	long	ds;		/* 16 high bits zero */
 	long	fs;		/* 16 high bits zero */
 	long	gs;		/* 16 high bits zero */
-	long	ldt;		/* 16 high bits zero */
+	long	ldt;		/* 16 high bits zero, 这里LDT表在GDT表中的索引，也称为LDT表描述符 */
 	long	trace_bitmap;	/* bits: trace 0, bitmap 16-31 */
 	struct i387_struct i387;
 };
@@ -103,16 +109,27 @@ struct task_struct {
 	unsigned long close_on_exec;
 	struct file * filp[NR_OPEN];
 /* ldt for this task 0 - zero 1 - cs 2 - ds&ss */
+/*
+ * 因为每个用户进程的地址空间都是1G～4G,所以这个LDT描述符表可以不要了，在GDT表中只保留一个LDT段即可，被所有进程共用，但是TSS段不能共享的，
+ * 这里保持原来的机制不变，每个进程还是在GDT表中分配独立的LDT和TSS段描述符，不过LDT段描述符指向的地址是相同的。
+ * 由于task0和task1是共享相同的内核代码段和数据段，所以他们是共享目录表和页表的，所以本质上他们是共享相同的地址空间，这其实就是线程了，
+ * task1一旦要对共享的堆栈就行写操作，就会触发WP异常，内核就会给task1分配一页作为task1的堆栈，这其实就是线程私有的堆栈了，想想多线程是怎么执行的啦啦啦。
+ */
 	struct desc_struct ldt[3];
 /* tss for this task */
 	struct tss_struct tss;
+	/* 目录表的基地址，每个进程都有自己的目录表, tss_struct中的cr3存储的就是目录表基地址，所以这里可以注释掉了 */
+	//unsigned long * dir_addr;
 };
 
 /*
  *  INIT_TASK is used to set up the first task table, touch at
  * your own risk!. Base=0, limit=0x9ffff (=640kB)
  */
-/* 注意：这里的段限长还是640K就有问题了，因为内核代码和数据段已经被最终放置在了5M的开始处了，所以这里的Limit应该设置为59F,5M+640K */
+/*
+ *  1. 注意：这里的段限长还是640K就有问题了，因为内核代码和数据段已经被最终放置在了5M的开始处了，所以这里的Limit应该设置为59F,5M+640K
+ *  2. 当改成每个进程都有4G的地址空间的时候，这里又要改了，内核的地址空间是0～1G(limit=1G/4k-1=0x3FFFF)，用户空间是1G~4G
+ */
 #define INIT_TASK \
 /* state etc */	{ 0,15,15, \
 /* signals */	0,{{},},0, \
@@ -125,8 +142,8 @@ struct task_struct {
 /* filp */	{NULL,}, \
 	{ \
 		{0,0}, \
-/* ldt */	{0x7ff,0xc0fa00}, \
-		{0x7ff,0xc0f200}, \
+/* ldt */	{0x3fff,0xc0fa00}, \
+		{0x3fff,0xc0f200}, \
 	}, \
 /*tss*/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,PG_DIR_ADDR,\
 	 0,0,0,0,0,0,0,0, \
@@ -134,6 +151,7 @@ struct task_struct {
 	 _LDT(0),0x80000000, \
 		{} \
 	}, \
+/*进程0的目录表基地址(注意:这个地址是实际的物理地址，对于nr>1的进程用的时候一定要记住要减去进程的线性基地址)*/    (unsigned long*)0 \
 }
 
 extern struct task_struct *task[NR_TASKS];

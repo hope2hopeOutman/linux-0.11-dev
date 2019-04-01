@@ -154,7 +154,7 @@ int sys_setup(void * BIOS)
 		}
 		p = (struct partition *)(0x1BE + (void *)bh->b_data);
 		for (i=1;i<5;i++,p++) {
-			printk("p.nr_sects: %d \n\r", p->nr_sects);
+			//printk("p.nr_sects: %d \n\r", p->nr_sects);
 			hd[i+5*drive].start_sect = p->start_sect;
 			hd[i+5*drive].nr_sects = p->nr_sects;
 		}

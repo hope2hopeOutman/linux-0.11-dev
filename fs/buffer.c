@@ -281,14 +281,18 @@ __asm__("cld\n\t" \
  * a function of its own, as there is some speed to be got by reading them
  * all at the same time, not waiting for one to be read, and then another
  * etc.
+ * 注意：这里的address是物理地址
  */
 void bread_page(unsigned long address, int dev, int b[4]) {
+	unsigned long* phy_addr = (unsigned long*)address;              /* 这里的address就是4K对齐的，所以不需要align */
+	unsigned long linear_addr = check_remap_linear_addr(&phy_addr); /* 注意：这里的phy_addr有可能是内核空间保留的线性地址，因为当address超出内核的寻址空间会被remap为linear */
+	unsigned long remaped_address = (unsigned long)phy_addr;
 	struct buffer_head * bh[4];
 	int i;
 
 	for (i = 0; i < 4; i++) {
 		if (b[i]) {
-			if (bh[i] = getblk(dev, b[i])) {
+			if ((bh[i] = getblk(dev, b[i]))) {
 				if (!bh[i]->b_uptodate) {
 					ll_rw_block(READ, bh[i]);
 				}
@@ -301,11 +305,12 @@ void bread_page(unsigned long address, int dev, int b[4]) {
 		if (bh[i]) {
 			wait_on_buffer(bh[i]);
 			if (bh[i]->b_uptodate) {
-				COPYBLK((unsigned long) bh[i]->b_data, address);
+				COPYBLK((unsigned long) bh[i]->b_data, remaped_address);  /* 这里又是个巨坑，都怪自己大意了，千万不能(unsigned long) phy_addr这么赋值啊，这样EDI就会重置了。 */
 			}
 			brelse(bh[i]);
 		}
 	}
+	recov_swap_linear(linear_addr);
 }
 
 /*

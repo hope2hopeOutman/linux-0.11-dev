@@ -25,7 +25,10 @@ void release(struct task_struct * p)
 	for (i=1 ; i<NR_TASKS ; i++)
 		if (task[i]==p) {
 			task[i]=NULL;
-			free_page((long)p);
+			if (!free_page((long)(p->tss.cr3)))  /* 先把该进程占用的目录表释放掉 */
+				panic("exit.release dir: trying to free free page");
+			if (!free_page((long)p))
+				panic("exit.release: trying to free free page");
 			schedule();
 			return;
 		}
@@ -103,10 +106,11 @@ int do_exit(long code)
 {
 	int i;
 
-	//printk("do_exit, pid: %d, fpid: %d, code: %d\n\r", current->pid, current->father, code);
+	//printk("do_exit call free_page_tables before\n\r");
+	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f),current);
+	free_page_tables(get_base(current->ldt[2]),get_limit(0x17),current);
+    //printk("do_exit call free_page_tables after\n\r");
 
-	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
-	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
 	for (i=0 ; i<NR_TASKS ; i++)
 		if (task[i] && task[i]->father == current->pid) {
 			task[i]->father = 1;
@@ -150,9 +154,9 @@ int sys_waitpid(pid_t pid,unsigned long * stat_addr, int options)
 repeat:
 	flag=0;
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
-		if (!*p || *p == current)
+		if (!*p || *p == current)   /* 过滤掉自身 */
 			continue;
-		if ((*p)->father != current->pid)
+		if ((*p)->father != current->pid)  /* 查找当前进程的子进程 */
 			continue;
 		if (pid>0) {
 			if ((*p)->pid != pid)
@@ -175,7 +179,7 @@ repeat:
 				current->cstime += (*p)->stime;
 				flag = (*p)->pid;
 				code = (*p)->exit_code;
-				printk("pid: %d, fpid: %d, exitCode: %d\n\r", flag,(*p)->father, code);
+				//printk("pid: %d, fpid: %d, exitCode: %d\n\r", flag,(*p)->father, code);
 				release(*p);
 				put_fs_long(code,stat_addr);
 				return flag;
@@ -193,6 +197,7 @@ repeat:
 
 		current->state=TASK_INTERRUPTIBLE;
 		schedule();
+		/* 子进程如果调用了exit会调用tell_father将father的SIG_CHILD位置1的，这里父进程就是在等这个标志。 */
 		if (!(current->signal &= ~(1<<(SIGCHLD-1))))
 			goto repeat;
 		else
