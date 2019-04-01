@@ -123,10 +123,7 @@ void main(void)		/* This really IS void, no error here. */
  	ROOT_DEV = ORIG_ROOT_DEV;
  	//drive_info = DRIVE_INFO;
  	copy_struct((struct drive_info *)(params_table_addr+0x0080), &drive_info, 8);
-/*	memory_end = (1<<20) + (EXT_MEM_K<<10);
-	memory_end &= 0xfffff000;*/
  	memory_end = total_memory_size;      /* granularity 4K  */
-
 	long code_end = (long) start_buffer;
 
 	/*
@@ -145,7 +142,6 @@ void main(void)		/* This really IS void, no error here. */
 		}
 		else {
 			//buffer_memory_end = ((code_end>>20)<<20 + 4*1024*1024);这里千万别这么写,GCC会优化成用sbb指令，造成结果有误，坑爹啊。
-			//buffer_memory_end = ((code_end/0x100000)*0x100000 + 4*1024*1024) / 0x1000;  /* 这里给高速缓冲区分配最大4M内存 */
 			buffer_memory_end = 0xC00;  /* 内核+BUFFER占用12M，3个目录项 */
 		}
 	}
@@ -172,7 +168,7 @@ void main(void)		/* This really IS void, no error here. */
 	buffer_init(buffer_memory_end);
 	hd_init();
 	floppy_init();
-	printk("mem_size: %u (granularity 4K) \n\r", memory_end);
+	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

@@ -201,7 +201,7 @@ unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 	set_limit(current->ldt[1],code_limit);
 	set_base(current->ldt[2],data_base);
 	set_limit(current->ldt[2],data_limit);
-/* make sure fs points to the NEW data segment */
+    /* make sure fs points to the NEW data segment */
 	__asm__("pushl $0x17\n\tpop %%fs"::);
 	/*
 	 * 注意：这里的env和argv参数列表是从用户地址空间的最高地址存放的，所以data_tabse+data_limit=4G，这个值超出了32位寄存器的范围，所以会有问题，
@@ -221,7 +221,9 @@ unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 }
 
 /*
- * 'do_execve()' executes a new program. from_kmem详解：有两个参数决定这个参数的值：字符串指针和字符串。如果字符串指针和字符串都在用户空间其值为0，如果字符串指针在内核空间其字符串在用户空间其值为1，如果字符串指针和字符串都在内核空间其值为2 。
+ * 'do_execve()' executes a new program.
+ *  from_kmem详解：有两个参数决定这个参数的值：字符串指针和字符串。如果字符串指针和字符串都在用户空间其值为0，
+ *  如果字符串指针在内核空间其字符串在用户空间其值为1，如果字符串指针和字符串都在内核空间其值为2 。
  */
 int do_execve(unsigned long * eip,long tmp,char * filename,
 	char ** argv, char ** envp)  /* 这里的tmp是call _sys_call_table 压入的返回地址，所以这里用不到。  */
@@ -404,9 +406,9 @@ restart_interp:
 			sys_close(i);
 	current->close_on_exec = 0;
 	//printk("do_execve call free_page_tables before\n\r");
-	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f), current, OPERATION_DOEXECVE_OR_BEFORE);
+	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f), current);
 	//printk("do_execve call free_page_tables intermediate\n\r");
-	free_page_tables(get_base(current->ldt[2]),get_limit(0x17), current, OPERATION_DOEXECVE_OR_BEFORE);  /* 因为代码段和数据段的地址空间是重合的，所以这一步是重复操作，在这里可以省去。 */
+	free_page_tables(get_base(current->ldt[2]),get_limit(0x17), current);
 	//printk("do_execve call free_page_tables after\n\r");
 	if (last_task_used_math == current)
 		last_task_used_math = NULL;
@@ -422,7 +424,7 @@ restart_interp:
 	*/
 	/* 得到argv第一个参数在64M进程地址空间的offset,这里已经改为3G地址空间的offset了，加上base就是绝对线性地址了。*/
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
-	printk("changedLDt, executable: %p, textsize: %u \n\r",current->executable, ex.a_text);
+	//printk("changedLDt, executable: %p, textsize: %u \n\r",current->executable, ex.a_text);
 	/*
 	 * 在用户空间，高32页逻辑地址空间建立参数指针数组， 返回的p是用户空间的sp指针。
 	 * 这里一定要注意：在x86架构这种分段机制下，所有的地址都是相对与段base的offset，最终会加上base形成最终的线性地址。

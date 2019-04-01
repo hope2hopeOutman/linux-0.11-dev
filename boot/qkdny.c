@@ -14,10 +14,12 @@
 #include <asm/io.h>
 #include <asm/system.h>
 
+#define OS_SIZE 0x20000         /* 因为当前的OS只有不到120K,所以这里先把OS的大小设置为128K,以后随着功能扩展，OS会变大的，自己调整就行了。 */
+#define OS_PRELOAD_SIZE 0x8000  /* 被预加载的OS-CODE大小，这部分代码用于加载剩余的OS-CODE，OS-CODE完全加载后再初始化内核。 */
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
 #define OS_PARAMS_ADDR(total_mem_4k_size) \
-					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_PAGES) ? ((KERNEL_LINEAR_ADDR_PAGES-OS_INIT_PARAMS_LIMIT)<<12) :\
+					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\
 					  ((total_mem_4k_size-OS_INIT_PARAMS_LIMIT)<<12)\
 					)
 
@@ -56,14 +58,12 @@ void move_params_to_memend() {
 	/*
 	 * 这里其实还有个更简单的方法，当内存>KERNEL_LINEAR_ADDR_SPACE时候，直接在KERNEL_LINEAR_ADDR_SPACE内存的最高处开辟一个0x8000(32K)字节的空间，用于存储os_params,
 	 * 因为在初始化内核的目录表的时候，虽然当内存>KERNEL_LINEAR_ADDR_SPACE时候只能实地址管理前面的KERNEL_LINEAR_ADDR_SPACE-64M内存，后面的内存只能通过保留的64M地址空间散射访问，
-	 * 但是在内核初始化自己的目录表的时候，还是可以把自己地址空间的后128M地址空间映射为实地址模式的，因为内核初始化的时候，是不会调用get_free_page的，
+	 * 但是在内核初始化自己的目录表的时候，还是可以把自己地址空间的后64M地址空间映射为实地址模式的，因为内核初始化的时候，是不会调用get_free_page的，
 	 * 所以是不会remap这64M地址空间的，所以在执行main函数的各种init操作的时候，是可以正确访问KERNEL_LINEAR_ADDR_SPACE地址空间的最后64M内存的，
 	 * 当初始化操作完成，fork task1的时候就会重置内核的64M地址空间用于访问>(KERNEL_LINEAR_ADDR_SPACE-64M)的内存了，当然这时的os_params已经不需要了,
 	 * 所以可以被覆盖了。
 	 */
-
 	paramsMem = OS_PARAMS_ADDR(total_memory_size);
-
 	params_table_addr = paramsMem;
 	copy_struct((long*)OS_INIT_PARAMS_ADDR, (long*)paramsMem, 512/4);
 }
@@ -157,22 +157,22 @@ void do_read_intr() {
 	load_os_addr += 512;
 }
 
+/* 这块是加载剩余OS-CODE的方法，具体如何访问硬盘参见bootsect.s，那里有我详细的注释。 */
 void do_hd_read_request(void) {
-	int os_size = 0x20000;
 	HdParamsT hd_params;
 
-	hd_params.cyl = *(unsigned short *) 0x90080;
-	hd_params.head = *(unsigned char *) (2 + 0x90080);
-	hd_params.wpcom = *(unsigned short *) (5 + 0x90080);
-	hd_params.ctl = *(unsigned char *) (8 + 0x90080);
+	hd_params.cyl   = *(unsigned short *) (0  + 0x90080);
+	hd_params.head  =  *(unsigned char *) (2  + 0x90080);
+	hd_params.wpcom = *(unsigned short *) (5  + 0x90080);
+	hd_params.ctl   =  *(unsigned char *) (8  + 0x90080);
 	hd_params.lzone = *(unsigned short *) (12 + 0x90080);
-	hd_params.sect = *(unsigned char *) (14 + 0x90080);
+	hd_params.sect  =  *(unsigned char *) (14 + 0x90080);
 
 	unsigned int block, dev = 0;
 	unsigned int sec, head, cyl, sread;
 	unsigned int nsect;
-	unsigned int totalNeedSects = (os_size - 0x8000) / 512;
-	block = (0x100000 + 0x8000) / 512; /* 1M+32K */
+	unsigned int totalNeedSects = (OS_SIZE - OS_PRELOAD_SIZE) / 512;
+	block = (0x100000 + OS_PRELOAD_SIZE) / 512;  /* 1M+32K，因为现代硬盘的引导区已经扩展到1M了(不是以前的1个扇区了)，所以OS代码是放在1M硬盘空间的开始处的。 */
 
 	do_reset_hd(dev, &hd_params); /* reset hd. */
 	do_hd_read_out(dev, hd_params.sect, 0, 0, 0, WIN_RESTORE, &hd_params); /* recalibrate HD. */

@@ -75,10 +75,23 @@ int write_pipe(struct m_inode * inode, char * buf, int count)
 		int cached_pg_table_length = GET_ARRAY_LENGTH(cached_pg_table_base);
 		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, check_remap_linear_addr(&remap_addr));
 		while (chars-->0) {
-			//printk("inode->i_size: %u\n\r", inode->i_size);
-			///((char *)inode->i_size)[size++]=get_fs_byte(buf++);
+			//((char *)inode->i_size)[size++]=get_fs_byte(buf++);
 			((char *)remap_addr)[size++]=get_fs_byte(buf++);
-			/* 这个bug搞了有2天时间，也是最后一个bug，内核保留空间映射高地址内存终于成功了，真是不疯魔不成佛啊，打完收工O(∩_∩)O哈哈~ */
+			/*
+			 * 这个bug搞了有2天时间，也是最后一个bug，内核保留空间映射高地址内存终于成功了，真是不疯魔不成佛啊，打完收工O(∩_∩)O哈哈~
+			 * 到这里一直觉的我这个提前判定是否映射的方式，有点繁琐，而且如果类似pipe这种利用内存方式的设备越多，排查起来越困难，不过现在对我来说已经不是问题，
+			 * 但总是觉得我这种映射高地址内存的方式有点被动。
+			 * 今天想到一个好的方式：在general protection 异常处理方法里实现内存的映射，这样就不用根据设备的增减动态的加入映射代码。
+			 * 实现的思路：
+			 *          1. 首先判定read/write beyond limit异常是否发生在内核态，如果是内核太就映射，否则任由其发展哈哈
+			 *          2. 由于在内核态处理该异常，所以栈不需要切换，用的还是内核栈，和普通的函数调用一样，没区别。
+			 *          3. 调用remap函数完成映射，并将新的线性地址放置到出错EIP指令的oprand位置处，也就是更新出错指令的操作数。
+			 *          4. return出错指令继续执行。
+			 *          逻辑很清楚也很简单吧，但实现起来你懂的，到现在真是深有感触啊。
+			 *          首先general protection处理的异常码有很多，你得区分read/write limit的异常码。
+			 *          其次也是最头疼的，就是有的时候bochsout.txt文件的log里明明报的是read/write limit异常，但程序呢没有进入general protection 异常，
+			 *          也就是如何确保这种异常一定能被捕获到，这是最关键的。
+			 */
 		}
 		recov_swap_linear_addrs(cached_pg_table_base, cached_pg_table_length);
 	}

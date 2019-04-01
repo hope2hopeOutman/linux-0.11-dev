@@ -9,7 +9,8 @@
 # directory, named BIOS-bochs-yymmdd.  Use the latest one in there.
 #=======================================================================
 #romimage: bios/BIOS-bochs-970717a
-romimage: file=$BXSHARE\BIOS-bochs-latest
+romimage: file=$BXSHARE/BIOS-bochs-latest
+
 #romimage: file=bios/BIOS-bochs-2-processors, address=0xf0000
 #romimage: file=bios/BIOS-bochs-4-processors, address=0xf0000
 #romimage: file=bios/rombios.bin, address=0xf0000
@@ -25,8 +26,10 @@ romimage: file=$BXSHARE\BIOS-bochs-latest
 #megs: 128
 #megs: 64
 #megs: 32
-megs: 16
+#megs: 1536
 #megs: 8
+
+memory: guest=2044, host=1024
 
 #=======================================================================
 # VGAROMIMAGE
@@ -34,7 +37,7 @@ megs: 16
 #=======================================================================
 #vgaromimage: bios/VGABIOS-lgpl-0.3a
 #vgaromimage: $BXSHARE\VGABIOS-elpin-2.40
-vgaromimage: file=$BXSHARE\VGABIOS-lgpl-latest
+vgaromimage: file=$BXSHARE/VGABIOS-lgpl-latest
 
 #=======================================================================
 # FLOPPYA:
@@ -58,14 +61,14 @@ vgaromimage: file=$BXSHARE\VGABIOS-lgpl-latest
 #floppya: 1_44=/dev/fd0H1440, status=inserted
 #floppya: 1_2=../1_2, status=inserted
 #floppya: 1_44=a:, status=inserted             # for win32
-#floppya: 1_44="fdisk.img", status=inserted
+#floppya: 1_44="fdisk_nota.img", status=inserted
 
 #=======================================================================
 # FLOPPYB:
 # See FLOPPYA above for syntax
 #=======================================================================
 #floppyb: 1_44=b:, status=inserted
-#floppyb: 1_44=diska.img, status=inserted
+#floppyb: 1_44="fdisk_notb.img", status=inserted
 
 #=======================================================================
 # DISKC: file=, cyl=, heads=, spt=
@@ -86,6 +89,7 @@ vgaromimage: file=$BXSHARE\VGABIOS-lgpl-latest
 #   diskc: file=483M.sample, cyl=1024, heads=15, spt=63
 #=======================================================================
 #ata0-master: type=disk, path="hd.img", cylinders=227, heads=16, spt=63
+ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
 ata0-master: type=disk, path="hd.img", mode=flat, cylinders=520, heads=16, spt=63
 
 #=======================================================================
@@ -191,7 +195,7 @@ log: bochsout.txt
 #   parport1: enable=1, file="parport.out"
 #   parport1: enable=0
 #=======================================================================
-parport1: enable=0
+#parport1: enable=0
 
 #=======================================================================
 # SB16:
@@ -319,7 +323,7 @@ parport1: enable=0
 # I wouldn't recommend enabling the mouse by default, unless you have a
 # really good reason to do so.
 #=======================================================================
-mouse: enabled=0
+#mouse: enabled=0
 
 #=======================================================================
 # private_colormap: Request that the GUI create and use it's own
@@ -343,7 +347,7 @@ private_colormap: enabled=0
 #   fullscreen: enabled=0
 #   fullscreen: enabled=1
 #=======================================================================
-fullscreen: enabled=0
+fullscreen: enabled=1
 screenmode: name="sample"
 
 #=======================================================================

@@ -19,8 +19,6 @@
 #include <linux/head.h>
 
 extern void write_verify(unsigned long address);
-extern long LOW_MEM;
-
 long last_pid = 0;
 
 void verify_area(void * addr, int size) {
@@ -41,6 +39,7 @@ int copy_mem(int nr, struct task_struct * p) {
 	unsigned long old_data_base, new_data_base, data_limit;
 	unsigned long old_code_base, new_code_base, code_limit;
 
+	/* 所有fork出来的进程的基地址和limit都是一样，所以到这你应该理解当所有进程都有相同的4G地址空间的时候，在GDT表中只需要一个LDT描述符即可，但进程的TSS还是每个进程私有的。 */
 	new_data_base = new_code_base = USER_LINEAR_ADDR_START;
 	code_limit = data_limit = USER_LINEAR_ADDR_LIMIT;
 
@@ -50,9 +49,9 @@ int copy_mem(int nr, struct task_struct * p) {
 	set_limit(p->ldt[1], data_limit);
 	set_limit(p->ldt[2], data_limit);
 	if (copy_page_tables(old_data_base, new_data_base, data_limit, p)) {
-		printk("copy_mem call free_page_tables before\n\r");
-		free_page_tables(new_data_base, data_limit,p,OPERATION_DOEXECVE_OR_BEFORE);
-		printk("copy_mem call free_page_tables after\n\r");
+		//printk("copy_mem call free_page_tables before\n\r");
+		free_page_tables(new_data_base, data_limit,p);
+		//printk("copy_mem call free_page_tables after\n\r");
 		return -ENOMEM;
 	}
 	return 0;
@@ -69,13 +68,13 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	struct task_struct *p;
 	int i;
 	struct file *f;
-    /* 本版本将进程的task_struct和目录表都分配在内核实地址寻址的空间(mem>1G && mem<896M) */
+    /* 此版本将进程的task_struct和目录表都分配在内核实地址寻址的空间(mem>512M && mem<(512-64)M) */
 	p = (struct task_struct *) get_free_page(PAGE_IN_REAL_MEM_MAP);
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
 
-	printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
+	//printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
 
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->state = TASK_UNINTERRUPTIBLE;
@@ -93,7 +92,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	p->tss.ss0 = 0x10;
 	p->tss.eip = eip;
 	p->tss.eflags = eflags;
-	p->tss.eax = 0;                      /* fork返回值是0的话，代表运行的是子进程，奥秘就在这里哈哈 */
+	p->tss.eax = 0;                   /* fork返回值是0的话，代表运行的是子进程，奥秘就在这里哈哈 */
 	p->tss.ecx = ecx;
 	p->tss.edx = edx;
 	p->tss.ebx = ebx;
@@ -113,7 +112,6 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		__asm__("clts ; fnsave %0"::"m" (p->tss.i387));
 	if (copy_mem(nr, p)) {
 		task[nr] = NULL;
-		//free_page((long) p);
 		if (!free_page((long)p))
 			panic("fork.copy_process: trying to free free page");
 		return -EAGAIN;

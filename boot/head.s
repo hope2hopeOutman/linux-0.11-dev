@@ -71,12 +71,23 @@ HD_INTERRUPT_READ  = 0x20
 OS_BASE_ADDR       = 0x500000
 PG_DIR_BASE_ADDR   = 0x000000   /* 内核目录表基地址 */
 PG_TAB_BASE_ADDR   = 0x100000   /* 内核页表起始地址,4M大小可以管理4G内存 */
-/*
- * 这里将内核线性地址空间设置为512M是为了验证利用内核保留线性空间访问>512M的高地址物理内存，
- * 因为bochs模拟>1G的内存有问题，不是很稳定，我在linux上自己重编了bochs并将--enable-large-mem选项也加上了，但是>1G还是有问题，这里不纠结了，
- * 设置megs=992M(4M的倍数)是可以的，所以就把内核线性地址空间设置为512M这样就能验证了。
+
+/* boot实地址模式下，预加载的OS大小，这里设置为32K，可以自己调整，但最好不要超过64K，因为实地址模式的段限长是64K，
+ * 如果必须要加载>64K的OS代码的话，最好是64K的倍数，这要好处理，不过目前预加载的32K OS代码足够内核初始化了。
  */
-KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K */
+OS_PRELOAD_SIZE    = 0x8000
+
+/*
+ * 1. Bochs linux版本
+ * Deprecated: 因为bochs模拟>1G的内存有问题，不是很稳定，我在linux上自己重编了bochs并将--enable-large-mem选项也加上了，但是>1G还是有问题，这里不纠结了。
+ * AP: 问题找到了，是我给vmware虚拟机分配的物理内存有点小了(才2G)，vmware的内存调整为8G,设置bochs配置文件：guest=2044(注意guest设置为2048还是有问题的)，host=1024就可以。
+ * 2. Bochs window版本
+ * windows版本的bochs我没有加上--enable-large-mem重编过，感兴趣的朋友可以试一下。
+ * 不想重编的话，设置megs=1024(4M的倍数)，然后把内核线性地址空间(KERNEL_LINEAR_ADDR_SPACE)设置为512M，这样也能验证用内核保留空间访问>512M的高地址内存。
+ * 当然head.h中的6个有关内核线性地址空间的参数也要作相应的调整，将 (#if 0) 改为 (#if 1) 即可。
+ */
+//KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K (512M) */
+KERNEL_LINEAR_ADDR_SPACE = 0x40000  /* granularity 4K (1G) */
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
@@ -94,7 +105,7 @@ startup_32:
 	 * 5M后加载OS，如果内存<4G意味着4M页表空间是用不完的，所以也可以用来当作高速buffer，内核态用实地址模式管理整个物理内存。
 	 * 这样做的目的是为了能根据内存实际大小，动态分配页表，管理最大4G的内存，并且最大化利用物理内存，同时利于物理内存管理。
 	 */
-    movl $0x8000,%ecx            /* 总共要复制的字节数0x8000=32k */
+    movl $OS_PRELOAD_SIZE,%ecx   /* 总共要复制的字节数0x8000=32k */
     movl $0x0000,%esi            /* origin addr */
     movl $OS_BASE_ADDR,%edi      /* dest addr */
     cld
@@ -111,8 +122,7 @@ real_entry:
 	shl  $0x04,%edx               /* 左移4位乘以16*/
 	addl $0x1000,%edx             /* +16M得到总的内存大小，以4K为单位。 */
 	movl %edx,total_memory_size   /* 将内存总大小(4K granularity)存储到全局变量total_memory_size */
-	/* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
-    lss tmp_floppy_area,%esp
+    lss tmp_floppy_area,%esp      /* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
 
     /* 设置内核代码段的limit,因为要支持每个进程都有4G的地址空间，所以内核的地址空间是512M,当内存>512M的时候，也只能设置为512M=0x20000(4K) */
     cmp $KERNEL_LINEAR_ADDR_SPACE,%edx
@@ -287,11 +297,11 @@ temp_stack:
 /*
  * Record the beginning address for loading the left OS code to here,
  * because in bootsect.s we have loaded 32K os code to 0x10000 and move it to 0x0000,
- * so here the init value should be 0x8000.
+ * so here the init value should be OS_BASE_ADDR+0x8000.
  */
 .align 4
 load_os_addr:
-    .long OS_BASE_ADDR+0x8000
+    .long OS_BASE_ADDR+OS_PRELOAD_SIZE
 
 /*
  * This variable will filter all other Intrs from HD, just read intr can be work, it's used in hd_read_interrupt.
@@ -304,6 +314,7 @@ hd_intr_cmd:
  * I put the kernel page tables right after the page directory,
  * using 4 of them to span 16 Mb of physical memory. People with
  * more than 16MB will have to expand this.
+ * 现在已经修改为根据内存实际大小动态初始化和分配目录表和页表了，所以这里就废弃了。
  */
 
 /*
@@ -326,6 +337,7 @@ pg3:
  * tmp_floppy_area is used by the floppy-driver when DMA cannot
  * reach to a buffer-block. It needs to be aligned, so that it isn't
  * on a 64kB border.
+ * 该地址空间被用作临时堆栈了。
  */
 .org 0x1000
 tmp_floppy_area:
@@ -397,7 +409,7 @@ ignore_int:
  */
 .align 4
 setup_paging:
-	movl $1024,%ecx		     /* 1 page - pg_dir，目录表占用一页4K,且在内存开始出0x0000～0x0FFF */
+	movl $1024,%ecx		    /* 1 page - pg_dir，目录表占用一页4K,且在内存开始出0x0000～0x0FFF */
 	xorl %eax,%eax
 	xorl %edi,%edi			/* pg_dir is at 0x000 */
 	cld;rep;stosl           /* 将这4K空间初始化为0 */

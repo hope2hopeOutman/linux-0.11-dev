@@ -305,7 +305,7 @@ void bread_page(unsigned long address, int dev, int b[4]) {
 		if (bh[i]) {
 			wait_on_buffer(bh[i]);
 			if (bh[i]->b_uptodate) {
-				COPYBLK((unsigned long) bh[i]->b_data, remaped_address);  /* 这里又是个巨坑，都怪自己大意了，千万不能(unsigned long) phy_addr这么赋值啊。 */
+				COPYBLK((unsigned long) bh[i]->b_data, remaped_address);  /* 这里又是个巨坑，都怪自己大意了，千万不能(unsigned long) phy_addr这么赋值啊，这样EDI就会重置了。 */
 			}
 			brelse(bh[i]);
 		}
