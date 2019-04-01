@@ -64,27 +64,27 @@ Mainly study linux system and try to refact it for practice.
 	
               实现的思路：
 	      
-				 1. 首先判定read/write beyond limit异常是否发生在内核态，如果是内核太就映射，否则任由其发展哈哈
+		1. 首先判定read/write beyond limit异常是否发生在内核态，如果是内核太就映射，否则任由其发展哈哈
 				 
-				 2. 由于在内核态处理该异常，所以栈不需要切换，用的还是内核栈，和普通的函数调用一样，没区别。
+		2. 由于在内核态处理该异常，所以栈不需要切换，用的还是内核栈，和普通的函数调用一样，没区别。
 				 
-				 3. 调用remap函数完成映射，并将新的线性地址放置到出错EIP指令的oprand位置处，也就是更新出错指令的操作数。
+		3. 调用remap函数完成映射，并将新的线性地址放置到出错EIP指令的oprand位置处，也就是更新出错指令的操作数。
 				 
-                                    这里尤其要注意：千万不要修改原来存储物理地址变量的值，因为你根本就不清楚后面的context是否要用到该物理地址，
+                   这里尤其要注意：千万不要修改原来存储物理地址变量的值，因为你根本就不清楚后面的context是否要用到该物理地址，
 		    
-                                    如果此时你贸然把该变量的值重置为remap后的线性地址，后面context再用到该变量就有问题(这里是个难点)。    
+                   如果此时你贸然把该变量的值重置为remap后的线性地址，后面context再用到该变量就有问题(这里是个难点)。    
 		    
-				 4. return出错指令继续执行。
+	        4. return出错指令继续执行。
 				 
-				 逻辑很清楚也很简单吧，但实现起来你懂的，到现在真是深有感触啊。
+		逻辑很清楚也很简单吧，但实现起来你懂的，到现在真是深有感触啊。
 				 
-				 首先general protection处理的异常码有很多，你得区分read/write beyond limit的异常码。
+		首先general protection处理的异常码有很多，你得区分read/write beyond limit的异常码。
 				 
-				 其次也是最头疼的，就是有的时候bochsout.txt文件的log里明明报的是read/write limit异常，
+		其次也是最头疼的，就是有的时候bochsout.txt文件的log里明明报的是read/write limit异常，
 				 
-				 但程序呢没有进入general protection 异常，
-				 
-				 也就是如何确保这种异常一定能被捕获到，这是最关键的。
+	        但程序呢没有进入general protection 异常，也就是如何确保这种异常一定能被捕获到，这是最关键的。
+		
+下一步： 支持SMP。 
 				 
    
 
