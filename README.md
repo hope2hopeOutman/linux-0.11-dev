@@ -84,7 +84,7 @@ Mainly study linux system and try to refact it for practice.
 				 
 	        但程序呢没有进入general protection 异常，也就是如何确保这种异常一定能被捕获到，这是最关键的。
 		
-6.  support-SMP-ARCH。
+6.  support-SMP
 
     看了近两周的Intel文档(volume3 8|9|10|11 4章)终于有眉目了，SMP的关键是APIC（或其extensions xAPIC或x2APIC）,
     
@@ -100,29 +100,29 @@ Mainly study linux system and try to refact it for practice.
     
     这时BSP设置自己的EIP=0x7c00并跳转到该地址处执行，此时所有的AP是处于halt状态的。
     
-    1. 首先BSP执行内核引导程序
+    6.1 首先BSP执行内核引导程序
     
        内核引导程序要干的事包括：
        
-       1.1 首先在1M的内存空间内指定的位置初始化一个中断描述符表(也叫IDT别搞错了),一个GDT表，这些在保护模式下要用的。
+       6.1.1 首先在1M的内存空间内指定的位置初始化一个中断描述符表(也叫IDT别搞错了),一个GDT表，这些在保护模式下要用的。
        
-       1.2 修改实地址模式下的IDT表(这叫中断向量表，每个表项占4字节，表示中断处理函数的入口地址)，主要是在没有用到的>16的索引项
+       6.1.2 修改实地址模式下的IDT表(这叫中断向量表，每个表项占4字节，表示中断处理函数的入口地址)，主要是在没有用到的>16的索引项
        
            中插入引导程序定义的中断处理函数，因为AP要用该中断处理函数处理BSP发给它的IPI中断消息。
 	   
-       1.3 发送IPI消息给每个AP，等待每个AP初始化完。
+       6.1.3 发送IPI消息给每个AP，等待每个AP初始化完。
        
-       1.4 设置CR0进入保护模式，并跳转到head.s继续执行对剩余内核代码的加载工作（如果内核远大于1M的话）
+       6.1.4 设置CR0进入保护模式，并跳转到head.s继续执行对剩余内核代码的加载工作（如果内核远大于1M的话）
        
-    2. AP处理IPI中断
+    6.2 AP处理IPI中断
     
-       2.1 由于CPU reset后BSP和AP的IDTR都设置为0x0000，而BIOS默认是将IDT表放置在0x0000处的，
+       6.2.1 由于CPU reset后BSP和AP的IDTR都设置为0x0000，而BIOS默认是将IDT表放置在0x0000处的，
        
            所以通过修改实地址模式下的IDT表中的中断处理函数入口地址，可以将IPI中的vector number与引导程序自定义的中断处理函数绑定起来，
 	   
            这样BSP发送IPI给AP，AP就可以执行IDT中相应的os引导程序定义的中断处理函数来响应了。
 	   
-       2.2 IPI中断的处理的主要工作是：执行LIDTR和LGDTR指令加载最新的IDT和GDT表，然后将AP设置为保护模式。
+       6.2.2 IPI中断的处理的主要工作是：执行LIDTR和LGDTR指令加载最新的IDT和GDT表，然后将AP设置为保护模式。
        
     做这些工作的主要目的就是初始化AP的主要寄存器，是AP能顺利的执行内核程序，响应内核发出的各种中断。
     
