@@ -84,7 +84,17 @@ Mainly study linux system and try to refact it for practice.
 				 
 	        但程序呢没有进入general protection 异常，也就是如何确保这种异常一定能被捕获到，这是最关键的。
 		
-下一步： 支持SMP。 
+6.  support-SMP-ARCH。
+
+    看了这么些天的Intel文档终于有眉目了，SMP的关键是APIC（或其extensions xAPIC或x2APIC）,processors之间的通信是靠IPI中断
+    来通信的，之前一直苦思冥想BSP在完成自己和AP的初始化后(既AP处理完最后一个SIPI)，是如何与AP通信将AP的CRx设置为保护模式的，
+    还有设置相应的GDT，IDT，CS，EIP指向内核代码段，执行相应的中断处理函数，说白了就是AP如何能像BSP那样执行内核代码。
+    这里的把实现思路阐述一下：
+    前提：BSP和AP都完成了BIOS相应的初始化操作，BIOS将硬盘或其他类型的外设的第一个扇区的OS引导程序加载到内存的0x7c00处，
+    这时BSP设置自己的EIP=0x7c00并跳转到该地址处执行，此时所有的AP是处于halt状态的。
+    1. 由于CPU reset后BSP和AP的IDTR 都设置为0x0000，而BIOS默认是将IDT表放置在0x0000处的，所以通过修改实地址模式下的IDT表中的
+    中断处理函数入口地址，可以将IPI中的vector number与中断处理函数绑定起来，这样BSP发送IPI给AP，AP就可以执行IDT中相应的os引导程序了，
+    主要是将自己CR0设置为保护模式，
 				 
    
 
