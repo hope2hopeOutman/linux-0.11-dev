@@ -78,6 +78,15 @@ struct drive_info { char dummy[32]; } drive_info;
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
+void parse_cpu_topology() {
+	int eax_value=0, ebx_value = 0 ,edx_value = 0;
+    __asm__("movl $0x04,%%eax;"  \
+    		"movl $0x00,%%ecx;"  \
+    		"cpuid;" \
+    		:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
+    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
+}
+
 /*
  * Yeah, yeah, it's ugly, but I cannot find how to do this correctly
  * and this seems to work. I anybody has more info on the real-time
@@ -169,6 +178,7 @@ void main(void)		/* This really IS void, no error here. */
 	hd_init();
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
+	parse_cpu_topology();
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
