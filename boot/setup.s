@@ -186,6 +186,7 @@ end_move:
 ! we let the gnu-compiled 32-bit programs do that. We just jump to
 ! absolute address 0x00000, in 32-bit protected mode.
 
+switch_to_protect:
 	mov	ax,#0x0001	! protected mode (PE) bit
 	lmsw	ax		! This is it!
 	jmpi	0,8		! jmp offset 0 of segment 8 (cs)
@@ -196,9 +197,10 @@ end_move:
 empty_8042:
 	.word	0x00eb,0x00eb
 	in	al,#0x64	! 8042 status port
-	test	al,#2		! is input buffer full?
+	test	al,#2	! is input buffer full?
 	jnz	empty_8042	! yes - loop
 	ret
+
 !注意这里的limit也要根据内存实际的大小动态调整才行，因为head.s里会在内存最大处建立临时堆栈，
 !当call setup_gdt或setup_idt是会自动将下一条指令入栈，这时如果不将这里limit调为实际内存大小，会报beyong limit错误。
 !注意如果内存过大的话，例如4G那么就超出了实地址模式能计算的最大值了，所以这里直接将其limit设置为4G即可,因为后面进入保护模式的时候，
@@ -221,9 +223,26 @@ idt_48:
 	.word	0,0			! idt base=0L
 
 gdt_48:
-	.word	0x800		! gdt limit=2048, 256 GDT entries
+	.word	0x400		! gdt limit=2048, 256 GDT entries
 	.word	512+gdt,0x9	! gdt base = 0X9xxxx
-	
+
+/* CPU个数1K对齐，base+3k处 */
+.org 0xA00
+cpu_count:
+    .word 0x10
+
+/*
+ * 因为bootsect.s占用一个sector,这里设置ap_init起始地址是第8个sector开始处，
+ * 链接后，加上bootsect.s占用的一个sector,ap_init就是从第九个sector开始了，所以是4K对齐的,这样做就是为了AP能处理SIFI中断消息.
+ */
+.org 0xE00
+ap_init:
+    lidt	idt_48		! load idt with 0,0
+	lgdt	gdt_48		! load gdt with whatever appropriate
+	mov ax,cpu_count
+	inc ax
+	mov cpu_count,ax
+
 .text
 endtext:
 .data

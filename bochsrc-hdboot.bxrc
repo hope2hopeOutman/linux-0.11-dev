@@ -1,7 +1,7 @@
 # You many now use double quotes around pathnames, in case
 # your pathname includes spaces.
 # cpuid: level=6, mmx=1, sep=1, apic=xapic, model=www
-cpu: model=core_duo_t2400_yonah
+cpu: model=core_duo_t2400_yonah, count=2
 #cpu: count=4
 #=======================================================================
 # ROMIMAGE:

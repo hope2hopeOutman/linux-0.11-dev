@@ -100,6 +100,18 @@ startup_32:
 	mov %ax,%gs
 	mov %ax,%ss
 
+	/* 发送SIPI中断消息给APs */
+	movl $0xFEE00300,%eax
+	movl $0x000C4691,0(%eax)
+
+
+    mov $0x1000000,%ecx
+wait_loop:
+    dec %ecx
+    nop
+    cmp $0x0,%ecx
+    jne wait_loop
+
 	/* 将preload的32K OS-code再次搬运到5M地址起始处，前面的4K用作kernel的目录表最大可以管理1k个页表，
 	 * 4k~640k用作高速buffer存储buffer_head和磁盘块,1M~5M用于存储1k个页表，每个页表可以管理4M物理内存，最大可管理4G物理内存。
 	 * 5M后加载OS，如果内存<4G意味着4M页表空间是用不完的，所以也可以用来当作高速buffer，内核态用实地址模式管理整个物理内存。
@@ -114,7 +126,11 @@ startup_32:
     //jmp real_entry    /* 注意这里千万别这么用，这里real_entry标号是相对与head.o的offset，所以要获得其在整个CS段内的offset要加上head的入口地址（既0x500000）*/
     xorl %ecx,%ecx
     lea real_entry,%ecx  /*这里获得的有效地址就是head.o编译时分配的基地址（0x500000+real_enry）*/
+    /*
+     * 这里再说明一下，这行之前的代码还是以0x00作为基地址执行的，后面的代码通过JMP操作就跳转到以5M为基地址的代码段中执行了，其实还是相同的代码，不过是在以5M为基地址的地址空间寻址运行了。
+     */
     jmp *%ecx
+
 /* 下面计算内存的大小统一用4K作为粒度。 */
 real_entry:
     xor %edx,%edx
@@ -456,7 +472,7 @@ init_dir:
 
 /* 初始化所有页表，从最后一个页表的最后一个页表项初始化。 */
 init_pgt:
-    addl $4092,%edx         /* 注意：这里的edx经过上面的init_dir操作后，存储的就是最后一个页表的首地址，所以+4094就得到了最后一个页表项的首地址了。*/
+    addl $4092,%edx      /* 注意：这里的edx经过上面的init_dir操作后，存储的就是最后一个页表的首地址，所以+4094就得到了最后一个页表项的首地址了。*/
     movl %edx,%edi
 	movl %ecx,%eax       /* 获取内核要实地址映射的内存对应的目录项个数 */
     shl $22,%eax         /* 获得内核要实地址映射的的内存的大小(*4M),单位是byte */
@@ -494,7 +510,6 @@ gdt:
 	.quad 0x00c0920000000fff	/* Data seg, limit default size: 16Mb */
 	.quad 0x0000000000000000	/* TEMPORARY - don't use */
 	.fill 252,8,0			    /* space for LDT's and TSS's etc */
-
 /*
  * Record the address of the params table for main func to init.
  * allocated in here to avoid erasing when setup dir_page.

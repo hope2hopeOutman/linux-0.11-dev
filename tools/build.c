@@ -39,7 +39,7 @@
 
 /* max nr of sectors of setup: don't change unless you also change
  * bootsect etc */
-#define SETUP_SECTS 4
+#define SETUP_SECTS 8
 
 #define STRINGIFY(x) #x
 

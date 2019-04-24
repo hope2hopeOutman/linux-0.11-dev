@@ -80,11 +80,39 @@ __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (cou
 
 void parse_cpu_topology() {
 	int eax_value=0, ebx_value = 0 ,edx_value = 0;
-    __asm__("movl $0x04,%%eax;"  \
+#if 0
+    __asm__("movl $0x01,%%eax;"  \
     		"movl $0x00,%%ecx;"  \
     		"cpuid;" \
     		:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
+#endif
+
+    __asm__("movl $0x1B,%%ecx;"  \
+        	"rdmsr;" \
+        	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
+
     printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
+
+  /*  __asm__("movl $0x23,%%ecx;"  \
+        	"rdmsr;" \
+        	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
+
+    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
+
+    __asm__("movl $0x2b,%%ecx;"  \
+        	"rdmsr;" \
+        	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
+
+    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
+
+    __asm__("movl $0x33,%%ecx;"  \
+        	"rdmsr;" \
+        	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
+
+    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);*/
+
+    int cpu_count = *((unsigned short *) 0x90C00);
+    printk("cpu_count: %d \n\r", cpu_count);
 }
 
 /*
