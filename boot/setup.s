@@ -233,7 +233,7 @@ gdt_48:
 /* CPU个数1K对齐，base+3k处 */
 .org 0xA00
 cpu_count:
-    .word 0x10
+    .word 0x01
 
 /*
  * 因为bootsect.s占用一个sector,这里设置ap_init起始地址是第8个sector开始处，
@@ -248,14 +248,17 @@ ap_init:
 	mov ax,cpu_count
 	inc ax
 	mov cpu_count,ax
-	cmp ax,#18
+	cmp ax,#3
 	jge close_int
 	sti
-	jmp start_int
+	jmp nop_loop
 close_int:
     cli
-    hlt
-start_int:
+nop_loop:
+    nop
+    nop
+    nop
+    jmp nop_loop
 
 .text
 endtext:
