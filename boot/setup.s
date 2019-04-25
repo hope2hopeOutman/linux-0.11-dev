@@ -114,6 +114,8 @@ is_disk1:
 
 	mov	ax,#0x0000
 	cld			! 'direction'=0, movs moves forward
+
+/*
 do_move:
 	mov	es,ax		! destination segment
 	add	ax,#0x1000
@@ -123,6 +125,8 @@ do_move:
 	mov cx,#NEEDMOVE
 	rep
 	movsb
+*/
+
 ! then we load the segment descriptors
 
 end_move:
@@ -189,7 +193,7 @@ end_move:
 switch_to_protect:
 	mov	ax,#0x0001	! protected mode (PE) bit
 	lmsw	ax		! This is it!
-	jmpi	0,8		! jmp offset 0 of segment 8 (cs)
+	jmpi	0x10000,8		! jmp offset 0 of segment 8 (cs)
 
 ! This routine checks that the keyboard command queue is empty
 ! No timeout is used - if this hangs there is something wrong with
@@ -219,7 +223,7 @@ gdt:
 	.word	0x00CF		! granularity=4096, 386
 
 idt_48:
-	.word	0			! idt limit=0
+	.word	0x400			! idt limit=0
 	.word	0,0			! idt base=0L
 
 gdt_48:
@@ -237,11 +241,21 @@ cpu_count:
  */
 .org 0xE00
 ap_init:
-    lidt	idt_48		! load idt with 0,0
-	lgdt	gdt_48		! load gdt with whatever appropriate
+    mov ax,#0x9020
+    mov ds,ax
+    mov fs,ax
+    mov es,ax
 	mov ax,cpu_count
 	inc ax
 	mov cpu_count,ax
+	cmp ax,#18
+	jge close_int
+	sti
+	jmp start_int
+close_int:
+    cli
+    hlt
+start_int:
 
 .text
 endtext:

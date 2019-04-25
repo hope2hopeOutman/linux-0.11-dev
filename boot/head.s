@@ -100,17 +100,38 @@ startup_32:
 	mov %ax,%gs
 	mov %ax,%ss
 
+	//movl $512,%ecx         /* 总共要复制的字节数0x8000=32k */
+    //movl $0x91000,%esi     /* origin addr */
+    //movl $0x8000,%edi      /* dest addr */
+    //cld
+    //rep
+    //movsb
+
 	/* 发送SIPI中断消息给APs */
-	movl $0xFEE00300,%eax
-	movl $0x000C4691,0(%eax)
+    movl $0xFEE00300,%eax
+    movl $0x000C4500,0(%eax)  /* 发送 INIT message */
 
 
-    mov $0x1000000,%ecx
-wait_loop:
+    mov $0x5,%ecx
+wait_loop_init:
     dec %ecx
     nop
     cmp $0x0,%ecx
-    jne wait_loop
+    jne wait_loop_init
+
+
+	movl $0x000C4691,0(%eax)  /* 发送 SIPI message */
+
+	mov $0x5,%ecx
+wait_loop_sipi:
+    dec %ecx
+    nop
+    cmp $0x0,%ecx
+    jne wait_loop_sipi
+
+    movl $0x190,%edx          /* 中断向量号vector number=100在IDT表中的地址 */
+    movl $0x91000000,0(%edx)  /* 中断处理函数的入口地址 */
+    movl $0x000C4064,0(%eax)  /* 发送 Fixed IPI message */
 
 	/* 将preload的32K OS-code再次搬运到5M地址起始处，前面的4K用作kernel的目录表最大可以管理1k个页表，
 	 * 4k~640k用作高速buffer存储buffer_head和磁盘块,1M~5M用于存储1k个页表，每个页表可以管理4M物理内存，最大可管理4G物理内存。
