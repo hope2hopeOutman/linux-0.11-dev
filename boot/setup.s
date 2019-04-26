@@ -232,33 +232,50 @@ gdt_48:
 
 /* CPU个数1K对齐，base+3k处 */
 .org 0xA00
-cpu_count:
+sipi_cpu_count:
     .word 0x01
-
+    .word 0x00
+ipi_cpu_count:
+    .word 0x01
+    .word 0x00
 /*
  * 因为bootsect.s占用一个sector,这里设置ap_init起始地址是第8个sector开始处，
- * 链接后，加上bootsect.s占用的一个sector,ap_init就是从第九个sector开始了，所以是4K对齐的,这样做就是为了AP能处理SIFI中断消息.
+ * 链接后，加上bootsect.s占用的一个sector,ap_init就是从第九个sector开始了，所以是4K对齐的,这样做就是为了AP能处理SIFI中断消息，这里稍微有点tricky。
+ * 这也是内核很有魅力的地方，如今已进入知命境，想怎么玩都可以了，下一步就要适配MESI还有根据thermal&performance monitor(这是实现cgroup的根本)将进程调度到合适的processor上，
+ * 搞完这些应该就是知命上品了吧，当然夫子的无矩境是神往哈哈。
  */
 .org 0xE00
-ap_init:
+ap_sipi:
     mov ax,#0x9020
     mov ds,ax
     mov fs,ax
     mov es,ax
-	mov ax,cpu_count
-	inc ax
-	mov cpu_count,ax
-	cmp ax,#3
-	jge close_int
+	lock
+	inc sipi_cpu_count
 	sti
-	jmp nop_loop
-close_int:
-    cli
-nop_loop:
+sipi_nop_loop:
     nop
     nop
     nop
-    jmp nop_loop
+    jmp sipi_nop_loop
+
+/*
+ * 实地址模式下，处理IFI中断消息
+ */
+.org 0xE80
+ap_ipi:
+    mov ax,#0x9020
+    mov ds,ax
+    mov fs,ax
+    mov es,ax
+	lock
+	inc ipi_cpu_count
+	sti
+ipi_nop_loop:
+    nop
+    nop
+    nop
+    jmp ipi_nop_loop
 
 .text
 endtext:

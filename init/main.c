@@ -111,8 +111,10 @@ void parse_cpu_topology() {
 
     printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);*/
 
-    int cpu_count = *((unsigned short *) 0x90C00);
-    printk("cpu_count: %d \n\r", cpu_count);
+    int sipi_cpu_count = *((unsigned short *) 0x90C00);
+    int ipi_cpu_count  = *((unsigned short *) 0x90C04);
+    //printk("SIPI_cpu_count: %d, ^_^ successfully interact with APs by SIPI \n\r", sipi_cpu_count);
+    printk("IPI_processor_count : %d, Successfully interact with APs by IPI ^_^ ^.^ ^_^ \n\r", ipi_cpu_count);
 }
 
 /*

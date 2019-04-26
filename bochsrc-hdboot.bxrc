@@ -3,7 +3,7 @@
 # cpuid: level=6, mmx=1, sep=1, apic=xapic, model=www
 #cpu: model=core_duo_t2400_yonah
 #cpu: count=4
-cpu: model=core_duo_t2400_yonah, count=2
+cpu: model=core_duo_t2400_yonah, count=4
 #=======================================================================
 # ROMIMAGE:
 # You now need to load a ROM BIOS into F0000-FFFFF.  I've wiped

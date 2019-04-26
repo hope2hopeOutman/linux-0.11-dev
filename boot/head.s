@@ -87,7 +87,7 @@ OS_PRELOAD_SIZE    = 0x8000
  * 当然head.h中的6个有关内核线性地址空间的参数也要作相应的调整，将 (#if 0) 改为 (#if 1) 即可。
  */
 //KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K (512M) */
-KERNEL_LINEAR_ADDR_SPACE = 0x40000  /* granularity 4K (1G) */
+KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
@@ -100,17 +100,9 @@ startup_32:
 	mov %ax,%gs
 	mov %ax,%ss
 
-	//movl $512,%ecx         /* 总共要复制的字节数0x8000=32k */
-    //movl $0x91000,%esi     /* origin addr */
-    //movl $0x8000,%edi      /* dest addr */
-    //cld
-    //rep
-    //movsb
-
 	/* 发送SIPI中断消息给APs */
     movl $0xFEE00300,%eax
     movl $0x000C4500,0(%eax)  /* 发送 INIT message */
-
 
     mov $0x5,%ecx
 wait_loop_init:
@@ -118,7 +110,6 @@ wait_loop_init:
     nop
     cmp $0x0,%ecx
     jne wait_loop_init
-
 
 	movl $0x000C4691,0(%eax)  /* 发送 SIPI message */
 
@@ -130,8 +121,8 @@ wait_loop_sipi:
     jne wait_loop_sipi
 
     movl $0x190,%edx          /* 中断向量号vector number=100在IDT表中的地址 */
-    movl $0x91000000,0(%edx)  /* 中断处理函数的入口地址 */
-    movl $0x000C4064,0(%eax)  /* 发送 Fixed IPI message */
+    movl $0x91000080,0(%edx)  /* 中断处理函数的入口地址      */
+    movl $0x000C4064,0(%eax)  /* 发送 Fixed IPI message  */
 
 	/* 将preload的32K OS-code再次搬运到5M地址起始处，前面的4K用作kernel的目录表最大可以管理1k个页表，
 	 * 4k~640k用作高速buffer存储buffer_head和磁盘块,1M~5M用于存储1k个页表，每个页表可以管理4M物理内存，最大可管理4G物理内存。
@@ -139,7 +130,7 @@ wait_loop_sipi:
 	 * 这样做的目的是为了能根据内存实际大小，动态分配页表，管理最大4G的内存，并且最大化利用物理内存，同时利于物理内存管理。
 	 */
     movl $OS_PRELOAD_SIZE,%ecx   /* 总共要复制的字节数0x8000=32k */
-    movl $0x0000,%esi            /* origin addr */
+    movl $0x10000,%esi            /* origin addr */
     movl $OS_BASE_ADDR,%edi      /* dest addr */
     cld
     rep
