@@ -100,29 +100,32 @@ startup_32:
 	mov %ax,%gs
 	mov %ax,%ss
 
-	/* 发送SIPI中断消息给APs */
+/**************************** 发送INIT中断消息给APs **********************************************/
     movl $0xFEE00300,%eax
     movl $0x000C4500,0(%eax)  /* 发送 INIT message */
-
     mov $0x5,%ecx
 wait_loop_init:
     dec %ecx
     nop
     cmp $0x0,%ecx
     jne wait_loop_init
+/**************************** 等待APs处理INIT中断结束 **********************************************/
 
+/**************************** 发送SIPI中断消息给APs **********************************************/
 	movl $0x000C4691,0(%eax)  /* 发送 SIPI message */
-
 	mov $0x5,%ecx
 wait_loop_sipi:
     dec %ecx
     nop
     cmp $0x0,%ecx
     jne wait_loop_sipi
+/**************************** 等待APs处理SIPI中断结束 **********************************************/
 
-    movl $0x190,%edx          /* 中断向量号vector number=100在IDT表中的地址 */
-    movl $0x91000080,0(%edx)  /* 中断处理函数的入口地址      */
-    movl $0x000C4064,0(%eax)  /* 发送 Fixed IPI message  */
+/**************************** 发送IPI中断消息给APs **********************************************/
+	//movl $0x190,%edx          /* 中断向量号vector number=100在IDT表中的地址 */
+    //movl $0x91000080,0(%edx)  /* 中断处理函数的入口地址      */
+    //movl $0x000C4064,0(%eax)  /* 发送 Fixed IPI message  */
+/**************************** 结束发送INIT中断消息给APs **********************************************/
 
 	/* 将preload的32K OS-code再次搬运到5M地址起始处，前面的4K用作kernel的目录表最大可以管理1k个页表，
 	 * 4k~640k用作高速buffer存储buffer_head和磁盘块,1M~5M用于存储1k个页表，每个页表可以管理4M物理内存，最大可管理4G物理内存。
@@ -146,7 +149,7 @@ wait_loop_sipi:
 /* 下面计算内存的大小统一用4K作为粒度。 */
 real_entry:
     xor %edx,%edx
-	movw %ds:0x90002,%edx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K, 这里也是个小坑，mem长度是2字节，之前用movl是4字节有问题啊 */
+	movw %ds:0x90002,%dx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K, 这里也是个小坑，mem长度是2字节，之前用movl是4字节有问题啊 */
 	shl  $0x04,%edx               /* 左移4位乘以16*/
 	addl $0x1000,%edx             /* +16M得到总的内存大小，以4K为单位。 */
 	movl %edx,total_memory_size   /* 将内存总大小(4K granularity)存储到全局变量total_memory_size */
@@ -202,6 +205,10 @@ init_temp_stack:
 	/* Capture HD intr and handle it , mainly work is get data from HD controller (HD_DATA port), sector by sector. intr trigger per sector. */
 	call do_hd_read_request
 	/* Pay much more Attenttion here, you must make sure all sectors has been loaded from HD before executing below command. */
+
+/**************************** 发送IPI中断消息给APs **********************************************/
+	//movl $0x000C4033,0(%eax)  /* 发送 Fixed IPI message  */
+/**************************** 结束发送INIT中断消息给APs **********************************************/
 	cli
 
 	lss stack_start,%esp
@@ -503,19 +510,20 @@ init_pgt:
 	ret			        /* this also flushes prefetch-queue */
 
 .align 4
-.word 0
 idt_descr:
 	.word 256*8-1		# idt contains 256 entries
 	.long idt
+	.word 0
+
 .align 4
-.word 0
 gdt_descr:
 	.word 256*8		# so does gdt (not that that's any
 	.long gdt		# magic number, but it works for me :^)
+	.word 0
 
-	.align 8
+.org 0x2000
+.align 8
 idt:	.fill 256,8,0		# idt is uninitialized
-
 gdt:
 	.quad 0x0000000000000000	/* NULL descriptor */
 	.quad 0x00c09a0000000fff	/* Code seg, limit default size: 16Mb,it will be changed by set_limit */
@@ -534,4 +542,15 @@ params_table_addr:
 .align 4
 total_memory_size:
     .long 0
+/* setup.s中，处理SIPI中断会用这段代码来初始化各个AP的段寄存器 */
+.org 0x4000
+sipi_segment_init:
+    mov $0x10,%eax
+    mov %ax,%ds
+    mov %ax,%ss
+    mov %ax,%fs
+    mov %ax,%es
+    hlt
+
+
 

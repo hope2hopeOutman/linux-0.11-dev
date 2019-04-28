@@ -191,9 +191,9 @@ end_move:
 ! absolute address 0x00000, in 32-bit protected mode.
 
 switch_to_protect:
-	mov	ax,#0x0001	! protected mode (PE) bit
-	lmsw	ax		! This is it!
-	jmpi	0x10000,8		! jmp offset 0 of segment 8 (cs)
+	mov	ax,#0x0001	    ! protected mode (PE) bit
+	lmsw	ax		    ! This is it!
+	jmpi	0x10000,8	! jmp offset 0 of segment 8 (cs)
 
 ! This routine checks that the keyboard command queue is empty
 ! No timeout is used - if this hangs there is something wrong with
@@ -223,14 +223,14 @@ gdt:
 	.word	0x00CF		! granularity=4096, 386
 
 idt_48:
-	.word	0x400			! idt limit=0
+	.word	0x400		! idt limit=0
 	.word	0,0			! idt base=0L
 
 gdt_48:
 	.word	0x400		! gdt limit=2048, 256 GDT entries
-	.word	512+gdt,0x9	! gdt base = 0X9xxxx
+	.word	512+gdt,0x9	! gdt base = 0x9xxxx ,这里的512表示的是地址，一定要搞清楚了,因为bootsect.s占用一个扇区，所以要+512。
 
-/* CPU个数1K对齐，base+3k处 */
+/* CPU个数的存储地址是1K对齐，(base=0x90000)+3K处 */
 .org 0xA00
 sipi_cpu_count:
     .word 0x01
@@ -238,6 +238,16 @@ sipi_cpu_count:
 ipi_cpu_count:
     .word 0x01
     .word 0x00
+/* head.s中定义的中断描述符表的大小，和基地址 */
+idt_descr:
+    .word 256*8
+    .word 0x2000,0x0050
+    .word 0
+/* head.s中定义的全局描述符表的大小，和基地址 */
+gdt_descr:
+    .word 256*8
+    .word 0x2800,0x0050
+    .word 0
 /*
  * 因为bootsect.s占用一个sector,这里设置ap_init起始地址是第8个sector开始处，
  * 链接后，加上bootsect.s占用的一个sector,ap_init就是从第九个sector开始了，所以是4K对齐的,这样做就是为了AP能处理SIFI中断消息，这里稍微有点tricky。
@@ -246,23 +256,38 @@ ipi_cpu_count:
  */
 .org 0xE00
 ap_sipi:
-    mov ax,#0x9020
+    mov ax,#0x9020   !这里的基地址就是0x90200,必须要加上bootsect.s占用的512个字节
     mov ds,ax
     mov fs,ax
     mov es,ax
 	lock
 	inc sipi_cpu_count
+	lidt idt_48
+	lgdt gdt_48
 	sti
+	mov	ax,#0x0001	                 ! protected mode (PE) bit
+	lmsw	ax		                 ! load machine status word,set CR0 bit
+	jmpi	0x10000+0x4000,8	     ! jmp offset 0 of segment 8 (cs),这里的cs的基地址是0x00，所以这里要计算segment_init实际的offset.
+
+/*
+segment_init:
+    mov ax,0x10
+    mov ds,ax
+    mov ss,ax
+    mov fs,ax
+    mov es,ax
+
 sipi_nop_loop:
     nop
     nop
     nop
     jmp sipi_nop_loop
+*/
 
 /*
  * 实地址模式下，处理IFI中断消息
  */
-.org 0xE80
+.org 0xF00
 ap_ipi:
     mov ax,#0x9020
     mov ds,ax
@@ -270,7 +295,6 @@ ap_ipi:
     mov es,ax
 	lock
 	inc ipi_cpu_count
-	sti
 ipi_nop_loop:
     nop
     nop

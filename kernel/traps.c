@@ -207,3 +207,9 @@ void trap_init(void)
 	outb(inb_p(0xA1)&0xdf,0xA1);
 	set_trap_gate(39,&parallel_interrupt);
 }
+
+void parse_cpu_topology(void);
+void interrupt_init(void)
+{
+	set_intr_gate(0x33,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */
+}

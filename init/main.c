@@ -78,7 +78,7 @@ struct drive_info { char dummy[32]; } drive_info;
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
-void parse_cpu_topology() {
+void get_cpu_topology_info() {
 	int eax_value=0, ebx_value = 0 ,edx_value = 0;
 #if 0
     __asm__("movl $0x01,%%eax;"  \
@@ -92,24 +92,6 @@ void parse_cpu_topology() {
         	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
 
     printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
-
-  /*  __asm__("movl $0x23,%%ecx;"  \
-        	"rdmsr;" \
-        	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
-
-    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
-
-    __asm__("movl $0x2b,%%ecx;"  \
-        	"rdmsr;" \
-        	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
-
-    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
-
-    __asm__("movl $0x33,%%ecx;"  \
-        	"rdmsr;" \
-        	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
-
-    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);*/
 
     int sipi_cpu_count = *((unsigned short *) 0x90C00);
     int ipi_cpu_count  = *((unsigned short *) 0x90C04);
@@ -208,7 +190,7 @@ void main(void)		/* This really IS void, no error here. */
 	hd_init();
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
-	parse_cpu_topology();
+	get_cpu_topology_info();
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

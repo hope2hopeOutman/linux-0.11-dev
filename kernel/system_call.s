@@ -67,7 +67,7 @@ nr_system_calls = 72
  */
 .globl system_call,sys_fork,timer_interrupt,sys_execve
 .globl hd_interrupt,floppy_interrupt,parallel_interrupt
-.globl device_not_available, coprocessor_error
+.globl device_not_available, coprocessor_error, parse_cpu_topology
 
 .align 4
 bad_sys_call:
@@ -284,3 +284,17 @@ parallel_interrupt:
 	outb %al,$0x20
 	popl %eax
 	iret
+
+parse_cpu_topology:
+	pushl %eax
+	pushl %ebx
+	pushl %ecx
+	pushl %edx
+	movl $0x01,%eax
+	cpuid
+	popl %edx
+	popl %ecx
+	popl %ebx
+	popl %eax
+	iret
+
