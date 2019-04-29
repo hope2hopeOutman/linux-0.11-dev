@@ -262,12 +262,12 @@ ap_sipi:
     mov es,ax
 	lock
 	inc sipi_cpu_count
-	lidt idt_48
-	lgdt gdt_48
+	lidt idt_descr
+	lgdt gdt_descr
 	sti
 	mov	ax,#0x0001	                 ! protected mode (PE) bit
 	lmsw	ax		                 ! load machine status word,set CR0 bit
-	jmpi	0x10000+0x4000,8	     ! jmp offset 0 of segment 8 (cs),这里的cs的基地址是0x00，所以这里要计算segment_init实际的offset.
+	jmpi	0x500000+0x4000,8	     ! jmp offset 0 of segment 8 (cs),这里的cs的基地址是0x00，所以这里要计算segment_init实际的offset.
 
 /*
 segment_init:

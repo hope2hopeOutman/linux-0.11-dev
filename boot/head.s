@@ -91,7 +91,7 @@ KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
-.globl startup_32
+.globl startup_32,sync_semaphore
 startup_32:
 	movl $0x10,%eax
 	mov %ax,%ds
@@ -99,27 +99,6 @@ startup_32:
 	mov %ax,%fs
 	mov %ax,%gs
 	mov %ax,%ss
-
-/**************************** 发送INIT中断消息给APs **********************************************/
-    movl $0xFEE00300,%eax
-    movl $0x000C4500,0(%eax)  /* 发送 INIT message */
-    mov $0x5,%ecx
-wait_loop_init:
-    dec %ecx
-    nop
-    cmp $0x0,%ecx
-    jne wait_loop_init
-/**************************** 等待APs处理INIT中断结束 **********************************************/
-
-/**************************** 发送SIPI中断消息给APs **********************************************/
-	movl $0x000C4691,0(%eax)  /* 发送 SIPI message */
-	mov $0x5,%ecx
-wait_loop_sipi:
-    dec %ecx
-    nop
-    cmp $0x0,%ecx
-    jne wait_loop_sipi
-/**************************** 等待APs处理SIPI中断结束 **********************************************/
 
 /**************************** 发送IPI中断消息给APs **********************************************/
 	//movl $0x190,%edx          /* 中断向量号vector number=100在IDT表中的地址 */
@@ -205,10 +184,6 @@ init_temp_stack:
 	/* Capture HD intr and handle it , mainly work is get data from HD controller (HD_DATA port), sector by sector. intr trigger per sector. */
 	call do_hd_read_request
 	/* Pay much more Attenttion here, you must make sure all sectors has been loaded from HD before executing below command. */
-
-/**************************** 发送IPI中断消息给APs **********************************************/
-	//movl $0x000C4033,0(%eax)  /* 发送 Fixed IPI message  */
-/**************************** 结束发送INIT中断消息给APs **********************************************/
 	cli
 
 	lss stack_start,%esp
@@ -542,6 +517,9 @@ params_table_addr:
 .align 4
 total_memory_size:
     .long 0
+.align 4
+sync_semaphore:
+    .long 0
 /* setup.s中，处理SIPI中断会用这段代码来初始化各个AP的段寄存器 */
 .org 0x4000
 sipi_segment_init:
@@ -550,7 +528,28 @@ sipi_segment_init:
     mov %ax,%ss
     mov %ax,%fs
     mov %ax,%es
+
+lock_loop:
+    cmp $0x00,%ds:sync_semaphore
+    jne lock_loop
+
+    lock
+    addl $1,%ds:sync_semaphore
+    cmp $0x00,%ds:sync_semaphore
+    je lock_loop
+
+    lss tmp_floppy_area,%esp
+    movl $0x01,%eax
+    cpuid
+    shr $24,%ebx
+    push %ebx
+    call print_apic_id
+    pop %ebx
+    subl $1,%ds:sync_semaphore
     hlt
+idle_loop:
+    hlt
+    jmp idle_loop
 
 
 

@@ -209,7 +209,7 @@ void trap_init(void)
 }
 
 void parse_cpu_topology(void);
-void interrupt_init(void)
+void ipi_intr_init(void)
 {
-	set_intr_gate(0x33,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */
+	set_intr_gate(0x7B,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */
 }

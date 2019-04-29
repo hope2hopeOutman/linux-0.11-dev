@@ -95,8 +95,64 @@ void get_cpu_topology_info() {
 
     int sipi_cpu_count = *((unsigned short *) 0x90C00);
     int ipi_cpu_count  = *((unsigned short *) 0x90C04);
-    //printk("SIPI_cpu_count: %d, ^_^ successfully interact with APs by SIPI \n\r", sipi_cpu_count);
-    printk("IPI_processor_count : %d, Successfully interact with APs by IPI ^_^ ^.^ ^_^ \n\r", ipi_cpu_count);
+    printk("SIPI_cpu_count: %d, ^_^ successfully interact with APs by SIPI \n\r", sipi_cpu_count);
+    //printk("IPI_processor_count : %d, Successfully interact with APs by IPI ^_^ ^.^ ^_^ \n\r", ipi_cpu_count);
+}
+/* 初始化APs，包括让AP进入保护模式，开启中断，初始化段寄存器使其指向内核代码段等等 */
+void init_ap() {
+	__asm__(
+	/**************************** Relocating the Local APIC Registers of BSP **********************************************/
+		"xor %%eax,%%eax\n\t" \
+		"xor %%edx,%%edx\n\t" \
+		"movl $0x1B,%%ecx\n\t" \
+		"rdmsr\n\t" \
+		"and $0x00000FFF,%%eax\n\t" \
+        "add $0x00020000,%%eax\n\t" \
+		"wrmsr\n\t" \
+		"xor %%eax,%%eax\n\t" \
+		"xor %%edx,%%edx\n\t" \
+		"rdmsr\n\t" \
+    /**************************** Relocating the Local APIC Registers of BSP **********************************************/
+
+	/**************************** 发送INIT中断消息给APs **********************************************/
+	    "movl $0x20300,%%eax\n\t" \
+		/* 发送 INIT message */
+	    "movl $0x000C4500,0(%%eax)\n\t" \
+	    "mov $0x5,%%ecx\n\t" \
+	    "wait_loop_init:\n\t" \
+	    "dec %%ecx\n\t" \
+	    "nop\n\t" \
+	    "cmp $0x0,%%ecx\n\t" \
+	    "jne wait_loop_init\n\t" \
+	/**************************** 等待APs处理INIT中断结束 **********************************************/
+
+	/**************************** 发送SIPI中断消息给APs **********************************************/
+		/* 发送 SIPI message */
+		"movl $0x000C4691,0(%%eax)\n\t" \
+		"mov $0x5,%%ecx\n\t" \
+	    "wait_loop_sipi:\n\t" \
+	    "dec %%ecx\n\t" \
+	    "nop\n\t" \
+	    "cmp $0x0,%%ecx\n\t" \
+	    "jne wait_loop_sipi\n\t" \
+	/**************************** 等待APs处理SIPI中断结束 **********************************************/
+
+	/**************************** 发送IPI中断消息给APs **********************************************/
+		/* 发送 Fixed IPI message  */
+		"movl $0x000C407B,0(%%eax)\n\t" \
+		"mov $0x5,%%ecx\n\t" \
+		"wait_loop_ipi:\n\t" \
+		"dec %%ecx\n\t" \
+		"nop\n\t" \
+		"cmp $0x0,%%ecx\n\t" \
+		"jne wait_loop_ipi\n\t" \
+		::);
+	/**************************** 结束发送INIT中断消息给APs **********************************************/
+
+}
+
+void print_apic_id(int apic_id) {
+	printk("apic_id: %d \n\r", apic_id);
 }
 
 /*
@@ -181,6 +237,7 @@ void main(void)		/* This really IS void, no error here. */
 #endif
 	mem_init(main_memory_start,memory_end);
 	trap_init();
+	ipi_intr_init();
 	blk_dev_init();
 	chr_dev_init();
 	tty_init();
@@ -190,6 +247,7 @@ void main(void)		/* This really IS void, no error here. */
 	hd_init();
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
+	init_ap();
 	get_cpu_topology_info();
 	sti();
 	move_to_user_mode();
