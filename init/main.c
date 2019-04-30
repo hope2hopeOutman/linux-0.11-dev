@@ -66,7 +66,7 @@ long HIGH_MEMORY  = 0;       /* Granularity is byte */
 
 struct drive_info { char dummy[32]; } drive_info;
 
-
+long apic_ids[16] = {0,};   /* 所有processor的apicId存储在这里 */
 /*
  * This is set up by the setup-routine at boot-time
  */
@@ -101,7 +101,17 @@ void get_cpu_topology_info() {
 /* 初始化APs，包括让AP进入保护模式，开启中断，初始化段寄存器使其指向内核代码段等等 */
 void init_ap() {
 	__asm__(
-	/**************************** Relocating the Local APIC Registers of BSP **********************************************/
+	/*
+	 * *************************** Relocating the Local APIC Registers of BSP *********************************************
+	 * 看过Intel手册关于MSRs寄存器族的都知道，每个processor的Local APIC registers寄存器默认都是映射到内存的0xFEE00000地址处的，
+	 * 所以通过RW该内存地址，就可以操作APIC寄存是发送IPI消息，但是我们的内核线性地址空间最大只有1G，所以超出的部分，要么进行remap，要么就对APIC registers
+	 * 的内存映射地址进行relocate，用于发送IPI消息的ICR寄存器的地址默认是0xFEE00300,直接读写0xFEE00300内存地址会报错。以下代码就是对其基地址进行relocate操作。
+	 * 每个processor都有自己私有的MSRs寄存器族，地址都是从0开始的(注意这里要和内存地址区分开来)，利用rdmsr和wrmsr来读写这些MSRs，地址1B处就是用来relocate
+	 * APIC registers内存基地址的。
+	 * 到这里终于明白为什么现代OS要把内核的线性地址空间放在4G线性地址空间的高1G地址空间了，因为大量的MSRs寄存器都是映射到高地址空间的，这样就不用重映射了,
+	 * 当然对于多核CPU来说，还是要relocate的。
+	 */
+
 		"xor %%eax,%%eax\n\t" \
 		"xor %%edx,%%edx\n\t" \
 		"movl $0x1B,%%ecx\n\t" \
@@ -129,16 +139,18 @@ void init_ap() {
 	/**************************** 发送SIPI中断消息给APs **********************************************/
 		/* 发送 SIPI message */
 		"movl $0x000C4691,0(%%eax)\n\t" \
-		"mov $0x5,%%ecx\n\t" \
+		"mov $0x20,%%ecx\n\t" \
 	    "wait_loop_sipi:\n\t" \
 	    "dec %%ecx\n\t" \
 	    "nop\n\t" \
 	    "cmp $0x0,%%ecx\n\t" \
 	    "jne wait_loop_sipi\n\t" \
+		"jmp skip_return \n\t" /* 跳过发送IPI中断消息给AP，这里用作调试，todo remove */ \
 	/**************************** 等待APs处理SIPI中断结束 **********************************************/
 
 	/**************************** 发送IPI中断消息给APs **********************************************/
 		/* 发送 Fixed IPI message  */
+
 		"movl $0x000C407B,0(%%eax)\n\t" \
 		"mov $0x5,%%ecx\n\t" \
 		"wait_loop_ipi:\n\t" \
@@ -146,13 +158,14 @@ void init_ap() {
 		"nop\n\t" \
 		"cmp $0x0,%%ecx\n\t" \
 		"jne wait_loop_ipi\n\t" \
+		"skip_return:\n\t" \
 		::);
 	/**************************** 结束发送INIT中断消息给APs **********************************************/
-
 }
 
-void print_apic_id(int apic_id) {
-	printk("apic_id: %d \n\r", apic_id);
+/* 保存每个processor的apic-id,通过apic-id就可以解析处CPU的topology */
+void set_apic_id(long apic_index,long apic_id) {
+	apic_ids[apic_index] = apic_id;
 }
 
 /*
@@ -249,6 +262,8 @@ void main(void)		/* This really IS void, no error here. */
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	init_ap();
 	get_cpu_topology_info();
+	printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r", apic_ids[0],apic_ids[1],apic_ids[2],apic_ids[3]);
+
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

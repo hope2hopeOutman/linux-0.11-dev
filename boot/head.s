@@ -112,7 +112,7 @@ startup_32:
 	 * 这样做的目的是为了能根据内存实际大小，动态分配页表，管理最大4G的内存，并且最大化利用物理内存，同时利于物理内存管理。
 	 */
     movl $OS_PRELOAD_SIZE,%ecx   /* 总共要复制的字节数0x8000=32k */
-    movl $0x10000,%esi            /* origin addr */
+    movl $0x10000,%esi           /* origin addr */
     movl $OS_BASE_ADDR,%edi      /* dest addr */
     cld
     rep
@@ -185,6 +185,16 @@ init_temp_stack:
 	call do_hd_read_request
 	/* Pay much more Attenttion here, you must make sure all sectors has been loaded from HD before executing below command. */
 	cli
+
+	/* 设置BSP的apic_id */
+	movl $0x01,%eax
+	cpuid
+	shr $24,%ebx
+	pushl %ebx
+	pushl $0x00
+	call set_apic_id
+	popl %ebx
+	popl %ebx
 
 	lss stack_start,%esp
 	xorl %eax,%eax
@@ -520,10 +530,13 @@ total_memory_size:
 .align 4
 sync_semaphore:
     .long 0
+apic_index:
+    .long 1
 /* setup.s中，处理SIPI中断会用这段代码来初始化各个AP的段寄存器 */
 .org 0x4000
 sipi_segment_init:
-    mov $0x10,%eax
+    xor %eax,%eax
+    mov $0x10,%ax
     mov %ax,%ds
     mov %ax,%ss
     mov %ax,%fs
@@ -532,19 +545,40 @@ sipi_segment_init:
 lock_loop:
     cmp $0x00,%ds:sync_semaphore
     jne lock_loop
+    movl $0x01,%eax
 
-    lock
-    addl $1,%ds:sync_semaphore
-    cmp $0x00,%ds:sync_semaphore
-    je lock_loop
+    lock   /* xchg默认会加上lock前缀的，这里显示加上lock prefix是为了统一风格 */
+    xchg %eax,%ds:sync_semaphore
+    /*
+     * 这里有必要解释一下，为什么eax!=0就进入等待循环
+     * 因为xchg操作默认是加锁操作，所以第一个加锁成功的processor会把sync_semaphore设置为1，对应的eax设置为0(sync_semaphore初始化值为0)
+     * 其它加锁不成功的会block住，等到获得锁的processor写完sync_semaphore后，会自动释放锁，然后其它的processor再次竞争，这时加锁成功的第二个processor
+     * 会将自己对应的eax设置为1(因为此时的sync_semaphore已经被第一个processor设置为1了)，所以下面的cmp $0x00,%eax就好理解了，这也是Java中sync实现的基础，
+     * 通过这个操作，可以实现对大块内存或代码段的执行实现同步。
+     * 当然，至于lock操作是通过bus-lock实现的还是cacheline-lock实现的，这就和要写的内存的类型有关了，这就需要配置MTRR了。
+     * 1. 如果该块内存是WB(write back)类型的，就是cacheline-lock，这时是不会阻塞其它进程访问其它内存块的.
+     * 2. 如果该块内存是UC(uncacheable)类型的，就是bus-lock，这时会阻塞其它进程对内存的访问.
+     */
+    cmp $0x00,%eax
+    jne lock_loop
 
+    /*
+     * AP要想用call指令进行函数调用，必须要先初始化esp，因为power reset或init后APs的esp都是设置为0,
+     * 而此时系统的内核的页目录表是方式0x00地址处的，Ap的所有段的base也都是设置为0的，所以AP的函数调用操作对栈的操作，会覆盖内核的目录表项，
+     * 造成内核崩溃的，这点一定要注意。
+     * 当内核进入保护模式并开启了分页模式，此时内核的目录表和页表都已经初始化好了，也就是内核完成了对内核线性地址空间的物理内存的实地址映射，
+     * 所以这时，所有的中断操作，都会涉及到对栈的操作，这时一定要搞清楚栈的基地址是否在内存最开始的一页地址范围内，那是内核的目录表位置，千万别覆盖了。
+     */
     lss tmp_floppy_area,%esp
     movl $0x01,%eax
     cpuid
     shr $24,%ebx
     push %ebx
-    call print_apic_id
+    push %ds:apic_index
+    call set_apic_id
     pop %ebx
+    pop %ebx
+    addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
     hlt
 idle_loop:
