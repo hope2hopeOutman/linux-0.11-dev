@@ -564,7 +564,7 @@ lock_loop:
 
     /*
      * AP要想用call指令进行函数调用，必须要先初始化esp，因为power reset或init后APs的esp都是设置为0,
-     * 而此时系统的内核的页目录表是方式0x00地址处的，Ap的所有段的base也都是设置为0的，所以AP的函数调用操作对栈的操作，会覆盖内核的目录表项，
+     * 而此时系统的内核的页目录表是放置在0x00地址处的，Ap的所有段的base也都是设置为0的，所以AP的函数调用操作对栈的操作，会覆盖内核的目录表项，
      * 造成内核崩溃的，这点一定要注意。
      * 当内核进入保护模式并开启了分页模式，此时内核的目录表和页表都已经初始化好了，也就是内核完成了对内核线性地址空间的物理内存的实地址映射，
      * 所以这时，所有的中断操作，都会涉及到对栈的操作，这时一定要搞清楚栈的基地址是否在内存最开始的一页地址范围内，那是内核的目录表位置，千万别覆盖了。
@@ -573,11 +573,21 @@ lock_loop:
     movl $0x01,%eax
     cpuid
     shr $24,%ebx
+
     push %ebx
     push %ds:apic_index
     call set_apic_id
+    pop %eax
     pop %ebx
-    pop %ebx
+
+    /* 这时eax存储的是apic_index,所有这里作为参数传给alloc_ap_kernel_stack */
+    lea return_addr,%ebx
+    pushl %ebx
+    pushl %eax
+    call alloc_ap_kernel_stack
+return_addr:
+    pop %eax
+    pop %eax
     addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
     hlt

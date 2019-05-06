@@ -66,7 +66,8 @@ long HIGH_MEMORY  = 0;       /* Granularity is byte */
 
 struct drive_info { char dummy[32]; } drive_info;
 
-long apic_ids[16] = {0,};   /* 所有processor的apicId存储在这里 */
+long apic_ids[LOGICAL_PROCESSOR_NUM] = {0,};         /* 所有processor的apicId存储在这里 */
+long ap_kernel_stack[LOGICAL_PROCESSOR_NUM] = {0,};  /* 每个AP内核栈的基地址，大小为page(4K) */
 /*
  * This is set up by the setup-routine at boot-time
  */
@@ -100,6 +101,9 @@ void get_cpu_topology_info() {
 }
 /* 初始化APs，包括让AP进入保护模式，开启中断，初始化段寄存器使其指向内核代码段等等 */
 void init_ap() {
+	for (int i=0;i<sizeof(ap_kernel_stack)/sizeof(long);i++) {
+		ap_kernel_stack[i] = get_free_page(PAGE_IN_REAL_MEM_MAP);
+	}
 	__asm__(
 	/*
 	 * *************************** Relocating the Local APIC Registers of BSP *********************************************
@@ -166,6 +170,24 @@ void init_ap() {
 /* 保存每个processor的apic-id,通过apic-id就可以解析处CPU的topology */
 void set_apic_id(long apic_index,long apic_id) {
 	apic_ids[apic_index] = apic_id;
+}
+
+void alloc_ap_kernel_stack(long ap_index, long return_addr) {
+	unsigned long stack_base = ap_kernel_stack[ap_index];
+
+	struct ap_stack_struct{
+		long* stack;
+		short selector;
+	} ap_stack = {(long*)(stack_base+4096), 0x10};
+    /*
+     * 在函数调用里用lss命令的时候一定要小心，要把函数返回的指令地址预先保存下来，
+     * 因为重置esp后，调用ret指令弹出的栈顶数据是不正确的，懂否哈哈，这个问题太tricky了，排查了好长时间，
+     * bochs的多核调试手段太匮乏了，不好用。 */
+	__asm__ ("lss %1,%%esp\n\t" \
+			 "pushl %%edx\n\t" \
+			 "ret\n\t" \
+			::"d" (return_addr),"m" (*(&ap_stack))
+			);
 }
 
 /*
@@ -263,7 +285,6 @@ void main(void)		/* This really IS void, no error here. */
 	init_ap();
 	get_cpu_topology_info();
 	printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r", apic_ids[0],apic_ids[1],apic_ids[2],apic_ids[3]);
-
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
