@@ -138,6 +138,7 @@ void free_inode(struct m_inode * inode)
 
 struct m_inode * new_inode(int dev)
 {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	struct super_block * sb;
 	struct buffer_head * bh;

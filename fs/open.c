@@ -43,6 +43,7 @@ int sys_utime(char * filename, struct utimbuf * times) {
  * so as to make this call useful to setuid programs.
  */
 int sys_access(const char * filename, int mode) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	int res, i_mode;
 
@@ -69,6 +70,7 @@ int sys_access(const char * filename, int mode) {
 }
 
 int sys_chdir(const char * filename) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 
 	if (!(inode = namei(filename)))
@@ -83,6 +85,7 @@ int sys_chdir(const char * filename) {
 }
 
 int sys_chroot(const char * filename) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 
 	if (!(inode = namei(filename)))
@@ -97,6 +100,7 @@ int sys_chroot(const char * filename) {
 }
 
 int sys_chmod(const char * filename, int mode) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 
 	if (!(inode = namei(filename)))
@@ -128,6 +132,7 @@ int sys_chown(const char * filename, int uid, int gid) {
 }
 
 int sys_open(const char * filename, int flag, int mode) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	struct file * f;
 	int i, fd;
@@ -203,6 +208,7 @@ int sys_creat(const char * pathname, int mode) {
 }
 
 int sys_close(unsigned int fd) {
+	struct task_struct* current = get_current_task();
 	struct file * filp;
 
 	if (fd >= NR_OPEN)

@@ -24,6 +24,7 @@ extern int file_write(struct m_inode * inode, struct file * filp,
 
 int sys_lseek(unsigned int fd,off_t offset, int origin)
 {
+	struct task_struct* current = get_current_task();
 	struct file * file;
 	int tmp;
 
@@ -54,6 +55,7 @@ int sys_lseek(unsigned int fd,off_t offset, int origin)
 
 int sys_read(unsigned int fd,char * buf,int count)
 {
+	struct task_struct* current = get_current_task();
 	struct file * file;
 	struct m_inode * inode;
 
@@ -82,6 +84,7 @@ int sys_read(unsigned int fd,char * buf,int count)
 
 int sys_write(unsigned int fd,char * buf,int count)
 {
+	struct task_struct* current = get_current_task();
 	struct file * file;
 	struct m_inode * inode;
 

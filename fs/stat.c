@@ -46,6 +46,7 @@ int sys_stat(char * filename, struct stat * statbuf)
 
 int sys_fstat(unsigned int fd, struct stat * statbuf)
 {
+	struct task_struct* current = get_current_task();
 	struct file * f;
 	struct m_inode * inode;
 

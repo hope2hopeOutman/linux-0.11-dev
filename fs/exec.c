@@ -187,6 +187,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 
 unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long code_limit,data_limit,code_base,data_base;
 	int i;
 
@@ -228,6 +229,7 @@ unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 int do_execve(unsigned long * eip,long tmp,char * filename,
 	char ** argv, char ** envp)  /* 这里的tmp是call _sys_call_table 压入的返回地址，所以这里用不到。  */
 {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	struct buffer_head * bh;
 	struct exec ex;

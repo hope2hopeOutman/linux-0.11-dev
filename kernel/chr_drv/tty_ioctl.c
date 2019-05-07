@@ -114,6 +114,7 @@ static int set_termio(struct tty_struct * tty, struct termio * termio)
 
 int tty_ioctl(int dev, int cmd, int arg)
 {
+	struct task_struct* current = get_current_task();
 	struct tty_struct * tty;
 	if (MAJOR(dev) == 5) {
 		dev=current->tty;

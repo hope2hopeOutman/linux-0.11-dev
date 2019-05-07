@@ -140,6 +140,7 @@ int create_block(struct m_inode * inode, int block) {
 }
 
 void iput(struct m_inode * inode) {
+	struct task_struct* current = get_current_task();
 	if (!inode)
 		return;
 	wait_on_inode(inode);

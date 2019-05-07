@@ -121,6 +121,7 @@ void tty_intr(struct tty_struct * tty, int mask)
 
 static void sleep_if_empty(struct tty_queue * queue)
 {
+	struct task_struct* current = get_current_task();
 	cli();
 	while (!current->signal && EMPTY(*queue))
 		interruptible_sleep_on(&queue->proc_list);
@@ -129,6 +130,7 @@ static void sleep_if_empty(struct tty_queue * queue)
 
 static void sleep_if_full(struct tty_queue * queue)
 {
+	struct task_struct* current = get_current_task();
 	if (!FULL(*queue))
 		return;
 	cli();
@@ -229,6 +231,7 @@ void copy_to_cooked(struct tty_struct * tty)
 
 int tty_read(unsigned channel, char * buf, int nr)
 {
+	struct task_struct* current = get_current_task();
 	struct tty_struct * tty;
 	char c, * b=buf;
 	int minimum,time,flag=0;
@@ -289,6 +292,7 @@ int tty_read(unsigned channel, char * buf, int nr)
 
 int tty_write(unsigned channel, char * buf, int nr)
 {
+	struct task_struct* current = get_current_task();
 	static cr_flag=0;
 	struct tty_struct * tty;
 	char c, *b=buf;

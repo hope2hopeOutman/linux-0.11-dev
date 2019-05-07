@@ -48,7 +48,7 @@ extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY, memory_end, total_memory_size;
 
 
 #define CODE_SPACE(addr) ((((addr)+4095)&~4095) < \
-current->start_code + current->end_code)
+		get_current_task()->start_code + get_current_task()->end_code)
 
 #define copy_page(from,to) \
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
@@ -80,6 +80,7 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long* dir_item         = (unsigned long*)(current->tss.cr3 + (linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
 	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
 	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
@@ -90,6 +91,7 @@ void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 /* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long remap_linear_addr(unsigned long phy_addr)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long linear_addr = 0;
 	for (int i=0; i< KERNEL_REMAP_ADDR_SPACE; i++)
 	{
@@ -254,6 +256,7 @@ int free_page(unsigned long addr)
  */
 int free_page_tables(unsigned long from,unsigned long size, struct task_struct* task_p)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long *pg_table = 0;
 	unsigned long * dir = 0;
 	unsigned long nr = 0, pti_size = 1024;
@@ -326,6 +329,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
  */
 int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_struct* new_task)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long * from_page_table = 0;
 	unsigned long * to_page_table = 0;  /* 这两个变量也是，一定要初始化为0，凡是有++或--操作的一定要先初始化，不然栈上的old_value会是你的噩梦。 */
 	unsigned long this_page = 0;
@@ -469,6 +473,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
  */
 unsigned long put_page(unsigned long page,unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long tmp, *page_table;
 
     /* NOTE !!! This uses the fact that kernel_pg_dir=0 */
@@ -501,6 +506,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 /* 处理写保护异常，table_entry是页表中某个页表项的物理地址，不是线性地址搞清楚喽。 */
 void un_wp_page(unsigned long * table_entry)
 {
+	struct task_struct* current = get_current_task();
 	//printk("table_entry: %p \n\r", table_entry);
 	unsigned long* old_page = 0;
 	unsigned long* new_page = 0;
@@ -563,6 +569,7 @@ void un_wp_page(unsigned long * table_entry)
  */
 void do_wp_page(unsigned long error_code,unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 #if 0
 /* we cannot do this yet: the estdio library writes to code space */
 /* stupid, stupid. I really want the libc.a from GNU */
@@ -585,6 +592,7 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 /* address是线性地址且是4K align */
 void write_verify(unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long * page_table_entry;  /* 注意：该变量存储的是页表项的物理地址，不是线性地址哦。 */
 	unsigned long * page_table;
 	/* 计算该地址对应的目录项地址，从而可以获取对应页表的基地址,也是物理地址 */
@@ -632,6 +640,7 @@ void get_empty_page(unsigned long address)
  */
 int try_to_share(unsigned long address_offset, struct task_struct * p)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long from;
 	unsigned long to;
 	unsigned long* from_page;
@@ -708,6 +717,7 @@ int try_to_share(unsigned long address_offset, struct task_struct * p)
  */
 int share_page(unsigned long address_offset)
 {
+	struct task_struct* current = get_current_task();
 	struct task_struct ** p;
 
 	if (!current->executable)
@@ -729,6 +739,7 @@ int share_page(unsigned long address_offset)
 /* 注意：这里的address是出错的线性地址,这地址可不是4K对齐的 */
 void do_no_page(unsigned long error_code,unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 	int nr[4];
 	unsigned long tmp;
 	unsigned long* page;

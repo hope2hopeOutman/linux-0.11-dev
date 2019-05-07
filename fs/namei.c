@@ -37,6 +37,7 @@
  * uid, but that should be easily changed.
  */
 static int permission(struct m_inode * inode, int mask) {
+	struct task_struct* current = get_current_task();
 	int mode = inode->i_mode;
 
 	/* special case: not even root can read/write a deleted file */
@@ -235,6 +236,7 @@ static struct buffer_head * add_entry(struct m_inode * dir, const char * name,
  * It returns NULL on failure.
  */
 static struct m_inode * get_dir(const char * pathname) {
+	struct task_struct* current = get_current_task();
 	char c;
 	const char * thisname;
 	struct m_inode * inode;
@@ -353,6 +355,7 @@ struct m_inode * namei(const char * pathname) {
  */
 int open_namei(const char * pathname, int flag, int mode,
 		struct m_inode ** res_inode) {
+	struct task_struct* current = get_current_task();
 	const char * basename;
 	int inr, dev, namelen;
 	struct m_inode * dir, *inode;
@@ -480,6 +483,7 @@ int sys_mknod(const char * filename, int mode, int dev) {
 }
 
 int sys_mkdir(const char * pathname, int mode) {
+	struct task_struct* current = get_current_task();
 	const char * basename;
 	int namelen;
 	struct m_inode * dir, *inode;
@@ -677,6 +681,7 @@ int sys_rmdir(const char * name) {
 }
 
 int sys_unlink(const char * name) {
+	struct task_struct* current = get_current_task();
 	const char * basename;
 	int namelen;
 	struct m_inode * dir, *inode;

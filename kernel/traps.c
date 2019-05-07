@@ -62,6 +62,7 @@ void irq13(void);
 
 static void die(char * str,long esp_ptr,long nr)
 {
+	struct task_struct* current = get_current_task();
 	long * esp = (long *) esp_ptr;
 	int i;
 

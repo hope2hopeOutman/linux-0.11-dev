@@ -37,6 +37,7 @@ void release(struct task_struct * p)
 
 static inline int send_sig(long sig,struct task_struct * p,int priv)
 {
+	struct task_struct* current = get_current_task();
 	if (!p || sig<1 || sig>32)
 		return -EINVAL;
 	if (priv || (current->euid==p->euid) || suser())
@@ -48,6 +49,7 @@ static inline int send_sig(long sig,struct task_struct * p,int priv)
 
 static void kill_session(void)
 {
+	struct task_struct* current = get_current_task();
 	struct task_struct **p = NR_TASKS + task;
 	
 	while (--p > &FIRST_TASK) {
@@ -62,6 +64,7 @@ static void kill_session(void)
  */
 int sys_kill(int pid,int sig)
 {
+	struct task_struct* current = get_current_task();
 	struct task_struct **p = NR_TASKS + task;
 	int err, retval = 0;
 
@@ -104,6 +107,7 @@ static void tell_father(int pid)
 
 int do_exit(long code)
 {
+	struct task_struct* current = get_current_task();
 	int i;
 
 	//printk("do_exit call free_page_tables before\n\r");
@@ -147,6 +151,7 @@ int sys_exit(int error_code)
 
 int sys_waitpid(pid_t pid,unsigned long * stat_addr, int options)
 {
+	struct task_struct* current = get_current_task();
 	int flag, code;
 	struct task_struct ** p;
 

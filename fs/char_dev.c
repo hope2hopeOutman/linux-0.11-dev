@@ -26,6 +26,7 @@ static int rw_ttyx(int rw,unsigned minor,char * buf,int count,off_t * pos)
 
 static int rw_tty(int rw,unsigned minor,char * buf,int count, off_t * pos)
 {
+	struct task_struct* current = get_current_task();
 	if (current->tty<0)
 		return -EPERM;
 	return rw_ttyx(rw,current->tty,buf,count,pos);

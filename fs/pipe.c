@@ -48,6 +48,7 @@ int read_pipe(struct m_inode * inode, char * buf, int count)
 	
 int write_pipe(struct m_inode * inode, char * buf, int count)
 {
+	struct task_struct* current = get_current_task();
 	int chars, size, written = 0;
 
 	while (count>0) {
@@ -101,6 +102,7 @@ int write_pipe(struct m_inode * inode, char * buf, int count)
 
 int sys_pipe(unsigned long * fildes)
 {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	struct file * f[2];
 	int fd[2];

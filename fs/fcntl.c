@@ -17,6 +17,7 @@ extern int sys_close(int fd);
 
 static int dupfd(unsigned int fd, unsigned int arg)
 {
+	struct task_struct* current = get_current_task();
 	if (fd >= NR_OPEN || !current->filp[fd])
 		return -EBADF;
 	if (arg >= NR_OPEN)
@@ -46,6 +47,7 @@ int sys_dup(unsigned int fildes)
 
 int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg)
 {	
+	struct task_struct* current = get_current_task();
 	struct file * filp;
 
 	if (fd >= NR_OPEN || !(filp = current->filp[fd]))

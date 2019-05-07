@@ -22,6 +22,7 @@ extern void write_verify(unsigned long address);
 long last_pid = 0;
 
 void verify_area(void * addr, int size) {
+	struct task_struct* current = get_current_task();
 	unsigned long start;
 
 	start = (unsigned long) addr;
@@ -65,6 +66,7 @@ int copy_mem(int nr, struct task_struct * p) {
 int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		long ebx, long ecx, long edx, long fs, long es, long ds, long eip,
 		long cs, long eflags, long esp, long ss) {
+	struct task_struct* current = get_current_task();
 	struct task_struct *p;
 	int i;
 	struct file *f;

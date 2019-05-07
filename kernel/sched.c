@@ -59,7 +59,8 @@ static union task_union init_task = {INIT_TASK,};
 
 long volatile jiffies=0;
 long startup_time=0;
-struct task_struct *current = &(init_task.task);
+//struct task_struct *current = &(init_task.task);
+struct task_struct *current_per_apic[LOGICAL_PROCESSOR_NUM] = {&(init_task.task),&(init_task.task),&(init_task.task),&(init_task.task)};
 struct task_struct *last_task_used_math = NULL;
 struct task_struct * task[NR_TASKS] = {&(init_task.task), };
 long user_stack [ PAGE_SIZE>>2 ];
@@ -67,12 +68,25 @@ struct {
 	long * a;
 	short b;
 	} stack_start = {&user_stack[PAGE_SIZE>>2] , 0x10};
+
+/* 获取当前processor正在运行的任务 */
+struct task_struct* get_current_task(){
+	register long apic_id asm("eax");
+	__asm__ ("movl $0x01,%%eax\n\t" \
+			 "cpuid\n\t" \
+			 "shr $24,%%ebx\n\t" \
+			 :"=b" (apic_id):
+			);
+	return current_per_apic[apic_id];
+}
+
 /*
  *  'math_state_restore()' saves the current math information in the
  * old math state array, and gets the new ones from the current task
  */
 void math_state_restore()
 {
+	struct task_struct* current = get_current_task();
 	if (last_task_used_math == current)
 		return;
 	__asm__("fwait");
@@ -143,6 +157,7 @@ void schedule(void)
 
 int sys_pause(void)
 {
+	struct task_struct* current = get_current_task();
 	current->state = TASK_INTERRUPTIBLE;
 	schedule();
 	return 0;
@@ -150,6 +165,7 @@ int sys_pause(void)
 
 void sleep_on(struct task_struct **p)
 {
+	struct task_struct* current = get_current_task();
 	struct task_struct *tmp;
 
 	if (!p)
@@ -166,6 +182,7 @@ void sleep_on(struct task_struct **p)
 
 void interruptible_sleep_on(struct task_struct **p)
 {
+	struct task_struct* current = get_current_task();
 	struct task_struct *tmp;
 
 	if (!p)
@@ -305,6 +322,7 @@ void add_timer(long jiffies, void (*fn)(void))
 
 void do_timer(long cpl)
 {
+	struct task_struct* current = get_current_task();
 	extern int beepcount;
 	extern void sysbeepstop(void);
 
@@ -338,6 +356,7 @@ void do_timer(long cpl)
 
 int sys_alarm(long seconds)
 {
+	struct task_struct* current = get_current_task();
 	int old = current->alarm;
 
 	if (old)
@@ -348,36 +367,43 @@ int sys_alarm(long seconds)
 
 int sys_getpid(void)
 {
+	struct task_struct* current = get_current_task();
 	return current->pid;
 }
 
 int sys_getppid(void)
 {
+	struct task_struct* current = get_current_task();
 	return current->father;
 }
 
 int sys_getuid(void)
 {
+	struct task_struct* current = get_current_task();
 	return current->uid;
 }
 
 int sys_geteuid(void)
 {
+	struct task_struct* current = get_current_task();
 	return current->euid;
 }
 
 int sys_getgid(void)
 {
+	struct task_struct* current = get_current_task();
 	return current->gid;
 }
 
 int sys_getegid(void)
 {
+	struct task_struct* current = get_current_task();
 	return current->egid;
 }
 
 int sys_nice(long increment)
 {
+	struct task_struct* current = get_current_task();
 	if (current->priority-increment>0)
 		current->priority -= increment;
 	return 0;
