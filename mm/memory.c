@@ -55,6 +55,7 @@ __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 unsigned char linear_addr_swap_map[KERNEL_REMAP_ADDR_SPACE] = {0,};
+unsigned long page_lock_semaphore = 0;  /* 用于同步get_free_page方法 */
 /*
  * 当完成对>1G的一页物理地址的重映射并对这一页物理内存初始化后，就会将该物理地址设置到进程用户空间对应的页表项中，这样进程在用户太就可以读写该>1G的一页物理内存了
  * 这个时候，我们要将linear_addr_swap_map数组中对应的线性地址的占用标志位设置为0，表明该线性地址可以被映射到其他>(1G-128M)的物理地址。
@@ -150,6 +151,12 @@ unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigne
  */
 unsigned long get_free_page(int real_space)
 {
+/*
+ * 首先获得同步锁，然后才能执行页面请求操作
+ * 这里还没有配置MTRR,所以page_lock_semaphore是不会缓存的，施加的是bus-lock，
+ * 后面会将共享变量设置为WB类型，这样施加的就是cacheline-lock,这样效率就高多了。
+ */
+lock_op(&page_lock_semaphore);
 
 register unsigned long __res asm("ax");
 unsigned long compare_addr = KERNEL_LINEAR_ADDR_SPACE;
@@ -208,6 +215,9 @@ __asm__("std ; repne ; scasb\n\t"
 	:"=a" (__res)
 	:"0" (0),"r" (paging_start),"c" (paging_num),
 	"D" (paging_end), "b" (compare_addr));
+
+/* 要在返回之前释放同步锁 */
+unlock_op(&page_lock_semaphore);
 return __res;
 }
 

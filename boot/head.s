@@ -532,6 +532,7 @@ sync_semaphore:
     .long 0
 apic_index:
     .long 1
+
 /* setup.s中，处理SIPI中断会用这段代码来初始化各个AP的段寄存器 */
 .org 0x4000
 sipi_segment_init:
