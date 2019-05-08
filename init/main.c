@@ -153,7 +153,7 @@ void init_ap() {
 	/**************************** 发送IPI中断消息给APs **********************************************/
 		/* 发送 Fixed IPI message  */
 
-		"movl $0x000C407B,0(%%eax)\n\t" \
+		"movl $0x000C4081,0(%%eax)\n\t" \
 		"mov $0x5,%%ecx\n\t" \
 		"wait_loop_ipi:\n\t" \
 		"dec %%ecx\n\t" \

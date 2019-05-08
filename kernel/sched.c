@@ -61,6 +61,14 @@ long volatile jiffies=0;
 long startup_time=0;
 //struct task_struct *current = &(init_task.task);
 struct task_struct *current_per_apic[LOGICAL_PROCESSOR_NUM] = {&(init_task.task),&(init_task.task),&(init_task.task),&(init_task.task)};
+/*
+ * 每次调用shedule方法，就会将task分配到指定processorN上运行，就会递增相应sched_cnt_per_apic[N]上的数值，表示processor的负载，
+ * 数值越大表明该processorN比较繁忙，可以将task调度到其他processor上运行。
+ * 这里将BSP用作Master processor，APs用作slave processor，slave上任务的运行全靠master调度，这时AP上的apic timer都是禁用的，不能定时自主调度任务，
+ * 这里这样做的目的是：想先易后难，等这一步走通了，后面会开启所有processor的apic timer，让每个processor都能定时自主调度任务。
+ * 为什么要这样？通过我之前的惨痛经历和教训来看，内核代码的改造，一定要先易后难，先把技术链路打通能运行起来，然后再迭代优化，一股脑把自己的想法一次性全堆上，调试起来会搞死你。
+ */
+unsigned long load_per_apic[LOGICAL_PROCESSOR_NUM] = {0,};
 struct task_struct *last_task_used_math = NULL;
 struct task_struct * task[NR_TASKS] = {&(init_task.task), };
 long user_stack [ PAGE_SIZE>>2 ];
@@ -71,13 +79,46 @@ struct {
 
 /* 获取当前processor正在运行的任务 */
 struct task_struct* get_current_task(){
+	return current_per_apic[get_current_task()];
+}
+
+unsigned long get_current_apic_id(){
 	register long apic_id asm("eax");
 	__asm__ ("movl $0x01,%%eax\n\t" \
 			 "cpuid\n\t" \
 			 "shr $24,%%ebx\n\t" \
 			 :"=b" (apic_id):
 			);
-	return current_per_apic[apic_id];
+	return apic_id;
+}
+
+unsigned long get_min_load_apic_id() {
+	unsigned long apic_index = 0;
+	int overload = 0;
+	if (load_per_apic[apic_index] == 0xFFFFFFFF) {
+		++overload;
+	}
+	for (int i=1;i<LOGICAL_PROCESSOR_NUM;i++) {
+		if (load_per_apic[i] == 0xFFFFFFFF) {
+			++overload;
+			continue;
+		}
+		if (load_per_apic[apic_index] > load_per_apic[i]) {
+			apic_index = i;
+		}
+	}
+	if (overload == LOGICAL_PROCESSOR_NUM) {
+		reset_cpu_load();
+		return apic_ids[LOGICAL_PROCESSOR_NUM-1];
+	}
+
+	return apic_ids[apic_index];
+}
+
+void reset_cpu_load() {
+	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
+		load_per_apic[i] = 0;
+	}
 }
 
 /*
@@ -116,15 +157,23 @@ void schedule(void)
 {
 	int i,next,c;
 	struct task_struct ** p;
-
 /* check alarm, wake up any interruptible tasks that have got a signal */
+
+	unsigned long current_apic_id = get_current_apic_id();
+	if (current_apic_id == apic_ids[0]) {  /* 调度任务发生在BSP上 */
+		unsigned long sched_apic_id = get_min_load_apic_id();
+		if (sched_apic_id != current_apic_id) {
+			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
+
+		}
+	}
 
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 		if (*p) {
 			if ((*p)->alarm && (*p)->alarm < jiffies) {
 					(*p)->signal |= (1<<(SIGALRM-1));
 					(*p)->alarm = 0;
-				}
+			}
 			if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&
 			(*p)->state==TASK_INTERRUPTIBLE)
 				(*p)->state=TASK_RUNNING;
@@ -152,6 +201,8 @@ void schedule(void)
 	/*if (next > 0){
 		printk("do_next: %d \n\r", next);
 	}*/
+
+
 	switch_to(next);
 }
 

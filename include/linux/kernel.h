@@ -19,5 +19,5 @@ void free_s(void * obj, int size);
  * privs).  The implication of this is that you should do normal
  * permissions checks first, and check suser() last.
  */
-#define suser() (get_current_task()->euid == 0)
+#define suser() (((struct task_struct*)get_current_task())->euid == 0)
 
