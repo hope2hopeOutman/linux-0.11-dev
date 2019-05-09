@@ -60,7 +60,7 @@ static union task_union init_task = {INIT_TASK,};
 long volatile jiffies=0;
 long startup_time=0;
 //struct task_struct *current = &(init_task.task);
-struct task_struct *current_per_apic[LOGICAL_PROCESSOR_NUM] = {&(init_task.task),&(init_task.task),&(init_task.task),&(init_task.task)};
+struct task_struct *current_per_apic[LOGICAL_PROCESSOR_NUM] = {&(init_task.task),0,0,0};
 /*
  * 每次调用shedule方法，就会将task分配到指定processorN上运行，就会递增相应sched_cnt_per_apic[N]上的数值，表示processor的负载，
  * 数值越大表明该processorN比较繁忙，可以将task调度到其他processor上运行。
@@ -122,6 +122,30 @@ void reset_cpu_load() {
 }
 
 /*
+ * 向指定的AP发送IPI中断消息,要先写ICR的高32位，因为写低32位就会触发IPI了，
+ * 所以要现将apic_id写到destination field,然后再触发IPI。
+ */
+void send_IPI(int apic_id, int v_num) {
+__asm__ ("movl $BSP_APIC_ICR_RELOCATION+4,%%edx\n\t" \
+		 "shll $24,%%eax\n\t" \
+		 "movl %%eax,0(%%edx)\n\t"       /* 设置ICR高32位中的destination field */  \
+		 "movl $BSP_APIC_ICR_RELOCATION,%%edx\n\t" \
+		 "addl $0x00004000,%%ebx\n\t" \
+		 "movl %%ebx,0(%%edx)\n\t"       /* 设置ICR低32位的vector field */   \
+		 "wait_loop_ipi:\n\t" \
+		 "mov 0(%%edx),%%eax\n\t" \
+		 "andl $0x00001000,%%eax\n\t"    /* 判断ICR低32位的delivery status field, 0: idle, 1: send pending */  \
+		 "cmpl $0x00,%%eax\n\t" \
+		 "jne wait_loop_ipi\n\t" \
+		 ::"a" (apic_id),"b" (v_num));
+}
+
+/* 发送中断处理结束信号： end of interrupt */
+void send_EOI() {
+
+}
+
+/*
  *  'math_state_restore()' saves the current math information in the
  * old math state array, and gets the new ones from the current task
  */
@@ -159,15 +183,6 @@ void schedule(void)
 	struct task_struct ** p;
 /* check alarm, wake up any interruptible tasks that have got a signal */
 
-	unsigned long current_apic_id = get_current_apic_id();
-	if (current_apic_id == apic_ids[0]) {  /* 调度任务发生在BSP上 */
-		unsigned long sched_apic_id = get_min_load_apic_id();
-		if (sched_apic_id != current_apic_id) {
-			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
-
-		}
-	}
-
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 		if (*p) {
 			if ((*p)->alarm && (*p)->alarm < jiffies) {
@@ -189,19 +204,37 @@ void schedule(void)
 		while (--i) {
 			if (!*--p)
 				continue;
-			if ((*p)->state == TASK_RUNNING && (*p)->counter > c)
+			if ((*p)->state == TASK_RUNNING && (*p)->counter > c && (*p)->sched_on_ap == 0) {
 				c = (*p)->counter, next = i;
+			}
 		}
 		if (c) break;
-		for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
-			if (*p)
-				(*p)->counter = ((*p)->counter >> 1) +
-						(*p)->priority;
+		for(p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
+			if (*p) {
+				(*p)->counter = ((*p)->counter >> 1) + (*p)->priority;
+			}
+		}
 	}
-	/*if (next > 0){
-		printk("do_next: %d \n\r", next);
-	}*/
 
+	unsigned long current_apic_id = get_current_apic_id();
+	if (current_apic_id == apic_ids[0]) {  /* 调度任务发生在BSP上 */
+		unsigned long sched_apic_id = get_min_load_apic_id();
+		/* 这里禁止BSP将task[0]和task[1]调度到AP上执行 */
+		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
+			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
+			send_IPI(sched_apic_id, SCHED_INTR_NO);
+		}
+	}
+	else {  /* 调度任务发生在AP上，这时AP只能调度除task[0]和task[1]之外的任务，后面会开启AP的timer自主调度。 */
+		if (task[next] == task[0] || task[next] == task[1]) {
+			if (get_current_task() != 0) {  /* 这里要注意在执行sys_exit系统调用的时候一定要遍历所有AP的current，将对应的current清空 */
+				return; /* 如果AP有已经执行过的task,这时不调度，继续执行老的task. */
+			}
+			else {
+				/* halt等待新的调度IPI */
+			}
+		}
+	}
 
 	switch_to(next);
 }
@@ -401,7 +434,7 @@ void do_timer(long cpl)
 		do_floppy_timer();
 	if ((--current->counter)>0) return;
 	current->counter=0;
-	if (!cpl) return;
+	if (!cpl) return;  /* 这里可以看出内核态是不支持进程调度的，其他的外部中断除外 */
 	schedule();
 }
 

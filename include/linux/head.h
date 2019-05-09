@@ -73,4 +73,9 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define OS_INIT_PARAMS_ADDR       0x90000  /* granularity byte,系统初始化参数在boot阶段存放的地址，后面会复制到内核高地址空间。 */
 
 #define LOGICAL_PROCESSOR_NUM       0x04    /* 这里设置有4个processor */
+#define BSP_APIC_REGS_RELOCATION  0x20000   /* BSP Local APIC Registers在内存中的remap */
+#define BSP_APIC_ICR_RELOCATION   0x20300   /* BSP ICR(Interrupt command register) 在内存中的位置 */
+
+#define SCHED_INTR_NO         0x82      /* AP响应BSP发来的进程调度IPI中断号 */
+
 #endif

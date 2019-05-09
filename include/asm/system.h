@@ -1,17 +1,22 @@
+/*
+ * 这里有必要解释一下：这时的esp就是head.s中"lss stack_start,%esp"加载的值，所以说内核初始化的时候虽然处于内核态，但是用的是用户栈。
+ * 这里利用iret指令返回用户态后，用的还是stack_start栈，这时就是在用户态下运行task0了,之前的初始化过程是没有任务概念的。
+ * 当task0通过系统调用sys_pause进入内核态后，用的就是task0自己的内核栈了，也就是init_task结构体中esp0，这点也是挺tricky的。
+ */
 #define move_to_user_mode() \
-__asm__ ("movl %%esp,%%eax\n\t" \
-	"pushl $0x17\n\t" \
-	"pushl %%eax\n\t" \
-	"pushfl\n\t" \
-	"pushl $0x0f\n\t" \
-	"pushl $1f\n\t" \
-	"iret\n" \
-	"1:\tmovl $0x17,%%eax\n\t" \
-	"movw %%ax,%%ds\n\t" \
-	"movw %%ax,%%es\n\t" \
-	"movw %%ax,%%fs\n\t" \
-	"movw %%ax,%%gs" \
-	:::"ax")
+__asm__("movl %%esp,%%eax\n\t"   \
+		"pushl $0x17\n\t" \
+		"pushl %%eax\n\t" \
+		"pushfl\n\t" \
+		"pushl $0x0f\n\t" \
+		"pushl $1f\n\t" \
+		"iret\n" \
+		"1:\tmovl $0x17,%%eax\n\t" \
+		"movw %%ax,%%ds\n\t" \
+		"movw %%ax,%%es\n\t" \
+		"movw %%ax,%%fs\n\t" \
+		"movw %%ax,%%gs" \
+		:::"ax")
 
 #define sti() __asm__ ("sti"::)
 #define cli() __asm__ ("cli"::)

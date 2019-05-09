@@ -65,9 +65,14 @@ long LOW_MEM      = 0;       /* Granularity is byte */
 long HIGH_MEMORY  = 0;       /* Granularity is byte */
 
 struct drive_info { char dummy[32]; } drive_info;
-
-long apic_ids[LOGICAL_PROCESSOR_NUM] = {0,};         /* 所有processor的apicId存储在这里 */
+struct apic_info {
+	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
+	unsigned long apic_id;
+	unsigned long apic_regs_addr;
+};
+struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM] = {0,};         /* 所有processor的apicId存储在这里 */
 long ap_kernel_stack[LOGICAL_PROCESSOR_NUM] = {0,};  /* 每个AP内核栈的基地址，大小为page(4K) */
+
 /*
  * This is set up by the setup-routine at boot-time
  */
@@ -119,7 +124,7 @@ void init_ap() {
 		"movl $0x1B,%%ecx\n\t" \
 		"rdmsr\n\t" \
 		"and $0x00000FFF,%%eax\n\t" \
-        "add $0x00020000,%%eax\n\t" \
+        "add $BSP_APIC_REGS_RELOCATION,%%eax\n\t" \
 		"wrmsr\n\t" \
 		"xor %%eax,%%eax\n\t" \
 		"xor %%edx,%%edx\n\t" \
@@ -127,7 +132,7 @@ void init_ap() {
     /**************************** Relocating the Local APIC Registers of BSP **********************************************/
 
 	/**************************** 发送INIT中断消息给APs **********************************************/
-	    "movl $0x20300,%%eax\n\t" \
+	    "movl $BSP_APIC_ICR_RELOCATION,%%eax\n\t" \
 		/* 发送 INIT message */
 	    "movl $0x000C4500,0(%%eax)\n\t" \
 	    "mov $0x5,%%ecx\n\t" \
@@ -170,6 +175,7 @@ void set_apic_id(long apic_index,long apic_id) {
 	apic_ids[apic_index] = apic_id;
 }
 
+/* 为每个AP分配一个内核栈 */
 void alloc_ap_kernel_stack(long ap_index, long return_addr) {
 	unsigned long stack_base = ap_kernel_stack[ap_index];
 
@@ -186,6 +192,11 @@ void alloc_ap_kernel_stack(long ap_index, long return_addr) {
 			 "ret\n\t" \
 			::"d" (return_addr),"m" (*(&ap_stack))
 			);
+}
+
+/* 对Local APIC Registers的内存映射进行relocate. */
+void reloc_apic_regs_addr(long apic_index,long apic_id) {
+
 }
 
 /*
@@ -351,7 +362,7 @@ void init(void)
 			_exit(execve("/bin/sh",argv,envp));
 		}
 		while (1)
-			if (pid == wait(&i))
+			if (pid == wait(&i)) /* 登录Shell会一直存在的，所以task[1]会在这一直循环下去 */
 				break;
 		printf("\n\rchild %d died with code %04x\n\r",pid,i);
 		sync();

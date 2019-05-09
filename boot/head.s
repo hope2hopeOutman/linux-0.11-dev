@@ -581,6 +581,8 @@ lock_loop:
     pop %eax
     pop %ebx
 
+
+
     /* 这时eax存储的是apic_index,所有这里作为参数传给alloc_ap_kernel_stack */
     lea return_addr,%ebx
     pushl %ebx

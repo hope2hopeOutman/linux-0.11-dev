@@ -118,8 +118,8 @@ struct task_struct {
 	struct desc_struct ldt[3];
 /* tss for this task */
 	struct tss_struct tss;
-	/* 目录表的基地址，每个进程都有自己的目录表, tss_struct中的cr3存储的就是目录表基地址，所以这里可以注释掉了 */
-	//unsigned long * dir_addr;
+	/* 这个标志主要是为了防止，同一个进程被BSP调度到不同的AP上，同时执行，这样是有问题的，因为他们会共用相同的用户栈和内核栈， 以后会优化的。*/
+	int sched_on_ap;  /* 1: running on AP, 0: not */
 };
 
 /*
@@ -151,7 +151,7 @@ struct task_struct {
 	 _LDT(0),0x80000000, \
 		{} \
 	}, \
-/*进程0的目录表基地址(注意:这个地址是实际的物理地址，对于nr>1的进程用的时候一定要记住要减去进程的线性基地址)*/    (unsigned long*)0 \
+/*sched_on_ap=0，表示没有AP运行该task，可以被调度到AP上运行*/ 0 \
 }
 
 extern struct task_struct *task[NR_TASKS];
