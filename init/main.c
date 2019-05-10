@@ -65,13 +65,7 @@ long LOW_MEM      = 0;       /* Granularity is byte */
 long HIGH_MEMORY  = 0;       /* Granularity is byte */
 
 struct drive_info { char dummy[32]; } drive_info;
-struct apic_info {
-	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
-	unsigned long apic_id;
-	unsigned long apic_regs_addr;
-};
-struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM] = {0,};         /* 所有processor的apicId存储在这里 */
-long ap_kernel_stack[LOGICAL_PROCESSOR_NUM] = {0,};  /* 每个AP内核栈的基地址，大小为page(4K) */
+struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM] = {0,};       /* 所有processor的apicId存储在这里 */
 
 /*
  * This is set up by the setup-routine at boot-time
@@ -107,9 +101,22 @@ void get_cpu_topology_info() {
 /* 初始化APs，包括让AP进入保护模式，开启中断，初始化段寄存器使其指向内核代码段等等 */
 void init_ap() {
 	for (int i=0;i<sizeof(ap_kernel_stack)/sizeof(long);i++) {
-		ap_kernel_stack[i] = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		apic_ids[i].kernel_stack = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	}
+	apic_ids[0].bsp_flag = 1;  /* 这里的代码只有BSP能执行到，所以这里把apic_ids[0]设置为BSP。 */
+
 	__asm__(
+	/* *************************** Set Apic ID for BSP *************************************************/
+        "movl 0x01,%%eax\n\t"  \
+		"cpuid\n\t"            \
+		"shr $0x24,%%ebx\n\t"  \
+		"push %%ebx\n\t"       \
+		"push $0x00\n\t"       \
+		"call set_apic_id\n\t" \
+		"pop %%ebx\n\t"        \
+		"pop %%ebx\n\t"        \
+	/* *************************** End Set Apic ID for BSP *********************************************/
+
 	/* *************************** Relocating the Local APIC Registers of BSP *********************************************/
 	/* 看过Intel手册关于MSRs寄存器族的都知道，每个processor的Local APIC registers寄存器默认都是映射到内存的0xFEE00000地址处的，
 	 * 所以通过RW该内存地址，就可以操作APIC寄存是发送IPI消息，但是我们的内核线性地址空间最大只有1G，所以超出的部分，要么进行remap，要么就对APIC registers
@@ -119,16 +126,9 @@ void init_ap() {
 	 * 到这里终于明白为什么现代OS要把内核的线性地址空间放在4G线性地址空间的高1G地址空间了，因为大量的MSRs寄存器都是映射到高地址空间的，这样就不用重映射了,
 	 * 当然对于多核CPU来说，还是要relocate的。
 	 */
-		"xor %%eax,%%eax\n\t" \
-		"xor %%edx,%%edx\n\t" \
-		"movl $0x1B,%%ecx\n\t" \
-		"rdmsr\n\t" \
-		"and $0x00000FFF,%%eax\n\t" \
-        "add $BSP_APIC_REGS_RELOCATION,%%eax\n\t" \
-		"wrmsr\n\t" \
-		"xor %%eax,%%eax\n\t" \
-		"xor %%edx,%%edx\n\t" \
-		"rdmsr\n\t" \
+		"pushl $0x00\n\t"  /* apic_index */ \
+		"call init_apic_addr\n\t"  \
+		"popl %%eax\n\t" \
     /**************************** Relocating the Local APIC Registers of BSP **********************************************/
 
 	/**************************** 发送INIT中断消息给APs **********************************************/
@@ -172,12 +172,12 @@ void init_ap() {
 
 /* 保存每个processor的apic-id,通过apic-id就可以解析处CPU的topology */
 void set_apic_id(long apic_index,long apic_id) {
-	apic_ids[apic_index] = apic_id;
+	apic_ids[apic_index].apic_id = apic_id;
 }
 
 /* 为每个AP分配一个内核栈 */
 void alloc_ap_kernel_stack(long ap_index, long return_addr) {
-	unsigned long stack_base = ap_kernel_stack[ap_index];
+	unsigned long stack_base = apic_ids[ap_index].kernel_stack;
 
 	struct ap_stack_struct{
 		long* stack;
@@ -195,8 +195,24 @@ void alloc_ap_kernel_stack(long ap_index, long return_addr) {
 }
 
 /* 对Local APIC Registers的内存映射进行relocate. */
-void reloc_apic_regs_addr(long apic_index,long apic_id) {
+void reloc_apic_regs_addr(unsigned long addr) {
+__asm__("xor %%eax,%%eax\n\t" \
+		"xor %%edx,%%edx\n\t" \
+		"movl $0x1B,%%ecx\n\t" \
+		"rdmsr\n\t" \
+		"and $0x00000FFF,%%eax\n\t" \
+		"add %%ebx,%%eax\n\t" \
+		"wrmsr\n\t" \
+		"xor %%eax,%%eax\n\t"    /* just for test， todo remove */ \
+		"xor %%edx,%%edx\n\t" \
+		"rdmsr\n\t" \
+		::"b" (addr));
+}
 
+void init_apic_addr(int apic_index) {
+	unsigned long addr = BSP_APIC_REGS_RELOCATION + (apic_index*0x1000);  /* 为每个APIC的regs分配4K内存 */
+	reloc_apic_regs_addr(addr);
+	apic_ids[apic_index].apic_regs_addr = addr;
 }
 
 /*
@@ -293,7 +309,8 @@ void main(void)		/* This really IS void, no error here. */
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	init_ap();
 	get_cpu_topology_info();
-	printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r", apic_ids[0],apic_ids[1],apic_ids[2],apic_ids[3]);
+	printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
+			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

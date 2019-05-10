@@ -191,7 +191,7 @@ timer_interrupt:
 	movb $0x20,%al		# EOI to interrupt controller #1
 	outb %al,$0x20
 	movl CS(%esp),%eax  /* 这里将CS段选择符的值复制到eax,大家知道，段选择符的低3位分别是:(高1位: tableIndex(0-GDT表，1-LDT表)，低2位: CPL) */
-	andl $3,%eax		# %eax is CPL (0 or 3, 0=supervisor) 这里把CPL当作参数传递给do_timer，如果当前进程在内核态的话，是不会导致任务切换的。
+	andl $3,%eax		/* %eax is CPL (0 or 3, 0=supervisor) 这里把CPL当作参数传递给do_timer，如果当前进程在内核态的话，是不会导致任务切换的 */
 	pushl %eax
 	call do_timer		# 'do_timer(long CPL)' does everything from
 	addl $4,%esp		# task switching to accounting ...
@@ -297,4 +297,19 @@ parse_cpu_topology:
 	popl %ebx
 	popl %eax
 	iret
+
+handle_ipi_interrupt:
+	pushl %eax
+	pushl %ebx
+	pushl %ecx
+	pushl %edx
+	call send_EOI
+	call schedule
+	popl %edx
+	popl %ecx
+	popl %ebx
+	popl %eax
+	iret
+
+
 

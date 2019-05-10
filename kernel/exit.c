@@ -15,6 +15,7 @@
 
 int sys_pause(void);
 int sys_close(int fd);
+void idle_loop(void);
 
 void release(struct task_struct * p)
 {
@@ -140,7 +141,14 @@ int do_exit(long code)
 	current->state = TASK_ZOMBIE;
 	current->exit_code = code;
 	tell_father(current->father);
-	schedule();
+	if (get_current_apic_id() == apic_ids[0].apic_id) {
+		/* 在BSP上退出一个进程后，自主调用schedule，这里是不可能的，因为BSP只运行task0和task1，但这两个进程是不可能退出的，除非系统崩溃了 */
+	    schedule();
+	}
+	else {
+		unsigned long apic_index =  get_apic_index(get_current_apic_id());
+		alloc_ap_kernel_stack(apic_index,idle_loop); /* 重现设置AP的内核栈指针，然后跳转到idle_loop执行空循环，等待新的IPI中断 */
+	}
 	return (-1);	/* just to suppress warnings */
 }
 

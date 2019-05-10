@@ -5,6 +5,21 @@ typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
 
+struct apic_info {
+	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
+	unsigned long apic_id;
+	unsigned long apic_regs_addr;
+	unsigned long kernel_stack;
+	/*
+	 * 每次调用shedule方法，就会将task分配到指定processorN上运行，就会递增相应load_per_apic上的数值，表示processor的负载，
+	 * 数值越大表明该processorN比较繁忙，可以将task调度到其他processor上运行。
+	 * 这里将BSP用作Master processor，APs用作slave processor，slave上任务的运行全靠master调度，这时AP上的apic timer都是禁用的，不能定时自主调度任务，
+	 * 这里这样做的目的是：想先易后难，等这一步走通了，后面会开启所有processor的apic timer，让每个processor都能定时自主调度任务。
+	 * 为什么要这样？通过我之前的惨痛经历和教训来看，内核代码的改造，一定要先易后难，先把技术链路打通能运行起来，然后再迭代优化，一股脑把自己的想法一次性全堆上，调试起来会搞死你。
+	 */
+	unsigned long load_per_apic;
+};
+
 //extern unsigned long pg_dir[1024];
 extern unsigned long* pg_dir;
 extern desc_table idt,gdt;

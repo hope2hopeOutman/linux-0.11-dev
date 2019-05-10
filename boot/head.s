@@ -581,8 +581,6 @@ lock_loop:
     pop %eax
     pop %ebx
 
-
-
     /* 这时eax存储的是apic_index,所有这里作为参数传给alloc_ap_kernel_stack */
     lea return_addr,%ebx
     pushl %ebx
@@ -591,6 +589,11 @@ lock_loop:
 return_addr:
     pop %eax
     pop %eax
+    /* 初始化AP apic regs addr */
+    push %ds:apic_index
+    call init_apic_addr
+    pop %%ebx
+
     addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
     hlt

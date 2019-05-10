@@ -189,6 +189,21 @@ __asm__("str %%ax\n\t" \
  * This also clears the TS-flag if the task we switched to has used
  * tha math co-processor latest.
  */
+/* 这里有必要解释一下：cmpl %%ecx,last_task_used_math，这个指令的作用
+ * 任务切换会导致CPU自动设置CR0的TS标志，但是不会自动保存FPU的context.
+ * 当新任务执行FPU指令时由于TS=1，会自动触发异常，因此我们会在异常处理函数中保存当前FPU的context到相应的task中,并清除TS=0，
+ * 这样异常处理返回后继续执行FPU指令就不会报错了，这样处理的好处是什么呢，又为甚么要这么做呢？
+
+ * 因为我们不知道即将被调度的任务是否会使用FPU，因此有以下两种处理方式
+ * 1. 即将被调度的任务会用到FPU，因此在使用之前由该任务负责将当前FPU的context保存到last_task_used_math指向的task，
+ *    然后将自己设置为last_task_used_math并清除TS=0。
+ * 2. 即将被调度的任务不使用FPU，因此该任务不会引起FPU的switch（FPU context频繁Switch也是很耗时的）
+ *    这就是在这里我们没有先保存当前任务的FPU内容(假设当前任务执行了FPU)，然后就跳转了的原因。
+ * 所以当老任务被切换回来继续执行的时候，会先执行cmpl %%ecx,last_task_used_math
+ * 1. 如果相等说明没有发生FPU switch，也就是说没有其他任务执行过FPU指令，返回到当前任务后将清除TS=0，可以继续执行FPU指令而不会触发异常。
+ * 2. 如果不等说明发生了FPU switch, 有其他任务执行了FPU指令了，这时TS=1，返回到当前任务后，如果该任务执行了FPU指令，也会触发FPU异常(TS=1)，
+ *    进入异常处理函数，它会做同样的事：保存当前FPU的context到相应的task，然后设置TS=0，这样异常返回后，再执行FPU指令就不会报异常了。
+ */
 #define switch_to(n) {\
 struct {long a,b;} __tmp; \
 __asm__("cmpl %%ecx,current\n\t" \
@@ -196,7 +211,7 @@ __asm__("cmpl %%ecx,current\n\t" \
 	"movw %%dx,%1\n\t" \
 	"xchgl %%ecx,current\n\t" \
 	"ljmp %0\n\t" \
-	"cmpl %%ecx,last_task_used_math\n\t" \
+	"cmpl %%ecx,last_task_used_math\n\t"  \
 	"jne 1f\n\t" \
 	"clts\n" \
 	"1:" \
