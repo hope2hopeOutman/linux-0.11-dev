@@ -18,6 +18,7 @@ struct apic_info {
 	 * 为什么要这样？通过我之前的惨痛经历和教训来看，内核代码的改造，一定要先易后难，先把技术链路打通能运行起来，然后再迭代优化，一股脑把自己的想法一次性全堆上，调试起来会搞死你。
 	 */
 	unsigned long load_per_apic;
+	struct task_struct *current;
 };
 
 //extern unsigned long pg_dir[1024];

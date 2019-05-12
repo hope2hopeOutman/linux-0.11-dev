@@ -46,7 +46,6 @@ void show_stat(void)
 #define LATCH (1193180/HZ)
 
 extern void mem_use(void);
-
 extern int timer_interrupt(void);
 extern int system_call(void);
 
@@ -56,11 +55,11 @@ union task_union {
 };
 
 static union task_union init_task = {INIT_TASK,};
-
+struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM] = {{0,0,0,0,0,&(init_task.task)},};       /* 所有processor的apicId存储在这里 */
 long volatile jiffies=0;
 long startup_time=0;
 //struct task_struct *current = &(init_task.task);
-struct task_struct *current_per_apic[LOGICAL_PROCESSOR_NUM] = {&(init_task.task),0,0,0};
+//struct task_struct *current_per_apic[LOGICAL_PROCESSOR_NUM] = {&(init_task.task),0,0,0};
 struct task_struct *last_task_used_math = NULL;
 struct task_struct * task[NR_TASKS] = {&(init_task.task), };
 long user_stack [ PAGE_SIZE>>2 ];
@@ -72,12 +71,8 @@ struct {
 unsigned long sched_semaphore = 0;
 
 /* 获取当前processor正在运行的任务 */
-struct task_struct* get_current_task(){
-	return current_per_apic[get_current_apic_id()];
-}
-
 unsigned long get_current_apic_id(){
-	register long apic_id asm("eax");
+	register unsigned long apic_id asm("ebx");
 	__asm__ ("movl $0x01,%%eax\n\t" \
 			 "cpuid\n\t" \
 			 "shr $24,%%ebx\n\t" \
@@ -86,34 +81,47 @@ unsigned long get_current_apic_id(){
 	return apic_id;
 }
 
+struct apic_info* get_apic_info(unsigned long apic_id) {
+	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
+		if (apic_ids[i].apic_id == apic_id) {
+			return &apic_ids[i];
+		}
+	}
+	return 0;
+}
+
+struct task_struct* get_current_task(){
+	return get_apic_info(get_current_apic_id())->current;
+}
+
+void reset_cpu_load() {
+	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
+		apic_ids[i].load_per_apic = 0;
+	}
+}
+
 /* 计算哪个AP的负载最小，后续的task将会调度该AP执行。 */
 unsigned long get_min_load_ap() {
 	unsigned long apic_index = 1;  /* BSP不参与计算 */
 	int overload = 0;
-	if (load_per_apic[apic_index] == 0xFFFFFFFF) {
+	if (apic_ids[apic_index].load_per_apic == 0xFFFFFFFF) {
 		++overload;
 	}
 	for (int i=2;i<LOGICAL_PROCESSOR_NUM;i++) {
-		if (load_per_apic[i] == 0xFFFFFFFF) {
+		if (apic_ids[i].load_per_apic == 0xFFFFFFFF) {
 			++overload;
 			continue;
 		}
-		if (load_per_apic[apic_index] > load_per_apic[i]) {
+		if (apic_ids[apic_index].load_per_apic > apic_ids[i].load_per_apic) {
 			apic_index = i;
 		}
 	}
 	if (overload == LOGICAL_PROCESSOR_NUM-1) {
 		reset_cpu_load();
-		return apic_ids[LOGICAL_PROCESSOR_NUM-1];
+		return apic_ids[LOGICAL_PROCESSOR_NUM-1].apic_id;
 	}
 
-	return apic_ids[apic_index];
-}
-
-void reset_cpu_load() {
-	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
-		load_per_apic[i] = 0;
-	}
+	return apic_ids[apic_index].apic_id;
 }
 
 /*
@@ -121,10 +129,10 @@ void reset_cpu_load() {
  * 所以要现将apic_id写到destination field,然后再触发IPI。
  */
 void send_IPI(int apic_id, int v_num) {
-__asm__ ("movl $BSP_APIC_ICR_RELOCATION+4,%%edx\n\t" \
+__asm__ ("movl bsp_apic_icr_relocation+4,%%edx\n\t" \
 		 "shll $24,%%eax\n\t" \
 		 "movl %%eax,0(%%edx)\n\t"       /* 设置ICR高32位中的destination field */  \
-		 "movl $BSP_APIC_ICR_RELOCATION,%%edx\n\t" \
+		 "movl bsp_apic_icr_relocation,%%edx\n\t" \
 		 "addl $0x00004000,%%ebx\n\t" \
 		 "movl %%ebx,0(%%edx)\n\t"       /* 设置ICR低32位的vector field */   \
 		 "wait_loop_ipi:\n\t" \
@@ -146,15 +154,6 @@ void send_EOI() {
 				::"a" (addr)
 				);
 	}
-}
-
-struct apic_info* get_apic_info(unsigned long apic_id) {
-	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
-		if (apic_ids[i].apic_id == apic_id) {
-			return &apic_ids[i];
-		}
-	}
-	return 0;
 }
 
 unsigned long get_apic_index(unsigned long apic_id) {
@@ -264,11 +263,12 @@ void schedule(void)
 		}
 		else {  /* 这时AP要调度新的task[n>1] */
 			current->sched_on_ap = 0;  /* 只有这样，BSP之后才能继续调用该current到其他AP上运行，否则，该进程将永远不会被重新sched. */
+			task[next]->sched_on_ap = 1;
 		}
 	}
 
 	unlock_op(&sched_semaphore);
-	switch_to(next);
+	switch_to(next,current);
 }
 
 int sys_pause(void)

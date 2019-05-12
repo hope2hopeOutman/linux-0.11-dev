@@ -171,7 +171,7 @@ void do_stack_segment(long esp,long error_code)
 
 void do_coprocessor_error(long esp, long error_code)
 {
-	if (last_task_used_math != current)
+	if (last_task_used_math != get_current_task())
 		return;
 	die("coprocessor error",esp,error_code);
 }
@@ -211,6 +211,7 @@ void trap_init(void)
 }
 
 void parse_cpu_topology(void);
+void handle_ipi_interrupt(void);
 void ipi_intr_init(void)
 {
 	set_intr_gate(0x81,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */

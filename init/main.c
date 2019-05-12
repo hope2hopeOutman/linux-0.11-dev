@@ -55,6 +55,7 @@ extern long kernel_mktime(struct tm * tm);
 extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
+extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
 
 long memory_end = 0;         /* Granularity is 4K */
 long buffer_memory_end = 0;  /* Granularity is 4K */
@@ -64,8 +65,10 @@ long PAGING_PAGES = 0;
 long LOW_MEM      = 0;       /* Granularity is byte */
 long HIGH_MEMORY  = 0;       /* Granularity is byte */
 
+unsigned long bsp_apic_regs_relocation = BSP_APIC_REGS_RELOCATION;
+unsigned long bsp_apic_icr_relocation = BSP_APIC_ICR_RELOCATION;
+
 struct drive_info { char dummy[32]; } drive_info;
-struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM] = {0,};       /* 所有processor的apicId存储在这里 */
 
 /*
  * This is set up by the setup-routine at boot-time
@@ -74,7 +77,6 @@ struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM] = {0,};       /* 所有processo
 #define EXT_MEM_K     (*(unsigned short *)    (params_table_addr+0x0002))
 #define DRIVE_INFO    (*(struct drive_info *) (params_table_addr+0x0080))
 #define ORIG_ROOT_DEV (*(unsigned short *)    (params_table_addr+0x01BC))
-
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
@@ -100,10 +102,12 @@ void get_cpu_topology_info() {
 }
 /* 初始化APs，包括让AP进入保护模式，开启中断，初始化段寄存器使其指向内核代码段等等 */
 void init_ap() {
-	for (int i=0;i<sizeof(ap_kernel_stack)/sizeof(long);i++) {
+	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
 		apic_ids[i].kernel_stack = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	}
 	apic_ids[0].bsp_flag = 1;  /* 这里的代码只有BSP能执行到，所以这里把apic_ids[0]设置为BSP。 */
+	unsigned long bsp_apic_regs_location = BSP_APIC_REGS_RELOCATION;
+
 
 	__asm__(
 	/* *************************** Set Apic ID for BSP *************************************************/
@@ -132,7 +136,7 @@ void init_ap() {
     /**************************** Relocating the Local APIC Registers of BSP **********************************************/
 
 	/**************************** 发送INIT中断消息给APs **********************************************/
-	    "movl $BSP_APIC_ICR_RELOCATION,%%eax\n\t" \
+	    "movl bsp_apic_regs_relocation,%%eax\n\t" \
 		/* 发送 INIT message */
 	    "movl $0x000C4500,0(%%eax)\n\t" \
 	    "mov $0x5,%%ecx\n\t" \

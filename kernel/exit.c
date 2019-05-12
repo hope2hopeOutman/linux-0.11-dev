@@ -16,6 +16,7 @@
 int sys_pause(void);
 int sys_close(int fd);
 void idle_loop(void);
+extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
 
 void release(struct task_struct * p)
 {

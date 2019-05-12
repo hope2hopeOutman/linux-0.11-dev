@@ -94,13 +94,15 @@ system_call:
 	mov %dx,%fs
 	call sys_call_table(,%eax,4)
 	pushl %eax
-	movl current,%eax
+	call get_current_task  /* 返回值就存储在eax中，所以要把下面的指令注释掉 */
+	//movl current,%eax
 	cmpl $0,state(%eax)		# state
 	jne reschedule
 	cmpl $0,counter(%eax)		# counter
 	je reschedule
 ret_from_sys_call:
-	movl current,%eax		# task[0] cannot have signals
+	//movl current,%eax		# task[0] cannot have signals
+	call get_current_task
 	cmpl task,%eax
 	je 3f
 	cmpw $0x0f,CS(%esp)		# was old code segment supervisor ?

@@ -204,18 +204,18 @@ __asm__("str %%ax\n\t" \
  * 2. 如果不等说明发生了FPU switch, 有其他任务执行了FPU指令了，这时TS=1，返回到当前任务后，如果该任务执行了FPU指令，也会触发FPU异常(TS=1)，
  *    进入异常处理函数，它会做同样的事：保存当前FPU的context到相应的task，然后设置TS=0，这样异常返回后，再执行FPU指令就不会报异常了。
  */
-#define switch_to(n) {\
+#define switch_to(n,current) {\
 struct {long a,b;} __tmp; \
-__asm__("cmpl %%ecx,current\n\t" \
+__asm__("cmpl %%ecx,%2\n\t" \
 	"je 1f\n\t" \
 	"movw %%dx,%1\n\t" \
-	"xchgl %%ecx,current\n\t" \
+	"xchgl %2,%%ecx\n\t" \
 	"ljmp %0\n\t" \
 	"cmpl %%ecx,last_task_used_math\n\t"  \
 	"jne 1f\n\t" \
 	"clts\n" \
 	"1:" \
-	::"m" (*&__tmp.a),"m" (*&__tmp.b), \
+	::"m" (*&__tmp.a),"m" (*&__tmp.b),"m" (*&current), \
 	"d" (_TSS(n)),"c" ((long) task[n])); \
 }
 

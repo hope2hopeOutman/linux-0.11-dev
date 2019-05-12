@@ -18,6 +18,8 @@
 #include <asm/system.h>
 #include <linux/head.h>
 
+unsigned long find_empty_process_semaphore = 0;
+
 extern void write_verify(unsigned long address);
 long last_pid = 0;
 
@@ -134,6 +136,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 }
 
 int find_empty_process(void) {
+	lock_op(&find_empty_process_semaphore);
 	int i;
 
 	repeat: if ((++last_pid) < 0)
@@ -154,5 +157,6 @@ int find_empty_process(void) {
 		}
 	}
 
+	unlock_op(&find_empty_process_semaphore);
 	return -EAGAIN;
 }

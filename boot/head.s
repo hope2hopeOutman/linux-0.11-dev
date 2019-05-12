@@ -592,7 +592,7 @@ return_addr:
     /* 初始化AP apic regs addr */
     push %ds:apic_index
     call init_apic_addr
-    pop %%ebx
+    pop %ebx
 
     addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
