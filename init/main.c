@@ -106,14 +106,12 @@ void init_ap() {
 		apic_ids[i].kernel_stack = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	}
 	apic_ids[0].bsp_flag = 1;  /* 这里的代码只有BSP能执行到，所以这里把apic_ids[0]设置为BSP。 */
-	unsigned long bsp_apic_regs_location = BSP_APIC_REGS_RELOCATION;
-
 
 	__asm__(
 	/* *************************** Set Apic ID for BSP *************************************************/
-        "movl 0x01,%%eax\n\t"  \
+        "movl $0x01,%%eax\n\t" \
 		"cpuid\n\t"            \
-		"shr $0x24,%%ebx\n\t"  \
+		"shr $24,%%ebx\n\t"    \
 		"push %%ebx\n\t"       \
 		"push $0x00\n\t"       \
 		"call set_apic_id\n\t" \
@@ -136,10 +134,10 @@ void init_ap() {
     /**************************** Relocating the Local APIC Registers of BSP **********************************************/
 
 	/**************************** 发送INIT中断消息给APs **********************************************/
-	    "movl bsp_apic_regs_relocation,%%eax\n\t" \
+	    "movl bsp_apic_icr_relocation,%%eax\n\t" \
 		/* 发送 INIT message */
 	    "movl $0x000C4500,0(%%eax)\n\t" \
-	    "mov $0x5,%%ecx\n\t" \
+	    "mov $0x05,%%ecx\n\t" \
 	    "wait_loop_init:\n\t" \
 	    "dec %%ecx\n\t" \
 	    "nop\n\t" \
@@ -214,7 +212,7 @@ __asm__("xor %%eax,%%eax\n\t" \
 }
 
 void init_apic_addr(int apic_index) {
-	unsigned long addr = BSP_APIC_REGS_RELOCATION + (apic_index*0x1000);  /* 为每个APIC的regs分配4K内存 */
+	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000);  /* 为每个APIC的regs分配4K内存 */
 	reloc_apic_regs_addr(addr);
 	apic_ids[apic_index].apic_regs_addr = addr;
 }

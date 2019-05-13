@@ -54,8 +54,13 @@ union task_union {
 	char stack[PAGE_SIZE];
 };
 
-static union task_union init_task = {INIT_TASK,};
-struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM] = {{0,0,0,0,0,&(init_task.task)},};       /* 所有processor的apicId存储在这里 */
+union task_union init_task = {INIT_TASK,};
+/*
+ * 这里一次性分配64个processor，主要原因是这样可以使data_segment_align 4K对齐，
+ * 如果设置为4的话就导致data_segment_align不能4K对齐了，导致运行有问题，
+ * 至于具体的原因，没有深入研究GCC这块是怎么编译的，后面会详细研究一下。
+ */
+struct apic_info apic_ids[LOGICAL_PROCESSOR_MAXIMUM] = {{0,0,0,0,0,&(init_task.task)},};       /* 所有processor的apicId存储在这里 */
 long volatile jiffies=0;
 long startup_time=0;
 //struct task_struct *current = &(init_task.task);
@@ -149,8 +154,8 @@ void send_EOI() {
 	struct apic_info* apic = get_apic_info(apic_id);
 	if (apic) {
 		unsigned long addr = apic->apic_regs_addr;
-		__asm__("addl $0xB0,%%eax\n\t" \
-				"movl $0x00,0(%%eax)"  /* Write EOI register */\
+		__asm__("addl $0xB0,%%eax\n\t" /* EOI register offset relative with APIC_REGS_BASE is 0xB0 */ \
+				"movl $0x00,0(%%eax)"  /* Write EOI register */ \
 				::"a" (addr)
 				);
 	}
@@ -205,6 +210,7 @@ void schedule(void)
 /* check alarm, wake up any interruptible tasks that have got a signal */
 
 	lock_op(&sched_semaphore);  /* 这里一定要加锁，否则会出现多个AP同时执行同一个task */
+	int lock_flag = 1;
 
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 		if (*p) {
@@ -258,6 +264,10 @@ void schedule(void)
 			}
 			else {
 				/* halt等待新的调度IPI */
+				if (lock_flag) {
+					unlock_op(&sched_semaphore);
+					lock_flag = 0;
+				}
 				__asm__("hlt"::);
 			}
 		}
@@ -266,8 +276,10 @@ void schedule(void)
 			task[next]->sched_on_ap = 1;
 		}
 	}
-
-	unlock_op(&sched_semaphore);
+	if (lock_flag) {
+		unlock_op(&sched_semaphore);
+		lock_flag = 0;
+	}
 	switch_to(next,current);
 }
 

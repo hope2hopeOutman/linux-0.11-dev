@@ -48,6 +48,8 @@
 #define O_NLRET(tty)	_O_FLAG((tty),ONLRET)
 #define O_LCUC(tty)	_O_FLAG((tty),OLCUC)
 
+unsigned long tty_io_semaphore = 0;
+
 struct tty_struct tty_table[] = {
 	{
 		{ICRNL,		/* change incoming CR to NL */
@@ -292,6 +294,8 @@ int tty_read(unsigned channel, char * buf, int nr)
 
 int tty_write(unsigned channel, char * buf, int nr)
 {
+	lock_op(&tty_io_semaphore);
+	int lock_flag = 1;  /* 加锁成功了，设置为1 */
 	struct task_struct* current = get_current_task();
 	static cr_flag=0;
 	struct tty_struct * tty;
@@ -323,8 +327,17 @@ int tty_write(unsigned channel, char * buf, int nr)
 			PUTCH(c,tty->write_q);
 		}
 		tty->write(tty);
-		if (nr>0)
+		if (nr>0) {
+			if (lock_flag) {
+				unlock_op(&tty_io_semaphore);
+				lock_flag = 0; /* 这里已经释放了该锁了，所以要设置为0 */
+			}
 			schedule();
+		}
+	}
+	if (lock_flag) {  /* 这里一定要加这个判断，不然的话，会释放别的进程的加锁操作。 */
+		unlock_op(&tty_io_semaphore);
+		lock_flag = 0; /* 这里已经释放了该锁了，所以要设置为0 */
 	}
 	return (b-buf);
 }

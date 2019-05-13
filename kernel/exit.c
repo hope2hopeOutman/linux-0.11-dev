@@ -37,7 +37,7 @@ void release(struct task_struct * p)
 	panic("trying to release non-existent task");
 }
 
-static inline int send_sig(long sig,struct task_struct * p,int priv)
+int send_sig(long sig,struct task_struct * p,int priv)
 {
 	struct task_struct* current = get_current_task();
 	if (!p || sig<1 || sig>32)
@@ -49,7 +49,7 @@ static inline int send_sig(long sig,struct task_struct * p,int priv)
 	return 0;
 }
 
-static void kill_session(void)
+void kill_session(void)
 {
 	struct task_struct* current = get_current_task();
 	struct task_struct **p = NR_TASKS + task;
@@ -88,10 +88,10 @@ int sys_kill(int pid,int sig)
 	return retval;
 }
 
-static void tell_father(int pid)
+void tell_father(int pid)
 {
 	int i;
-
+	struct task_struct * current = get_current_task();
 	if (pid)
 		for (i=0;i<NR_TASKS;i++) {
 			if (!task[i])

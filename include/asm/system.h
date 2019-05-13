@@ -102,7 +102,10 @@ __asm__ ("lock_loop:\n\t"        \
 
 /* sem_addr的值为1表示获得lock,如果值为0表示释放了lock */
 #define unlock_op(sem_addr)  \
-__asm__ ("subl $0x01,%0\n\t" \
+__asm__ ("cmpl $0x00,%0\n\t" \
+		 "jle 1f\n\t" \
+         "subl $0x01,%0\n\t" \
+		 "1:\n\t" \
 		 ::"m" (*sem_addr)   \
 	    )
 

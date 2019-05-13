@@ -98,6 +98,7 @@ static struct buffer_head * find_entry(struct m_inode ** dir, const char * name,
 	struct buffer_head * bh;
 	struct dir_entry * de;
 	struct super_block * sb;
+	struct task_struct* current = get_current_task();
 
 #ifdef NO_TRUNCATE
 	if (namelen > NAME_LEN)
@@ -611,6 +612,7 @@ int sys_rmdir(const char * name) {
 	struct m_inode * dir, *inode;
 	struct buffer_head * bh;
 	struct dir_entry * de;
+	struct task_struct * current = get_current_task();
 
 	if (!suser())
 		return -EPERM;

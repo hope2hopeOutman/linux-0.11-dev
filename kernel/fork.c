@@ -137,6 +137,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 
 int find_empty_process(void) {
 	lock_op(&find_empty_process_semaphore);
+	int lock_flag = 1;
 	int i;
 
 	repeat: if ((++last_pid) < 0)
@@ -153,10 +154,16 @@ int find_empty_process(void) {
 	for (i = 1; i < NR_TASKS; i++) {
 		if (!task[i]) {
 			//printk("NR: %d, last_pid: %d\n\r", i, last_pid);
+			if (lock_flag) {
+				unlock_op(&find_empty_process_semaphore);
+				lock_flag = 0;
+			}
 			return i;
 		}
 	}
-
-	unlock_op(&find_empty_process_semaphore);
+    if (lock_flag) {
+    	unlock_op(&find_empty_process_semaphore);
+    	lock_flag = 0;
+    }
 	return -EAGAIN;
 }

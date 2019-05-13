@@ -91,7 +91,7 @@ KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
-.globl startup_32,sync_semaphore
+.globl startup_32,sync_semaphore,idle_loop
 startup_32:
 	movl $0x10,%eax
 	mov %ax,%ds
@@ -99,12 +99,6 @@ startup_32:
 	mov %ax,%fs
 	mov %ax,%gs
 	mov %ax,%ss
-
-/**************************** 发送IPI中断消息给APs **********************************************/
-	//movl $0x190,%edx          /* 中断向量号vector number=100在IDT表中的地址 */
-    //movl $0x91000080,0(%edx)  /* 中断处理函数的入口地址      */
-    //movl $0x000C4064,0(%eax)  /* 发送 Fixed IPI message  */
-/**************************** 结束发送INIT中断消息给APs **********************************************/
 
 	/* 将preload的32K OS-code再次搬运到5M地址起始处，前面的4K用作kernel的目录表最大可以管理1k个页表，
 	 * 4k~640k用作高速buffer存储buffer_head和磁盘块,1M~5M用于存储1k个页表，每个页表可以管理4M物理内存，最大可管理4G物理内存。
