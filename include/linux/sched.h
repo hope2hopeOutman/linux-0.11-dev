@@ -215,7 +215,7 @@ __asm__("cmpl %%ecx,%2\n\t" \
 	"jne 1f\n\t" \
 	"clts\n" \
 	"1:" \
-	::"m" (*&__tmp.a),"m" (*&__tmp.b),"m" (*&current), \
+	::"m" (*&__tmp.a),"m" (*&__tmp.b),"m" (*current), \
 	"d" (_TSS(n)),"c" ((long) task[n])); \
 }
 

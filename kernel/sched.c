@@ -134,14 +134,16 @@ unsigned long get_min_load_ap() {
  * 所以要现将apic_id写到destination field,然后再触发IPI。
  */
 void send_IPI(int apic_id, int v_num) {
-__asm__ ("movl bsp_apic_icr_relocation+4,%%edx\n\t" \
+__asm__ ("movl bsp_apic_icr_relocation,%%edx\n\t" \
+		 "addl $0x10,%%edx\n\t" \
 		 "shll $24,%%eax\n\t" \
 		 "movl %%eax,0(%%edx)\n\t"       /* 设置ICR高32位中的destination field */  \
 		 "movl bsp_apic_icr_relocation,%%edx\n\t" \
 		 "addl $0x00004000,%%ebx\n\t" \
 		 "movl %%ebx,0(%%edx)\n\t"       /* 设置ICR低32位的vector field */   \
 		 "wait_loop_ipi:\n\t" \
-		 "mov 0(%%edx),%%eax\n\t" \
+		 "xorl %%eax,%%eax\n\t" \
+		 "movl 0(%%edx),%%eax\n\t" \
 		 "andl $0x00001000,%%eax\n\t"    /* 判断ICR低32位的delivery status field, 0: idle, 1: send pending */  \
 		 "cmpl $0x00,%%eax\n\t"   \
 		 "jne wait_loop_ipi\n\t"  \
@@ -204,7 +206,13 @@ void math_state_restore()
  */
 void schedule(void)
 {
-	struct task_struct * current = get_current_task();
+	//struct task_struct * current = get_current_task();
+	unsigned long current_apic_id = get_current_apic_id();
+	struct apic_info* apic_info = get_apic_info(current_apic_id);
+	struct task_struct ** current = &(apic_info->current);
+	if (apic_info->apic_id > 0) {
+		printk("apic_id: %d, current_addr: %u\n\r", apic_info->apic_id, (unsigned long)(*current));
+	}
 	int i,next,c;
 	struct task_struct ** p;
 /* check alarm, wake up any interruptible tasks that have got a signal */
@@ -245,34 +253,34 @@ void schedule(void)
 		}
 	}
 
-	unsigned long current_apic_id = get_current_apic_id();
 	if (current_apic_id == apic_ids[0].apic_id) {  /* 调度任务发生在BSP上 */
 		unsigned long sched_apic_id = get_min_load_ap();
 		/* 这里禁止BSP将task[0]和task[1]调度到AP上执行 */
 		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
 			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
+			printk("Before send IPI\n\r");
 			send_IPI(sched_apic_id, SCHED_INTR_NO);
+			printk("After send IPI\n\r");
 			++apic_ids[sched_apic_id].load_per_apic;
 			next = 1;   /* BSP上只运行task0和task1 */
 		}
 	}
 	else {  /* 调度任务发生在AP上，这时AP只能调度除task[0]和task[1]之外的任务，后面会开启AP的timer自主调度。 */
 		if (task[next] == task[0] || task[next] == task[1]) {
-			unlock_op(&sched_semaphore);
-			if (current != 0) {  /* 这里要注意在执行sys_exit系统调用的时候一定要遍历所有AP的current，将对应的current清空 */
+			if (lock_flag) {
+				unlock_op(&sched_semaphore);
+				lock_flag = 0;
+			}
+			if (*current != 0) {  /* 这里要注意在执行sys_exit系统调用的时候一定要遍历所有AP的current，将对应的current清空 */
 				return;          /* 如果AP有已经执行过的task,这时不调度，继续执行老的task. */
 			}
 			else {
 				/* halt等待新的调度IPI */
-				if (lock_flag) {
-					unlock_op(&sched_semaphore);
-					lock_flag = 0;
-				}
 				__asm__("hlt"::);
 			}
 		}
 		else {  /* 这时AP要调度新的task[n>1] */
-			current->sched_on_ap = 0;  /* 只有这样，BSP之后才能继续调用该current到其他AP上运行，否则，该进程将永远不会被重新sched. */
+			(*current)->sched_on_ap = 0;  /* 只有这样，BSP之后才能继续调用该current到其他AP上运行，否则，该进程将永远不会被重新sched. */
 			task[next]->sched_on_ap = 1;
 		}
 	}
