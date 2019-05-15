@@ -74,6 +74,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	struct file *f;
     /* 此版本将进程的task_struct和目录表都分配在内核实地址寻址的空间(mem>512M && mem<(512-64)M) */
 	p = (struct task_struct *) get_free_page(PAGE_IN_REAL_MEM_MAP);
+	//printk("nr=%d,taskP=%p\n\r",nr,p);
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;

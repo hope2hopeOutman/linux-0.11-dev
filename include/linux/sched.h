@@ -207,16 +207,16 @@ __asm__("str %%ax\n\t" \
 #define switch_to(n,current) {\
 struct {long a,b;} __tmp; \
 __asm__("cmpl %%ecx,%2\n\t" \
-	"je 1f\n\t" \
-	"movw %%dx,%1\n\t" \
-	"xchgl %2,%%ecx\n\t" \
-	"ljmp %0\n\t" \
-	"cmpl %%ecx,last_task_used_math\n\t"  \
-	"jne 1f\n\t" \
-	"clts\n" \
-	"1:" \
-	::"m" (*&__tmp.a),"m" (*&__tmp.b),"m" (*current), \
-	"d" (_TSS(n)),"c" ((long) task[n])); \
+		"je 1f\n\t" \
+		"movw %%dx,%1\n\t" \
+		"xchgl %2,%%ecx\n\t" \
+		"ljmp %0\n\t" \
+		"cmpl %%ecx,last_task_used_math\n\t"  \
+		"jne 1f\n\t" \
+		"clts\n" \
+		"1:" \
+		::"m" (*&__tmp.a),"m" (*&__tmp.b),"m" (*current), \
+		"d" (_TSS(n)),"c" ((long) task[n])); \
 }
 
 #define PAGE_ALIGN(n) (((n)+0xfff)&0xfffff000)

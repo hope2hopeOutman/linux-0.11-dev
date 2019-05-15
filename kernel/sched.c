@@ -260,6 +260,16 @@ void schedule(void)
 			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
 			printk("Before send IPI\n\r");
 			send_IPI(sched_apic_id, SCHED_INTR_NO);
+			if (lock_flag) {
+				unlock_op(&sched_semaphore);
+				lock_flag = 0;
+			}
+			while(1){
+				__asm__("nop\n\t" \
+					    "nop\n\t" \
+					    "nop\n\t" \
+					    ::);
+			}
 			printk("After send IPI\n\r");
 			++apic_ids[sched_apic_id].load_per_apic;
 			next = 1;   /* BSP上只运行task0和task1 */
@@ -287,6 +297,9 @@ void schedule(void)
 	if (lock_flag) {
 		unlock_op(&sched_semaphore);
 		lock_flag = 0;
+	}
+	if (apic_info->apic_id > 0) {
+		printk("Ap, task[%d] running, cr3:%p\n\r",next,(unsigned long*)task[next]->tss.cr3);
 	}
 	switch_to(next,current);
 }

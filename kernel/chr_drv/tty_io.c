@@ -294,16 +294,24 @@ int tty_read(unsigned channel, char * buf, int nr)
 
 int tty_write(unsigned channel, char * buf, int nr)
 {
+	int lock_flag = 1;  /* 加锁成功了，设置为1 */
 	struct task_struct* current = get_current_task();
 	static cr_flag=0;
 	struct tty_struct * tty;
 	char c, *b=buf;
 
-	if (channel>2 || nr<0) return -1;
+	if (channel>2 || nr<0) {
+		if (lock_flag) {
+			lock_flag = 0;
+			unlock_op(&tty_io_semaphore);
+		}
+		return -1;
+	}
 	tty = channel + tty_table;
 	while (nr>0) {
 		sleep_if_full(&tty->write_q);
-		if (current->signal)
+		/* 这个bug埋的好深啊，因为AP初始化的时候都没有指定default task，所以AP在执行ljmp tss之前的current=0，所以这里要判断下。 */
+		if (current && current->signal)
 			break;
 		while (nr>0 && !FULL(tty->write_q)) {
 			c=get_fs_byte(b);
@@ -325,10 +333,17 @@ int tty_write(unsigned channel, char * buf, int nr)
 			PUTCH(c,tty->write_q);
 		}
 		tty->write(tty);
-		if (nr>0) {
+		if (lock_flag) {
+			lock_flag = 0;
 			unlock_op(&tty_io_semaphore);
+		}
+		if (nr>0) {
 			schedule();
 		}
+	}
+	if (lock_flag) {
+		lock_flag = 0;
+		unlock_op(&tty_io_semaphore);
 	}
 	return (b-buf);
 }

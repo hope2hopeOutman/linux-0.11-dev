@@ -80,6 +80,8 @@ unsigned char	attr=0x07;
 
 static void sysbeep(void);
 
+extern unsigned long tty_io_semaphore;
+
 /*
  * this is what the terminal answers to a ESC-Z or csi0c
  * query (= vt100 response).
@@ -595,6 +597,7 @@ void con_write(struct tty_struct * tty)
 		}
 	}
 	set_cursor();
+	unlock_op(&tty_io_semaphore);
 }
 
 /*

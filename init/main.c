@@ -40,8 +40,7 @@ inline _syscall0(int,sync)
 #include <linux/fs.h>
 
 unsigned long* pg_dir = (unsigned long*)0;
-
-static char printbuf[1024];
+static char user_print_buf[1024];
 
 extern int vsprintf();
 extern void init(void);
@@ -56,6 +55,7 @@ extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
+extern unsigned long tty_io_semaphore;
 
 long memory_end = 0;         /* Granularity is 4K */
 long buffer_memory_end = 0;  /* Granularity is 4K */
@@ -334,7 +334,7 @@ static int printf(const char *fmt, ...)
 	int i;
 
 	va_start(args, fmt);
-	write(1,printbuf,i=vsprintf(printbuf, fmt, args));
+	write(1,user_print_buf,i=vsprintf(user_print_buf, fmt, args));
 	va_end(args);
 	return i;
 }
