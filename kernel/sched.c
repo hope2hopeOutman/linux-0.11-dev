@@ -55,12 +55,15 @@ union task_union {
 };
 
 union task_union init_task = {INIT_TASK,};
+union task_union ap_default_task = {INIT_TASK,};
+//unsigned long padding[1024] = {1,};
 /*
  * 这里一次性分配64个processor，主要原因是这样可以使data_segment_align 4K对齐，
  * 如果设置为4的话就导致data_segment_align不能4K对齐了，导致运行有问题，
  * 至于具体的原因，没有深入研究GCC这块是怎么编译的，后面会详细研究一下。
  */
-struct apic_info apic_ids[LOGICAL_PROCESSOR_MAXIMUM] = {{0,0,0,0,0,&(init_task.task)},};       /* 所有processor的apicId存储在这里 */
+struct apic_info apic_ids[LOGICAL_PROCESSOR_MAXIMUM] = {{0,0,0,0,0,&(init_task.task)},{0,0,0,0,0,&(ap_default_task.task)},
+		      {0,0,0,0,0,&(ap_default_task.task)},{0,0,0,0,0,&(ap_default_task.task)},};/* 所有processor的apicId存储在这里 */
 long volatile jiffies=0;
 long startup_time=0;
 //struct task_struct *current = &(init_task.task);
@@ -172,6 +175,17 @@ unsigned long get_apic_index(unsigned long apic_id) {
 	return 0;
 }
 
+/* 主要是为了AP初始化的时候使用，用于任务一开始切换时，将当前内核态的context信息存储到指定的位置，而不是一开始默认的0x00地址处，这样就不会覆盖内核的目录表了。 */
+void reset_ap_tss(int nr) {
+	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(ap_default_task.task.tss));
+	ltr(nr);
+}
+
+void reset_ap_default_task() {
+	unsigned long apic_index = get_apic_index(get_current_apic_id);
+	apic_ids[apic_index].current = &ap_default_task.task;
+}
+
 /*
  *  'math_state_restore()' saves the current math information in the
  * old math state array, and gets the new ones from the current task
@@ -210,8 +224,11 @@ void schedule(void)
 	unsigned long current_apic_id = get_current_apic_id();
 	struct apic_info* apic_info = get_apic_info(current_apic_id);
 	struct task_struct ** current = &(apic_info->current);
+	if (!(*current)) {
+		panic("current shouldn't be null\n\r");
+	}
 	if (apic_info->apic_id > 0) {
-		printk("apic_id: %d, current_addr: %u\n\r", apic_info->apic_id, (unsigned long)(*current));
+		//printk("apic_id: %d, current_addr: %u\n\r", apic_info->apic_id, (unsigned long)(*current));
 	}
 	int i,next,c;
 	struct task_struct ** p;
@@ -260,17 +277,20 @@ void schedule(void)
 			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
 			printk("Before send IPI\n\r");
 			send_IPI(sched_apic_id, SCHED_INTR_NO);
+
 			if (lock_flag) {
 				unlock_op(&sched_semaphore);
 				lock_flag = 0;
 			}
-			while(1){
+
+			/*int count = 20;
+			while(count--){
 				__asm__("nop\n\t" \
 					    "nop\n\t" \
 					    "nop\n\t" \
 					    ::);
 			}
-			printk("After send IPI\n\r");
+			printk("After send IPI\n\r");*/
 			++apic_ids[sched_apic_id].load_per_apic;
 			next = 1;   /* BSP上只运行task0和task1 */
 		}
@@ -290,7 +310,9 @@ void schedule(void)
 			}
 		}
 		else {  /* 这时AP要调度新的task[n>1] */
-			(*current)->sched_on_ap = 0;  /* 只有这样，BSP之后才能继续调用该current到其他AP上运行，否则，该进程将永远不会被重新sched. */
+			if (*current) {
+			    (*current)->sched_on_ap = 0;  /* 只有这样，BSP之后才能继续调用该current到其他AP上运行，否则，该进程将永远不会被重新sched. */
+			}
 			task[next]->sched_on_ap = 1;
 		}
 	}

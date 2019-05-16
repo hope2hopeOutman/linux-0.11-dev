@@ -590,10 +590,30 @@ return_addr:
 
     addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
+
+   /* 开启分页机制.
+    * 自己挖的巨坑啊，后面老是报readlimit，把current.cr3打印出来映射的都是对的，就是不起作用，
+    * 后来发现log里cpu1的cr3总是等于0，恍然大悟啊，分页没开启,ljmp对cr3不起作用的.
+    */
+    xorl %eax,%eax		 /* pg_dir is at 0x0000 */
+	movl %eax,%cr3		 /* cr3 - page directory start */
+	movl %cr0,%eax
+	orl $0x80000000,%eax
+	movl %eax,%cr0		 /* set paging (PG) bit */
+
+   /* 这里一定要设置一个TSS段的默认保存地址，因为第一次任务切换时如果不设置的话，
+    * 会将当前内核态的context保存到内核目录表中的(TSS未初始化的默认值是0x00,内核目录表的地址)，大问题啊.
+    */
+	pushl $80
+	call reset_ap_tss
+	popl %eax
+
     hlt
 idle_loop:
     hlt
     jmp idle_loop
+
+.org 0x5000
 
 
 

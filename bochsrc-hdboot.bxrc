@@ -32,7 +32,8 @@ romimage: file=$BXSHARE/BIOS-bochs-latest
 #megs: 1536
 #megs: 8
 
-memory: guest=2044, host=1024
+#memory: guest=2044, host=1024
+memory: guest=1024, host=1024
 
 #=======================================================================
 # VGAROMIMAGE

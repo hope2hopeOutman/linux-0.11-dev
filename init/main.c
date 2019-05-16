@@ -196,6 +196,12 @@ void alloc_ap_kernel_stack(long ap_index, long return_addr) {
 			);
 }
 
+void reset_dir_base() {
+	__asm__("xorl %%eax,%%eax\n\t" \
+			"movl %%eax,%%cr3\n\t" \
+			::);
+}
+
 /* 对Local APIC Registers的内存映射进行relocate. */
 void reloc_apic_regs_addr(unsigned long addr) {
 __asm__("xor %%eax,%%eax\n\t" \

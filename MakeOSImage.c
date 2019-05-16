@@ -19,7 +19,7 @@ int main(int argc, char ** argv) {
 
     fseek(fpw, 0x100000, SEEK_SET); // 1M = 1024*1024 = 1048576 = 0x100000
 
-    for (int i =0; i< 32; i++)
+    for (int i =0; i< 64; i++)
     {
     	fread(buffer, 1, 4096, fpr);
     	fwrite(buffer, 1, 4096, fpw);

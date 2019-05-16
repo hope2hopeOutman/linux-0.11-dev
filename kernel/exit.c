@@ -148,6 +148,9 @@ int do_exit(long code)
 	}
 	else {
 		unsigned long apic_index =  get_apic_index(get_current_apic_id());
+		reset_dir_base();  /* 这里一定要将AP的CR3设置为0x00,因为当前进程已经被释放掉了，所以当前的CR3中的目录表基地址就无效了（此页有可能被其他进程占用了） */
+		reset_ap_tss(80);
+		reset_ap_default_task();
 		alloc_ap_kernel_stack(apic_index,idle_loop); /* 重现设置AP的内核栈指针，然后跳转到idle_loop执行空循环，等待新的IPI中断 */
 	}
 	return (-1);	/* just to suppress warnings */
