@@ -82,6 +82,7 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	//printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
 
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
+	p->task_nr = nr;
 	p->state = TASK_UNINTERRUPTIBLE;
 	p->pid = last_pid;
 	p->father = current->pid;

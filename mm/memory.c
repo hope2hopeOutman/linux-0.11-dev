@@ -343,7 +343,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
 	unsigned long *new_dir_page = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);  /* 为新进程分配一页物理内存用于存储目录表 */
-	printk("new_dir_page=%p\n\r", new_dir_page);
+	printk("new_dir_page=%p, nr=%d, father=%d\n\r", new_dir_page, new_task->task_nr, new_task->father);
 	if (!new_dir_page) {
 		panic("Can not allocate a physical page for new process's dir-table. \n\r ");
 	}

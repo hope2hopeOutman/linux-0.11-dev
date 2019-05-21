@@ -182,7 +182,7 @@ void reset_ap_tss(int nr) {
 }
 
 void reset_ap_default_task() {
-	unsigned long apic_index = get_apic_index(get_current_apic_id);
+	unsigned long apic_index = get_apic_index(get_current_apic_id());
 	apic_ids[apic_index].current = &ap_default_task.task;
 }
 
@@ -225,7 +225,7 @@ void schedule(void)
 	struct apic_info* apic_info = get_apic_info(current_apic_id);
 	struct task_struct ** current = &(apic_info->current);
 	if (!(*current)) {
-		panic("current shouldn't be null\n\r");
+		//panic("current shouldn't be null\n\r");
 	}
 	if (apic_info->apic_id > 0) {
 		//printk("apic_id: %d, current_addr: %u\n\r", apic_info->apic_id, (unsigned long)(*current));
@@ -290,7 +290,8 @@ void schedule(void)
 					    "nop\n\t" \
 					    ::);
 			}
-			printk("After send IPI\n\r");*/
+			*/
+			//printk("After send IPI\n\r");
 			++apic_ids[sched_apic_id].load_per_apic;
 			next = 1;   /* BSP上只运行task0和task1 */
 		}
@@ -321,7 +322,7 @@ void schedule(void)
 		lock_flag = 0;
 	}
 	if (apic_info->apic_id > 0) {
-		printk("Ap, task[%d] running, cr3:%p\n\r",next,(unsigned long*)task[next]->tss.cr3);
+		//printk("Ap, task[%d] running, cr3:%p\n\r",next,(unsigned long*)task[next]->tss.cr3);
 	}
 	switch_to(next,current);
 }

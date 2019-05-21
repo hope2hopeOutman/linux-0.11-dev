@@ -120,6 +120,7 @@ struct task_struct {
 	struct tss_struct tss;
 	/* 这个标志主要是为了防止，同一个进程被BSP调度到不同的AP上，同时执行，这样是有问题的，因为他们会共用相同的用户栈和内核栈， 以后会优化的。*/
 	int sched_on_ap;  /* 1: running on AP, 0: not */
+	int task_nr;
 };
 
 /*
