@@ -74,15 +74,13 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 	struct file *f;
     /* 此版本将进程的task_struct和目录表都分配在内核实地址寻址的空间(mem>512M && mem<(512-64)M) */
 	p = (struct task_struct *) get_free_page(PAGE_IN_REAL_MEM_MAP);
-	//printk("nr=%d,taskP=%p\n\r",nr,p);
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
-
-	//printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
-
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->task_nr = nr;
+	p->father_nr = current->task_nr;
+	p->sched_on_ap = 0; /* 这里是自己埋的最后一个大坑，如果在AP上运行的task调用fork的话，其子进程的sched_on_ap肯定等于1了，这样它就永远不能被BSP调度运行 */
 	p->state = TASK_UNINTERRUPTIBLE;
 	p->pid = last_pid;
 	p->father = current->pid;

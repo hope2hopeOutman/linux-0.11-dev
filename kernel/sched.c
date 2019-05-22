@@ -275,7 +275,7 @@ void schedule(void)
 		/* 这里禁止BSP将task[0]和task[1]调度到AP上执行 */
 		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
 			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
-			printk("Before send IPI\n\r");
+			printk("Before send IPI: %d\n\r", sched_apic_id);
 			send_IPI(sched_apic_id, SCHED_INTR_NO);
 
 			if (lock_flag) {
@@ -291,7 +291,7 @@ void schedule(void)
 					    ::);
 			}
 			*/
-			//printk("After send IPI\n\r");
+
 			++apic_ids[sched_apic_id].load_per_apic;
 			next = 1;   /* BSP上只运行task0和task1 */
 		}
