@@ -80,6 +80,16 @@ struct drive_info { char dummy[32]; } drive_info;
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
+void test_ext_int() {
+    int lint0 = 0, lint1 = 0;
+   __asm__("movl $0x20350,%%ecx;"  \
+			"movl 0(%%ecx),%%eax;"  \
+		"movl $0x20360,%%ecx;"  \
+		"movl 0(%%ecx),%%ebx;"  \
+			:"=a" (lint0),"=b" (lint1) :);
+   printk("lint0: %d, lint1: %d \n\r", lint0, lint1);
+}
+
 void get_cpu_topology_info() {
 	int eax_value=0, ebx_value = 0 ,edx_value = 0;
 #if 0

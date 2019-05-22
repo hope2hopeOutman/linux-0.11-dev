@@ -72,6 +72,10 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 	if (!(tmp = dev->current_request)) {
 		dev->current_request = req;
 		sti();
+		/* 这里有必要解释一下：调用do_hd_request，处理请求项队列,如果是第一个就立刻处理，
+		 * 如果不是第一个的话，要么在该请求项处理完后是下一个插入的请求项成为第一个，要么在该正在处理的请求项还没处理完之前，插入新的请求项，
+		 * 这样后续会继续调用该函数处理，这样就处理不息了呵呵。
+		 */
 		(dev->request_fn)();
 		return;
 	}

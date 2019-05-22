@@ -110,3 +110,17 @@ __asm__ ("cmpl $0x00,%0\n\t" \
 	    )
 
 
+/* delay operation , such as nop */
+#define delay_op(count) \
+__asm__("delay_loop:\n\t" \
+        "cmpl $0x00,%%ecx\n\t" \
+		"je 1f\n\t" \
+        "nop\n\t" \
+		"nop\n\t" \
+		"nop\n\t" \
+		"dec %%ecx\n\t" \
+		"jmp delay_loop\n\t" \
+		"1:\n\t" \
+		::"c" (count));
+
+
