@@ -147,8 +147,9 @@ int do_exit(long code)
 	    schedule();
 	}
 	else {
-		//printk("task_nr[%d], exit\n\r", current->task_nr);
-		unsigned long apic_index =  get_apic_index(get_current_apic_id());
+		unsigned long apic_id = get_current_apic_id();
+		printk("task_nr[%d], exit from AP[%d]\n\r", current->task_nr, apic_id);
+		unsigned long apic_index =  get_apic_index(apic_id);
 		reset_dir_base();  /* 这里一定要将AP的CR3设置为0x00,因为当前进程已经被释放掉了，所以当前的CR3中的目录表基地址就无效了（此页有可能被其他进程占用了） */
 		reset_ap_tss(80);
 		reset_ap_default_task();

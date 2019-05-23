@@ -224,12 +224,6 @@ void schedule(void)
 	unsigned long current_apic_id = get_current_apic_id();
 	struct apic_info* apic_info = get_apic_info(current_apic_id);
 	struct task_struct ** current = &(apic_info->current);
-	if (!(*current)) {
-		//panic("current shouldn't be null\n\r");
-	}
-	if (apic_info->apic_id > 0) {
-		//printk("apic_id: %d, current_addr: %u\n\r", apic_info->apic_id, (unsigned long)(*current));
-	}
 	int i,next,c;
 	struct task_struct ** p;
 /* check alarm, wake up any interruptible tasks that have got a signal */
@@ -283,9 +277,6 @@ void schedule(void)
 				unlock_op(&sched_semaphore);
 				lock_flag = 0;
 			}
-
-			//delay_op(20);
-
 			++apic_ids[sched_apic_id].load_per_apic;
 			next = 1;   /* BSP上只运行task0和task1 */
 		}
@@ -315,11 +306,6 @@ void schedule(void)
 		unlock_op(&sched_semaphore);
 		lock_flag = 0;
 	}
-
-/*	if (apic_info->apic_id > 0) {
-		printk("Ap, task[%d] running, cr3:%p\n\r",next,(unsigned long*)task[next]->tss.cr3);
-	}*/
-
 	switch_to(next,current);
 }
 
@@ -487,7 +473,7 @@ void add_timer(long jiffies, void (*fn)(void))
 	}
 	sti();
 }
-
+int timer_count = 0;
 void do_timer(long cpl)
 {
 	struct task_struct* current = get_current_task();
@@ -518,7 +504,12 @@ void do_timer(long cpl)
 		do_floppy_timer();
 	if ((--current->counter)>0) return;
 	current->counter=0;
-	if (!cpl) return;  /* 这里可以看出内核态是不支持进程调度的，其他的外部中断除外 */
+	if (get_current_apic_id() > 0) {
+		printk("apic_id: %d \n\r" , get_current_apic_id());
+		++timer_count;
+	}
+	if (!cpl) return;  /* 这里可以看出内核态是不支持timer中断进行进程调度的，其他的外部中断除外 */
+
 	schedule();
 }
 
@@ -598,10 +589,16 @@ void sched_init(void)
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");
 	ltr(0);
 	lldt(0);
+	/* 设置8253定时器中断 */
+#if 0
 	outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
 	outb_p(LATCH & 0xff , 0x40);	/* LSB */
 	outb(LATCH >> 8 , 0x40);	/* MSB */
 	set_intr_gate(0x20,&timer_interrupt);
-	outb(inb_p(0x21)&~0x01,0x21);
+	outb(inb_p(0x21)&~0x01,0x21);   /* Not mask timer intr */
+#else
+	set_intr_gate(0x83,&timer_interrupt);  /* Vector value 0x83 for APIC timer */
+#endif
+
 	set_system_gate(0x80,&system_call);
 }

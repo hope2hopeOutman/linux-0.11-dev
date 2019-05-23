@@ -80,30 +80,41 @@ struct drive_info { char dummy[32]; } drive_info;
 #define copy_struct(from,to,count) \
 __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (count))
 
-void test_ext_int() {
+/*void test_local_pins_intr() {
     int lint0 = 0, lint1 = 0;
    __asm__("movl $0x20350,%%ecx;"  \
-			"movl 0(%%ecx),%%eax;"  \
-		"movl $0x20360,%%ecx;"  \
-		"movl 0(%%ecx),%%ebx;"  \
-			:"=a" (lint0),"=b" (lint1) :);
+		   "movl 0(%%ecx),%%eax;"  \
+		   "movl $0x20360,%%ecx;"  \
+		   "movl 0(%%ecx),%%ebx;"  \
+		   :"=a" (lint0),"=b" (lint1) :);
    printk("lint0: %d, lint1: %d \n\r", lint0, lint1);
-}
+}*/
+
+/*void print_apic_enable_status() {
+	int apic_status = 0;
+	__asm__("xor %%eax,%%eax\n\t" \
+			"xor %%edx,%%edx\n\t" \
+			"movl $0x1B,%%ecx\n\t" \
+			"rdmsr\n\t" \
+			:"=a" (apic_status):);
+	printk("apic_status: %d \n\r", apic_status);
+}*/
+
 
 void get_cpu_topology_info() {
-	int eax_value=0, ebx_value = 0 ,edx_value = 0;
-#if 0
+	int eax_value=0, ebx_value = 0 ,edx_value = 0, ecx_value = 0;
+#if 1
     __asm__("movl $0x01,%%eax;"  \
-    		"movl $0x00,%%ecx;"  \
+    	/*	"movl $0x00,%%ecx;"  \ */
     		"cpuid;" \
-    		:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
-#endif
-
+    		:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value),"=c" (ecx_value));
+#else
     __asm__("movl $0x1B,%%ecx;"  \
         	"rdmsr;" \
         	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
+#endif
 
-    printk("eax: %u, ebx: %u, edx: %u \n\r", eax_value, ebx_value, edx_value);
+    printk("eax: %u, ebx: %u,ecx: %u, edx: %u \n\r", eax_value, ebx_value,ecx_value, edx_value);
 
     int sipi_cpu_count = *((unsigned short *) 0x90C00);
     int ipi_cpu_count  = *((unsigned short *) 0x90C04);
@@ -118,7 +129,7 @@ void init_ap() {
 	apic_ids[0].bsp_flag = 1;  /* 这里的代码只有BSP能执行到，所以这里把apic_ids[0]设置为BSP。 */
 
 	__asm__(
-	/* *************************** Set Apic ID for BSP *************************************************/
+	/* ============================= Set Apic ID for BSP ============================= */
         "movl $0x01,%%eax\n\t" \
 		"cpuid\n\t"            \
 		"shr $24,%%ebx\n\t"    \
@@ -127,9 +138,9 @@ void init_ap() {
 		"call set_apic_id\n\t" \
 		"pop %%ebx\n\t"        \
 		"pop %%ebx\n\t"        \
-	/* *************************** End Set Apic ID for BSP *********************************************/
+	/* ============================= End Set Apic ID for BSP ============================= */
 
-	/* *************************** Relocating the Local APIC Registers of BSP *********************************************/
+	/* ============================= Relocating the Local APIC Registers of BSP ============================= */
 	/* 看过Intel手册关于MSRs寄存器族的都知道，每个processor的Local APIC registers寄存器默认都是映射到内存的0xFEE00000地址处的，
 	 * 所以通过RW该内存地址，就可以操作APIC寄存是发送IPI消息，但是我们的内核线性地址空间最大只有1G，所以超出的部分，要么进行remap，要么就对APIC registers
 	 * 的内存映射地址进行relocate，用于发送IPI消息的ICR寄存器的地址默认是0xFEE00300,直接读写0xFEE00300内存地址会报错。以下代码就是对其基地址进行relocate操作。
@@ -141,9 +152,15 @@ void init_ap() {
 		"pushl $0x00\n\t"  /* apic_index */ \
 		"call init_apic_addr\n\t"  \
 		"popl %%eax\n\t" \
-    /**************************** Relocating the Local APIC Registers of BSP **********************************************/
+    /* ============================= End Relocating the Local APIC Registers of BSP ========================= */
 
-	/**************************** 发送INIT中断消息给APs **********************************************/
+	/* ============================= Init APIC timer for BSP ============================= */
+		"pushl $0x00\n\t"  /* apic_index */ \
+		"call init_apic_timer\n\t"  \
+		"popl %%eax\n\t" \
+    /* ============================= End init APIC timer for BSP ========================= */
+
+	/* ============================= Sending INIT中断消息给APs  ============================= */
 	    "movl bsp_apic_icr_relocation,%%eax\n\t" \
 		/* 发送 INIT message */
 	    "movl $0x000C4500,0(%%eax)\n\t" \
@@ -153,33 +170,19 @@ void init_ap() {
 	    "nop\n\t" \
 	    "cmp $0x0,%%ecx\n\t" \
 	    "jne wait_loop_init\n\t" \
-	/**************************** 等待APs处理INIT中断结束 **********************************************/
+	/* ============================= End sending INIT中断消息给APs ========================== */
 
-	/**************************** 发送SIPI中断消息给APs ***********************************************/
+	/* ============================= Sending SIPI中断消息给APs ============================= */
 		/* 发送 SIPI message */
-		"movl $0x000C4691,0(%%eax)\n\t" \
+		"movl $0x000C4691,0(%%eax)\n\t" /* SIPI中断的入口地址是0x91000 */  \
 		"mov $0x20,%%ecx\n\t" \
 	    "wait_loop_sipi:\n\t" \
 	    "dec %%ecx\n\t" \
 	    "nop\n\t" \
 	    "cmp $0x0,%%ecx\n\t" \
 	    "jne wait_loop_sipi\n\t" \
-		"jmp skip_return \n\t"      /* 跳过发送IPI中断消息给AP，这里用作调试，todo remove */  \
-	/**************************** 等待APs处理SIPI中断结束 **********************************************/
-
-	/**************************** 发送IPI中断消息给APs **********************************************/
-		/* 发送 Fixed IPI message  */
-
-		"movl $0x000C4081,0(%%eax)\n\t" \
-		"mov $0x5,%%ecx\n\t" \
-		"wait_loop_ipi:\n\t" \
-		"dec %%ecx\n\t" \
-		"nop\n\t" \
-		"cmp $0x0,%%ecx\n\t" \
-		"jne wait_loop_ipi\n\t" \
-		"skip_return:\n\t" \
 		::);
-	/**************************** 结束发送INIT中断消息给APs **********************************************/
+	/* ============================= End Sending SIPI中断消息给APs ========================== */
 }
 
 /* 保存每个processor的apic-id,通过apic-id就可以解析处CPU的topology */
@@ -231,6 +234,21 @@ void init_apic_addr(int apic_index) {
 	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000);  /* 为每个APIC的regs分配4K内存 */
 	reloc_apic_regs_addr(addr);
 	apic_ids[apic_index].apic_regs_addr = addr;
+}
+
+void init_apic_timer(int apic_index) {
+	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
+	unsigned long init_count = 1193180/HZ;
+	__asm__("movl %%eax,%%edx\n\t"      \
+			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
+			"movl %%ecx,0(%%edx)\n\t"   \
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x3E0,%%edx\n\t"     \
+			"movl $0x00,0(%%edx)\n\t"  /* Timer clock equals with bus clock divided by divide configuration register */ \
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x320,%%edx\n\t"     \
+            "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector: 0x83  */ \
+			::"a" (addr),"c" (init_count));
 }
 
 /*
