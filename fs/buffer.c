@@ -33,6 +33,10 @@ static struct buffer_head * free_list;
 static struct task_struct * buffer_wait = NULL;
 int NR_BUFFERS = 0;
 
+/************************ semaphore variable ******************************/
+unsigned long block_semaphore = 0;
+/**************************************************************************/
+
 static inline void wait_on_buffer(struct buffer_head * bh) {
 	cli();
 	while (bh->b_lock) {
@@ -199,7 +203,7 @@ struct buffer_head * get_hash_table(int dev, int block) {
 struct buffer_head * getblk(int dev, int block) {
 	struct buffer_head * tmp, *bh;
 
-	repeat: if (bh = get_hash_table(dev, block))
+	repeat: if ((bh = get_hash_table(dev, block)))
 		return bh;
 	tmp = free_list;
 	do {
@@ -231,6 +235,13 @@ struct buffer_head * getblk(int dev, int block) {
 		goto repeat;
 	/* OK, FINALLY we know that this buffer is the only one of it's kind, */
 	/* and that it's unused (b_count=0), unlocked (b_lock=0), and clean */
+
+	/*lock_op(&block_semaphore);
+	if (bh->b_count) {
+		unlock_op(&block_semaphore);
+		goto repeat;
+	}*/
+
 	bh->b_count = 1;
 	bh->b_dirt = 0;
 	bh->b_uptodate = 0;
@@ -238,6 +249,7 @@ struct buffer_head * getblk(int dev, int block) {
 	bh->b_dev = dev;
 	bh->b_blocknr = block;
 	insert_into_queues(bh);
+	//unlock_op(&block_semaphore);
 	return bh;
 }
 

@@ -213,13 +213,17 @@ __asm__("std ; repne ; scasb\n\t"
 	"rep ; stosl\n\t"
 	"movl %%edx,%%eax\n\t"         /* 将该物理地址页放入eax，作为返回值。 */
 	"2:\n\t"
-	"cld;"
+	"cld\n\t"
+	"lea page_lock_semaphore,%%ebx\n\t"
+	"pushl %%ebx\n\t"
+	"call unlock_op\n\t"
+	"popl %%ebx\n\t"
 	:"=a" (__res)
 	:"0" (0),"r" (paging_start),"c" (paging_num),
 	"D" (paging_end), "b" (compare_addr));
 
 /* 要在返回之前释放同步锁 */
-unlock_op(&page_lock_semaphore);
+//unlock_op(&page_lock_semaphore);
 return __res;
 }
 
@@ -343,7 +347,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
 	unsigned long *new_dir_page = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);  /* 为新进程分配一页物理内存用于存储目录表 */
-	//printk("new_dir_page=%p, nr=%d, father_pid=%d, father_nr: %d\n\r", new_dir_page, new_task->task_nr, new_task->father, new_task->father_nr);
+	printk("new_dir_page=%p, nr=%d, father_pid=%d, father_nr: %d\n\r", new_dir_page, new_task->task_nr, new_task->father, new_task->father_nr);
 	/*if (get_current_apic_id() == 0) {
 		test_local_pins_intr();
 		print_apic_enable_status();

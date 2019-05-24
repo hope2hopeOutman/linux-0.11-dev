@@ -88,19 +88,12 @@ __asm__ ("movw $104,%1\n\t" \
   * 1. 如果该块内存是WB(write back)类型的，就是cacheline-lock，这时是不会阻塞其它进程访问其它内存块的.
   * 2. 如果该块内存是UC(uncacheable)类型的，就是bus-lock，这时会阻塞其它进程对整个内存的访问.
   */
-#define lock_op(sem_addr)        \
-__asm__ ("lock_loop:\n\t"        \
-		 "cmp $0x00,%0\n\t"      \
-		 "jne lock_loop\n\t"     \
-		 "movl $0x01,%%eax\n\t"  \
-		 "lock\n\t"   /* xchg默认会加上lock前缀的，这里显示加上lock prefix是为了统一风格 */ \
-		 "xchg %%eax,%0\n\t"     \
-		 "cmp $0x00,%%eax\n\t"   \
-		 "jne lock_loop\n\t"     \
-		 ::"m" (*sem_addr)       \
-	    )
+extern void lock_op(unsigned long * sem_addr);
 
 /* sem_addr的值为1表示获得lock,如果值为0表示释放了lock */
+extern void unlock_op(unsigned long * sem_addr);
+
+/*
 #define unlock_op(sem_addr)  \
 __asm__ ("cmpl $0x00,%0\n\t" \
 		 "jle 1f\n\t" \
@@ -108,6 +101,7 @@ __asm__ ("cmpl $0x00,%0\n\t" \
 		 "1:\n\t" \
 		 ::"m" (*sem_addr)   \
 	    )
+*/
 
 
 /* delay operation , such as nop */

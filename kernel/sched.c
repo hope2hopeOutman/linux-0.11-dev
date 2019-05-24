@@ -23,6 +23,11 @@
 #define _S(nr) (1<<((nr)-1))
 #define _BLOCKABLE (~(_S(SIGKILL) | _S(SIGSTOP)))
 
+/************************ semaphore variable ******************************/
+unsigned long sched_semaphore = 0;
+unsigned long sleep_on_semaphore = 0;
+/**************************************************************************/
+
 void show_task(int nr,struct task_struct * p)
 {
 	int i,j = 4096-sizeof(struct task_struct);
@@ -75,8 +80,6 @@ struct {
 	long * a;
 	short b;
 	} stack_start = {&user_stack[PAGE_SIZE>>2] , 0x10};
-
-unsigned long sched_semaphore = 0;
 
 /* 获取当前processor正在运行的任务 */
 unsigned long get_current_apic_id(){
@@ -186,6 +189,28 @@ void reset_ap_default_task() {
 	apic_ids[apic_index].current = &ap_default_task.task;
 }
 
+void lock_op(unsigned long* sem_addr) {
+	__asm__ ("lock_loop:\n\t"        \
+			 "cmp $0x00,%0\n\t"      \
+			 "jne lock_loop\n\t"     \
+			 "movl $0x01,%%edx\n\t"  \
+			 "lock\n\t"    /*xchg默认会加上lock前缀的，这里显示加上lock prefix是为了统一风格*/  \
+			 "xchg %%edx,%0\n\t"     \
+			 "cmp $0x00,%%edx\n\t"   \
+			 "jne lock_loop\n\t"     \
+			 ::"m" (*sem_addr)       \
+		    );
+}
+
+void unlock_op(unsigned long* sem_addr) {
+	__asm__ ("cmpl $0x00,%0\n\t" \
+			 "jle 1f\n\t" \
+			 "subl $0x01,%0\n\t" \
+			 "1:\n\t" \
+			 ::"m" (*sem_addr)   \
+			);
+}
+
 /*
  *  'math_state_restore()' saves the current math information in the
  * old math state array, and gets the new ones from the current task
@@ -270,7 +295,7 @@ void schedule(void)
 		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
 			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
 			//printk("Before send IPI: %d\n\r", sched_apic_id);
-			delay_op(500);
+			//delay_op(500);
 			send_IPI(sched_apic_id, SCHED_INTR_NO);
 
 			if (lock_flag) {
@@ -317,8 +342,18 @@ int sys_pause(void)
 	return 0;
 }
 
+/*
+ * 该方法要加同步锁,因为当多个进程并发调用该方法时,
+ * 会造成多个等待进程同时指向相同的上一个等待进程,但是该inode.i_wait是共享的,只能有一个并发进程被保存到inode.i_wait,
+ * 所以其他的并发进程将丢失了,是永远不会被唤醒的.
+ * 每个进程调用该方法时,通过分配在栈上的tmp局部变量来串联所有等待任务的,这个链表本身也是个栈,先进后出,
+ * 所以最后调用sleep_on方法的进程,会将自己的任务指针保存在inode.i_wait,当施加lock inode操作的进程释放lock,并调用wake_up方法后
+ * 会唤醒inode.i_wait任务,该任务会唤醒它保存的上一个等待任务,以此类推,直到最后一个等待任务.
+ * */
 void sleep_on(struct task_struct **p)
 {
+	lock_op(&sleep_on_semaphore);
+
 	struct task_struct* current = get_current_task();
 	struct task_struct *tmp;
 
@@ -326,10 +361,18 @@ void sleep_on(struct task_struct **p)
 		return;
 	if (current == &(init_task.task))
 		panic("task[0] trying to sleep");
-	tmp = *p;
-	*p = current;
-	current->state = TASK_UNINTERRUPTIBLE;
-	schedule();
+	tmp = *p;        /* 将目前inode.i_wait指向的等待任务的指针保存到tmp */
+	*p = current;    /* 将当前任务的指针，保存到inode.i_wait */
+	current->state = TASK_UNINTERRUPTIBLE;  /* 将当前任务设置为不可中断的睡眠状态(必须通过wake_up唤醒，不能通过signal方式唤醒) */
+
+	unlock_op(&sleep_on_semaphore);         /* 一定要在调度操作之前把锁释放了 */
+
+	schedule();      /* 这里肯定调度其他任务执行了，不可能再是本任务了 */
+	/*
+	 * 这里最有意思了，每个等待任务用自己的局部变量tmp来保存前一个等待任务的指针，这样就形成了一个等待任务列表了。
+	 * 当该任务被其他任务通过wake_up唤醒后，会紧接着执行下面的代码，把它自己维护的上一个等待任务的状态设置为running状态，
+	 * 这样这个任务就被唤醒了，就有可能被下次schedule方法调度运行了，tricky吧，这里有必要解释一下。
+	 * */
 	if (tmp)
 		tmp->state=0;
 }
@@ -360,7 +403,7 @@ repeat:	current->state = TASK_INTERRUPTIBLE;
 void wake_up(struct task_struct **p)
 {
 	if (p && *p) {
-		(**p).state=0;
+		(**p).state=0; /* 将等待任务的状态设置为running状态，这样就可以被schedule方法调度了. */
 		//*p=NULL;
 	}
 }

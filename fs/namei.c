@@ -107,7 +107,7 @@ static struct buffer_head * find_entry(struct m_inode ** dir, const char * name,
 	if (namelen > NAME_LEN)
 		namelen = NAME_LEN;
 #endif
-	entries = (*dir)->i_size / (sizeof(struct dir_entry));
+	entries = (*dir)->i_size / (sizeof(struct dir_entry));  /* 目录下有子目录或文件,每个子目录或文件都要占用一个目录项(dir_entry) */
 	*res_dir = NULL;
 	if (!namelen)
 		return NULL;
@@ -247,25 +247,23 @@ static struct m_inode * get_dir(const char * pathname) {
 
 	//printk("currentPid: %d, root: %u, icount: %d \n\r", current->pid, current->root, current->root->i_count);
 	if (!current->root || !current->root->i_count) {
-		char kstr[32] = { 0 };
-		cpy_str_to_kernel(kstr, pathname);
+		//char kstr[32] = { 0 };
+		//cpy_str_to_kernel(kstr, pathname);
 		/*printk("Pid: %d, tty: %d, fileName: %s, idev: %d, inum: %d\n\r",
 				current->pid, current->tty, kstr, current->root->i_dev, current->root->i_num);*/
 		panic("No root inode");
-	} else {
-		if (current->pid == 4) {
-			//printk("father: %d, Pid:%d, base: %p, limit: %p\n",current->father,current->pid, get_base(current->ldt[1]), get_limit(0x17));
-		}
 	}
 	if (!current->pwd || !current->pwd->i_count)
 		panic("No cwd inode");
 	if ((c = get_fs_byte(pathname)) == '/') {
 		inode = current->root;
 		pathname++;
-	} else if (c)
+	} else if (c) {
 		inode = current->pwd;
-	else
+	}
+	else {
 		return NULL; /* empty name is bad */
+	}
 	inode->i_count++;
 	while (1) {
 		thisname = pathname;

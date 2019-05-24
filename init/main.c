@@ -114,11 +114,11 @@ void get_cpu_topology_info() {
         	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
 #endif
 
-    printk("eax: %u, ebx: %u,ecx: %u, edx: %u \n\r", eax_value, ebx_value,ecx_value, edx_value);
+    //printk("eax: %u, ebx: %u,ecx: %u, edx: %u \n\r", eax_value, ebx_value,ecx_value, edx_value);
 
     int sipi_cpu_count = *((unsigned short *) 0x90C00);
     int ipi_cpu_count  = *((unsigned short *) 0x90C04);
-    printk("SIPI_cpu_count: %d, ^_^ successfully interact with APs by SIPI \n\r", sipi_cpu_count);
+    //printk("SIPI_cpu_count: %d, ^_^ successfully interact with APs by SIPI \n\r", sipi_cpu_count);
     //printk("IPI_processor_count : %d, Successfully interact with APs by IPI ^_^ ^.^ ^_^ \n\r", ipi_cpu_count);
 }
 /* 初始化APs，包括让AP进入保护模式，开启中断，初始化段寄存器使其指向内核代码段等等 */
@@ -344,7 +344,7 @@ void main(void)		/* This really IS void, no error here. */
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	init_ap();
-	get_cpu_topology_info();
+	//get_cpu_topology_info();
 	printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);
 	sti();
