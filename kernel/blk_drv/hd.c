@@ -265,9 +265,9 @@ static void read_intr(void)
 		return;
 	}
 	port_read(HD_DATA,CURRENT->buffer,256);
-	int apic_id = get_current_apic_id();
 
-	/*if (apic_id > 0) {
+	/*int apic_id = get_current_apic_id();
+	if (apic_id > 0) {
 		printk("current_apic_id: %d \n\r", apic_id);
 	}*/
 

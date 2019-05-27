@@ -154,6 +154,7 @@ int find_empty_process(void) {
 	for (i = 1; i < NR_TASKS; i++) {
 		if (!task[i]) {
 			//printk("NR: %d, last_pid: %d\n\r", i, last_pid);
+			task[i] = task[0];  /* 这里这样赋值,主要是起到设置占位符的作用 */
 			if (lock_flag) {
 				unlock_op(&find_empty_process_semaphore);
 				lock_flag = 0;

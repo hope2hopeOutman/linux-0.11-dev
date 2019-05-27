@@ -215,14 +215,18 @@ __asm__("std ; repne ; scasb\n\t"
 	"2:\n\t"
 	"cld\n\t"
 	"lea page_lock_semaphore,%%ebx\n\t"
+	"pushl %%eax\n\t"              /* eax作为get_free_page函数的返回值,这里必须要备份一下,因为下面unlock_op函数调用会重置eax,作为返回值,即使该函数是void类型 */
 	"pushl %%ebx\n\t"
 	"call unlock_op\n\t"
 	"popl %%ebx\n\t"
+	"popl %%eax\n\t"
 	:"=a" (__res)
 	:"0" (0),"r" (paging_start),"c" (paging_num),
 	"D" (paging_end), "b" (compare_addr));
 
-/* 要在返回之前释放同步锁 */
+/* 要在返回之前释放同步锁
+ * 在此处调用该解锁方法,GCC编译的时候有问题,会遗漏一些操作,对于这种嵌入式混合汇编,觉的GCC在处理上下文依赖关系上,还是不完善.
+ * */
 //unlock_op(&page_lock_semaphore);
 return __res;
 }
@@ -268,7 +272,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 	if (from & 0x3fffff)
 		panic("free_page_tables called with wrong alignment");
 	if (!from) {
-		printk("Free pg_dir, currentPid: %d, fid: %d \n\r", current->pid, current->father);
+		//printk("Free pg_dir, currentPid: %d, fid: %d \n\r", current->pid, current->father);
 		panic("Trying to free up swapper memory space");
 	}
 
@@ -298,7 +302,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		for (nr=0 ; nr<pti_size ; nr++) {
 			if (*pg_table >= LOW_MEM) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
 				if (!free_page(0xfffff000 & *pg_table)) {
-					printk("error linear addr: %p \n\r", pg_table);
+					//printk("error linear addr: %p \n\r", pg_table);
 					panic("free_page_tables1: trying to free free page");
 				}
 			}
@@ -633,7 +637,7 @@ void get_empty_page(unsigned long address)
 	if (!(tmp=get_free_page(PAGE_IN_MEM_MAP)) || !put_page(tmp,address)) {
 		if (!free_page(tmp)) /* 0 is ok - ignored */
 			panic("get_empty_page: trying to free free page");
-		printk("get_empty_page trigger oom,tmp: %u, address: %u \n\r", tmp, address);
+		//printk("get_empty_page trigger oom,tmp: %u, address: %u \n\r", tmp, address);
 		oom();
 	}
 }

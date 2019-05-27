@@ -34,13 +34,13 @@ static struct task_struct * buffer_wait = NULL;
 int NR_BUFFERS = 0;
 
 /************************ semaphore variable ******************************/
-unsigned long block_semaphore = 0;
+unsigned long block_query_semaphore = 0;
+unsigned long block_read_semaphore = 0;
 /**************************************************************************/
 
 static inline void wait_on_buffer(struct buffer_head * bh) {
 	cli();
 	while (bh->b_lock) {
-		//printk("block has been lock\n\r");
 		sleep_on(&bh->b_wait);
 	}
 	sti();
@@ -165,9 +165,10 @@ static inline void insert_into_queues(struct buffer_head * bh) {
 static struct buffer_head * find_buffer(int dev, int block) {
 	struct buffer_head * tmp;
 
-	for (tmp = hash(dev, block); tmp != NULL; tmp = tmp->b_next)
+	for (tmp = hash(dev, block); tmp != NULL; tmp = tmp->b_next) {
 		if (tmp->b_dev == dev && tmp->b_blocknr == block)
 			return tmp;
+	}
 	return NULL;
 }
 
@@ -203,8 +204,11 @@ struct buffer_head * get_hash_table(int dev, int block) {
 struct buffer_head * getblk(int dev, int block) {
 	struct buffer_head * tmp, *bh;
 
+	//delay_op(500);
+
 	repeat: if ((bh = get_hash_table(dev, block)))
 		return bh;
+
 	tmp = free_list;
 	do {
 		if (tmp->b_count)
@@ -223,6 +227,7 @@ struct buffer_head * getblk(int dev, int block) {
 	wait_on_buffer(bh);
 	if (bh->b_count)
 		goto repeat;
+
 	while (bh->b_dirt) {
 		sync_dev(bh->b_dev);
 		wait_on_buffer(bh);
@@ -236,11 +241,11 @@ struct buffer_head * getblk(int dev, int block) {
 	/* OK, FINALLY we know that this buffer is the only one of it's kind, */
 	/* and that it's unused (b_count=0), unlocked (b_lock=0), and clean */
 
-	/*lock_op(&block_semaphore);
+	lock_op(&block_query_semaphore);
 	if (bh->b_count) {
-		unlock_op(&block_semaphore);
+		unlock_op(&block_query_semaphore);
 		goto repeat;
-	}*/
+	}
 
 	bh->b_count = 1;
 	bh->b_dirt = 0;
@@ -249,7 +254,7 @@ struct buffer_head * getblk(int dev, int block) {
 	bh->b_dev = dev;
 	bh->b_blocknr = block;
 	insert_into_queues(bh);
-	//unlock_op(&block_semaphore);
+	unlock_op(&block_query_semaphore);
 	return bh;
 }
 
@@ -275,6 +280,7 @@ struct buffer_head * bread(int dev, int block) {
 		return bh;
 	ll_rw_block(READ, bh);
 	wait_on_buffer(bh);
+
 	if (bh->b_uptodate)
 		return bh;
 	brelse(bh);
