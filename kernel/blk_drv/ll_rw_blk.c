@@ -117,7 +117,6 @@ static void make_request(int major,int rw, struct buffer_head * bh)
 	lock_buffer(bh);  /* 这一步一定要加同步锁 */
 	if ((rw == WRITE && !bh->b_dirt) || (rw == READ && bh->b_uptodate)) {
 		unlock_buffer(bh);
-		printk("buffer has readed\n\r");
 		return;
 	}
 

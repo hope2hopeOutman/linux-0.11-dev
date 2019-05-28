@@ -351,11 +351,8 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
 	unsigned long *new_dir_page = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);  /* 为新进程分配一页物理内存用于存储目录表 */
-	printk("new_dir_page=%p, nr=%d, father_pid=%d, father_nr: %d\n\r", new_dir_page, new_task->task_nr, new_task->father, new_task->father_nr);
-	/*if (get_current_apic_id() == 0) {
-		test_local_pins_intr();
-		print_apic_enable_status();
-	}*/
+	//printk("apic=%d, new_dir=%p, nr=%d, f_pid=%d, f_nr: %d\n\r",get_current_apic_id(), new_dir_page, new_task->task_nr, new_task->father, new_task->father_nr);
+
 	if (!new_dir_page) {
 		panic("Can not allocate a physical page for new process's dir-table. \n\r ");
 	}
@@ -516,6 +513,9 @@ unsigned long put_page(unsigned long page,unsigned long address)
     /* no need for invalidate */
 	return page;
 }
+
+unsigned long un_wp_page_semaphore = 0;
+
 /* 处理写保护异常，table_entry是页表中某个页表项的物理地址，不是线性地址搞清楚喽。 */
 void un_wp_page(unsigned long * table_entry)
 {
@@ -538,6 +538,7 @@ void un_wp_page(unsigned long * table_entry)
 	 * 会将其占有标志--，当另一个进程第一次写该页时也会触发WP,这时就要判读占有标志是否为1，为1说明另一个进程已经write on copy了
 	 * 所以这里直接将自己的页表项设置为可写就行了。
 	 */
+	repeat:
 	if ((unsigned long)old_page >= LOW_MEM && mem_map[MAP_NR((unsigned long)old_page)]==1) {
 		*table_entry |= 2;
 		recov_swap_linear_addrs(cached_linear_addrs, length);
@@ -562,8 +563,23 @@ void un_wp_page(unsigned long * table_entry)
 	 * 当第一个进程对某个物理页执行写操作时会触发WP，这时该物理页的占用标记是2，所以会执行到这里，先把占用标记--，然后将新分配的物理页
 	 * 地址设置为RWX，并赋值给对应的页表项，刷新TLB后，然后将old_page的内容分配到new_page，所以是第一个执行写操作的进程会触发write on copy.
 	 */
-	if ((unsigned long)old_page >= LOW_MEM)
+	if ((unsigned long)old_page >= LOW_MEM) {
+		/*
+		 * 这是个巨坑啊,多核的时候,父子进程会并发执行的,这个时候会同时执行到这,将mem_map[MAP_NR((unsigned long)old_page)]设置为0了,
+		 * 相当于释放了该内存页了,造成ESP老是报错.
+		 * 这个问题搞了一天,几乎把内核又过了一遍,磁盘块和内存块的同步终于搞定了,为BSP和AP都能自主调度进程执行打下坚实的基础哈哈哈.
+		 * 再次吐槽下bochs的多核调试,功能太不完善了,至少得提供打印每个CPU的通用寄存器和控制寄存器的功能吧,目前只能打印CPU0(BSP)的,
+		 * 官方文档上说是用info cpu可以打印所有CPU的寄存器信息,但是用这个命令,整个bochs就挂了,直接退出了,所以调试工具真的是很重要啊,
+		 * 这里就是根据很少的日志信息,结合源码硬看的,每个函数都带入并发上下文,尼玛真是佩服自己,太虐了.
+		 *  */
+		lock_op(&un_wp_page_semaphore);
+		if (mem_map[MAP_NR((unsigned long)old_page)] == 1) {
+			unlock_op(&un_wp_page_semaphore);
+			goto repeat;
+		}
 		mem_map[MAP_NR((unsigned long)old_page)]--;
+		unlock_op(&un_wp_page_semaphore);
+	}
 	*table_entry = (unsigned long)new_page | 7;
 	invalidate(current->tss.cr3);
 	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&old_page));
@@ -760,13 +776,14 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	address &= 0xfffff000;
 	tmp = address - current->start_code;  /* 这里的start_code等于进程地址空间的base,这里的tmp是相对于base的offset */
-	//printk("addr: %u, errcode: %d \n\r", address, error_code);
+
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;
 	}
-	if (share_page(tmp))
+	if (share_page(tmp)) {
 		return;
+	}
 	if (!(page = (unsigned long*)get_free_page(PAGE_IN_MEM_MAP))) {
 		printk("do_no_page embedded trigger oom \n\r");
 		oom();
@@ -782,7 +799,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	unsigned long linear_addr = 0;
 	if (i > 0) {
-		printk("directly remap maybe have some problem \n\r");
+		//printk("directly remap maybe have some problem \n\r");
 		linear_addr = remap_linear_addr((unsigned long) page);
 		if (linear_addr) {
 			tmp = (unsigned long) linear_addr + 4096;

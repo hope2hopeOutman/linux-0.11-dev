@@ -295,7 +295,7 @@ void schedule(void)
 		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
 			/* 这里发送IPI给sched_apic_id调用该方法取执行选定的任务。 */
 			//printk("Before send IPI: %d\n\r", sched_apic_id);
-			//delay_op(500);
+			//delay_op(500); /* 这个延迟函数终于可以去掉了,磁盘块和内存块之间的同步终于实现了 */
 			send_IPI(sched_apic_id, SCHED_INTR_NO);
 
 			if (lock_flag) {

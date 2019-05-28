@@ -131,6 +131,7 @@ int sys_chown(const char * filename, int uid, int gid) {
 	return 0;
 }
 
+unsigned long sys_open_semaphore = 0;
 int sys_open(const char * filename, int flag, int mode) {
 	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
@@ -139,7 +140,7 @@ int sys_open(const char * filename, int flag, int mode) {
 
 	/*char kstr[32] = { 0 };
 	cpy_str_to_kernel(kstr, filename);
-	printk("open a file name: %s \n\r", kstr);*/
+	printk("apcid:%d,file:%s\n\r", get_current_apic_id(), kstr);*/
 
 	mode &= 0777 & ~current->umask;
 	for (fd = 0; fd < NR_OPEN; fd++) {
@@ -153,10 +154,14 @@ int sys_open(const char * filename, int flag, int mode) {
 	}
 	current->close_on_exec &= ~(1 << fd);
 	f = 0 + file_table;
+    lock_op(&sys_open_semaphore);
 	for (i = 0; i < NR_FILE; i++, f++) {
-		if (!f->f_count)
+		if (!f->f_count) {
+			f->f_count = 1;
 			break;
+		}
 	}
+	unlock_op(&sys_open_semaphore);
 	if (i >= NR_FILE) {
 		printk("errorno1: %d \n\r", EINVAL);
 		return -EINVAL;

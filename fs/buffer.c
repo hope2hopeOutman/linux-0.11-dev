@@ -35,7 +35,8 @@ int NR_BUFFERS = 0;
 
 /************************ semaphore variable ******************************/
 unsigned long block_query_semaphore = 0;
-unsigned long block_read_semaphore = 0;
+//unsigned long block_read_semaphore = 0;
+unsigned long block_count_semaphore = 0;
 /**************************************************************************/
 
 static inline void wait_on_buffer(struct buffer_head * bh) {
@@ -183,13 +184,23 @@ struct buffer_head * get_hash_table(int dev, int block) {
 	struct buffer_head * bh;
 
 	for (;;) {
-		if (!(bh = find_buffer(dev, block)))
+
+		if (!(bh = find_buffer(dev, block))) {
 			return NULL;
+		}
+        /* 并发访问的时候,一定要加同步 */
+		lock_op(&block_count_semaphore);
 		bh->b_count++;
+		unlock_op(&block_count_semaphore);
+
 		wait_on_buffer(bh);
+
 		if (bh->b_dev == dev && bh->b_blocknr == block)
 			return bh;
+
+		lock_op(&block_count_semaphore);
 		bh->b_count--;
+		unlock_op(&block_count_semaphore);
 	}
 }
 
@@ -204,10 +215,10 @@ struct buffer_head * get_hash_table(int dev, int block) {
 struct buffer_head * getblk(int dev, int block) {
 	struct buffer_head * tmp, *bh;
 
-	//delay_op(500);
-
-	repeat: if ((bh = get_hash_table(dev, block)))
+	repeat:
+	if ((bh = get_hash_table(dev, block))) {
 		return bh;
+	}
 
 	tmp = free_list;
 	do {
@@ -258,12 +269,15 @@ struct buffer_head * getblk(int dev, int block) {
 	return bh;
 }
 
+unsigned long brelse_semaphore = 0;
 void brelse(struct buffer_head * buf) {
 	if (!buf)
 		return;
 	wait_on_buffer(buf);
+	lock_op(&brelse_semaphore);
 	if (!(buf->b_count--))
 		panic("Trying to free free buffer");
+	unlock_op(&brelse_semaphore);
 	wake_up(&buffer_wait);
 }
 

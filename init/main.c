@@ -388,8 +388,8 @@ void init(void)
 	(void) open("/dev/tty0",O_RDWR,2);
 	(void) dup(0);
 	(void) dup(0);
-	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS, NR_BUFFERS*BLOCK_SIZE);
-	printf("Free mem: %d (granularity 4k)\n\r",memory_end-main_memory_start);
+	//printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS, NR_BUFFERS*BLOCK_SIZE);
+	//printf("Free mem: %d (granularity 4k)\n\r",memory_end-main_memory_start);
 	if (!(pid=fork())) {
 		close(0);  /* 这里是task2开始执行的代码 */
 		if (open("/etc/rc",O_RDONLY,0))
