@@ -88,9 +88,15 @@ void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
 }
 
+unsigned long remap_linear_addr_semaphore = 0;
 /* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long remap_linear_addr(unsigned long phy_addr)
 {
+	/*
+	 * 当内存>1G时,内核用于映射>1G内存的保留线性地址空间也是多进程共享资源,所以一定要加锁同步,
+	 * 否则会导致多个>1G的内存页被映射到了相同的线性地址空间,导致系统崩溃,大坑一口哈哈.
+	 * */
+    lock_op(&remap_linear_addr_semaphore);
 	struct task_struct* current = get_current_task();
 	unsigned long linear_addr = 0;
 	for (int i=0; i< KERNEL_REMAP_ADDR_SPACE; i++)
@@ -103,6 +109,7 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 			break;
 		}
 	}
+	unlock_op(&remap_linear_addr_semaphore);
 	if (!linear_addr) {
 		panic("Linear address has been full \n\r");
 	}
