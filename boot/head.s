@@ -613,7 +613,7 @@ idle_loop:
     hlt
     jmp idle_loop
 
-.org 0x5000
+//.org 0x5000
 
 
 
