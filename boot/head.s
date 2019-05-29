@@ -89,6 +89,8 @@ OS_PRELOAD_SIZE    = 0x8000
 //KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K (512M) */
 KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 
+AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
+
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
 .globl startup_32,sync_semaphore,idle_loop
@@ -575,14 +577,17 @@ lock_loop:
     pop %eax
     pop %ebx
 
-    /* 这时eax存储的是apic_index,所有这里作为参数传给alloc_ap_kernel_stack */
+    /* 这时eax存储的是apic_index,所以这里作为参数传给alloc_ap_kernel_stack */
     lea return_addr,%ebx
     pushl %ebx
     pushl %eax
     call alloc_ap_kernel_stack
 return_addr:
-    pop %eax
-    pop %eax
+    /* 下面连续两个pop操作应该去掉,因为这时内核栈已经重新分配了,指向一个新的内存页的顶端,
+     * 这里要是执行pop操作的话,会使ESP指向下一页内存了,会造成下一页内存有效数据被覆盖的错误.
+     * */
+    //pop %eax
+    //pop %eax
     /* 初始化AP apic regs addr */
     push %ds:apic_index
     call init_apic_addr
@@ -601,19 +606,22 @@ return_addr:
 	orl $0x80000000,%eax
 	movl %eax,%cr0		 /* set paging (PG) bit */
 
-   /* 这里一定要设置一个TSS段的默认保存地址，因为第一次任务切换时如果不设置的话，
+   /* 这里一定要设置一个TSS段的默认保存地址，因为AP在执行第一次任务切换时如果不设置的话，
     * 会将当前内核态的context保存到内核目录表中的(TSS未初始化的默认值是0x00,内核目录表的地址)，大问题啊.
     */
-	pushl $80
+	pushl $AP_DEFAULT_TASK_NR
 	call reset_ap_tss
 	popl %eax
+
+	/* 初始化并启用AP的timer,让AP能够定时调度task执行,不用再劳烦BSP指派任务了哈哈 */
+/*	call get_current_apic_index
+	pushl %eax    // current_apic_index作为返回值,存储在%eax中
+	call init_apic_timer
+	popl %eax
+	*/
 
     hlt
 idle_loop:
     hlt
     jmp idle_loop
-
-//.org 0x5000
-
-
 

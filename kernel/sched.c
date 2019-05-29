@@ -26,6 +26,7 @@
 /************************ semaphore variable ******************************/
 unsigned long sched_semaphore = 0;
 unsigned long sleep_on_semaphore = 0;
+unsigned long interruptible_sleep_on_semaphore = 0;
 /**************************************************************************/
 
 void show_task(int nr,struct task_struct * p)
@@ -169,7 +170,8 @@ void send_EOI() {
 	}
 }
 
-unsigned long get_apic_index(unsigned long apic_id) {
+unsigned long get_current_apic_index() {
+	unsigned long apic_id = get_current_apic_id();
 	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
 		if (apic_ids[i].apic_id == apic_id) {
 			return i;
@@ -185,7 +187,7 @@ void reset_ap_tss(int nr) {
 }
 
 void reset_ap_default_task() {
-	unsigned long apic_index = get_apic_index(get_current_apic_id());
+	unsigned long apic_index = get_current_apic_index();
 	apic_ids[apic_index].current = &ap_default_task.task;
 }
 
@@ -357,8 +359,10 @@ void sleep_on(struct task_struct **p)
 	struct task_struct* current = get_current_task();
 	struct task_struct *tmp;
 
-	if (!p)
+	if (!p) {
+		unlock_op(&sleep_on_semaphore);
 		return;
+	}
 	if (current == &(init_task.task))
 		panic("task[0] trying to sleep");
 	tmp = *p;        /* 将目前inode.i_wait指向的等待任务的指针保存到tmp */
@@ -379,16 +383,21 @@ void sleep_on(struct task_struct **p)
 
 void interruptible_sleep_on(struct task_struct **p)
 {
+	lock_op(&interruptible_sleep_on_semaphore);
 	struct task_struct* current = get_current_task();
 	struct task_struct *tmp;
 
-	if (!p)
+	if (!p) {
+		unlock_op(&interruptible_sleep_on_semaphore);
 		return;
+	}
 	if (current == &(init_task.task))
 		panic("task[0] trying to sleep");
 	tmp=*p;
 	*p=current;
-repeat:	current->state = TASK_INTERRUPTIBLE;
+    repeat:
+    current->state = TASK_INTERRUPTIBLE;
+    unlock_op(&interruptible_sleep_on_semaphore);
 	schedule();
 	if (*p && *p != current) {
 		(**p).state=0;
@@ -494,9 +503,10 @@ void add_timer(long jiffies, void (*fn)(void))
 	if (jiffies <= 0)
 		(fn)();
 	else {
-		for (p = timer_list ; p < timer_list + TIME_REQUESTS ; p++)
+		for (p = timer_list ; p < timer_list + TIME_REQUESTS ; p++) {
 			if (!p->fn)
 				break;
+		}
 		if (p >= timer_list + TIME_REQUESTS)
 			panic("No more time requests free");
 		p->fn = fn;
@@ -551,6 +561,7 @@ void do_timer(long cpl)
 		printk("apic_id: %d \n\r" , get_current_apic_id());
 		++timer_count;
 	}
+
 	if (!cpl) return;  /* 这里可以看出内核态是不支持timer中断进行进程调度的，其他的外部中断除外 */
 
 	schedule();
@@ -640,7 +651,7 @@ void sched_init(void)
 	set_intr_gate(0x20,&timer_interrupt);
 	outb(inb_p(0x21)&~0x01,0x21);   /* Not mask timer intr */
 #else
-	set_intr_gate(0x83,&timer_interrupt);  /* Vector value 0x83 for APIC timer */
+	set_intr_gate(APIC_TIMER_INTR_NO,&timer_interrupt);  /* Vector value 0x83 for APIC timer */
 #endif
 
 	set_system_gate(0x80,&system_call);

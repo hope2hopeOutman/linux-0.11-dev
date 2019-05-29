@@ -11,6 +11,7 @@
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/tty.h>
+#include <linux/head.h>
 #include <asm/segment.h>
 
 int sys_pause(void);
@@ -149,11 +150,20 @@ int do_exit(long code)
 	else {
 		unsigned long apic_id = get_current_apic_id();
 		printk("task[%d],exit at AP[%d]\n\r", current->task_nr, apic_id);
-		unsigned long apic_index =  get_apic_index(apic_id);
-		reset_dir_base();  /* 这里一定要将AP的CR3设置为0x00,因为当前进程已经被释放掉了，所以当前的CR3中的目录表基地址就无效了（此页有可能被其他进程占用了） */
-		reset_ap_tss(80);
-		reset_ap_default_task();  /* 下次任务调度的时候,保留当前的任务状态,否则,TSS默认值为0,会映射到0x00内核目录表处,这样会覆盖掉内核目录表,系统会崩溃的 */
-		alloc_ap_kernel_stack(apic_index,idle_loop); /* 重新设置AP的内核栈指针，然后跳转到idle_loop执行空循环，等待新的IPI中断 */
+		unsigned long apic_index =  get_current_apic_index();
+		/* 这里一定要将AP的CR3设置为0x00,因为当前进程已经被释放掉了，所以当前的CR3中的目录表基地址就无效了（此页有可能被其他进程占用了） */
+		reset_dir_base();
+		/* 重新加载AP的LTR寄存器,使其指向GDT表中NR=0x80的任务tss,这个任务是每个AP共享的,
+		 * 主要的作用是,当AP由halt状态被唤醒后执行scheduel操作造成任务切换,用来保存当前halt状态下的context
+		 * 如果不设置的话,当前LTR有可能指向0x00内核目录表,或上次执行过的TR(如果该TR已经执行结束了),这时把当前halt状态下的context
+		 * 保存到0x00地址处或当前AP的LTR指向的地址处会覆盖内核目录表或已经分配了新任务的TR NR,从而造成系统崩溃.
+		 * 这也是埋藏很深的巨坑,这里有必要解释一下.
+		 * */
+		reset_ap_tss(AP_DEFAULT_TASK_NR);
+		/* 下次任务调度的时候,保留当前的任务状态,否则,TSS默认值为0,会映射到0x00内核目录表处,这样会覆盖掉内核目录表,系统会崩溃的 */
+		reset_ap_default_task();
+		/* 重新设置AP的内核栈指针，然后跳转到idle_loop执行空循环，等待新的IPI中断 */
+		alloc_ap_kernel_stack(apic_index,idle_loop);
 	}
 	return (-1);	/* just to suppress warnings */
 }

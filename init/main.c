@@ -247,7 +247,7 @@ void init_apic_timer(int apic_index) {
 			"movl $0x00,0(%%edx)\n\t"  /* Timer clock equals with bus clock divided by divide configuration register */ \
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x320,%%edx\n\t"     \
-            "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector: 0x83  */ \
+            "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
 			::"a" (addr),"c" (init_count));
 }
 
