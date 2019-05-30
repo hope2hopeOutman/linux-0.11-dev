@@ -93,7 +93,7 @@ AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个�
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
-.globl startup_32,sync_semaphore,idle_loop
+.globl startup_32,sync_semaphore,idle_loop,ap_default_loop
 startup_32:
 	movl $0x10,%eax
 	mov %ax,%ds
@@ -593,9 +593,6 @@ return_addr:
     call init_apic_addr
     pop %ebx
 
-    addl $0x01,%ds:apic_index
-    subl $1,%ds:sync_semaphore
-
    /* 开启分页机制.
     * 自己挖的巨坑啊，后面老是报readlimit，把current.cr3打印出来映射的都是对的，就是不起作用，
     * 后来发现log里cpu1的cr3总是等于0，恍然大悟啊，分页没开启,ljmp对cr3不起作用的.
@@ -614,14 +611,25 @@ return_addr:
 	popl %eax
 
 	/* 初始化并启用AP的timer,让AP能够定时调度task执行,不用再劳烦BSP指派任务了哈哈 */
-/*	call get_current_apic_index
-	pushl %eax    // current_apic_index作为返回值,存储在%eax中
+    call get_current_apic_index
+	pushl %eax    /* current_apic_index作为返回值,存储在%eax中 */
 	call init_apic_timer
 	popl %eax
-	*/
 
-    hlt
+	addl $0x01,%ds:apic_index
+    subl $1,%ds:sync_semaphore
+
+    //hlt
 idle_loop:
-    hlt
+    //hlt
+    xorl %ebx,%ebx
     jmp idle_loop
+
+ap_default_loop:
+    xorl %eax,%eax
+    xorl %ecx,%ecx
+    xorl %edx,%edx
+    jmp ap_default_loop
+
+
 

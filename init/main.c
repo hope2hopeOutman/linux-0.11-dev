@@ -102,10 +102,11 @@ __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (cou
 
 
 void get_cpu_topology_info() {
+/*
 	int eax_value=0, ebx_value = 0 ,edx_value = 0, ecx_value = 0;
 #if 1
     __asm__("movl $0x01,%%eax;"  \
-    	/*	"movl $0x00,%%ecx;"  \ */
+    		"movl $0x00,%%ecx;"  \
     		"cpuid;" \
     		:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value),"=c" (ecx_value));
 #else
@@ -113,12 +114,13 @@ void get_cpu_topology_info() {
         	"rdmsr;" \
         	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
 #endif
+*/
 
     //printk("eax: %u, ebx: %u,ecx: %u, edx: %u \n\r", eax_value, ebx_value,ecx_value, edx_value);
 
     int sipi_cpu_count = *((unsigned short *) 0x90C00);
     int ipi_cpu_count  = *((unsigned short *) 0x90C04);
-    //printk("SIPI_cpu_count: %d, ^_^ successfully interact with APs by SIPI \n\r", sipi_cpu_count);
+    printk("SIPI_cpu_count: %d, ^_^ successfully interact with APs by SIPI \n\r", sipi_cpu_count);
     //printk("IPI_processor_count : %d, Successfully interact with APs by IPI ^_^ ^.^ ^_^ \n\r", ipi_cpu_count);
 }
 /* 初始化APs，包括让AP进入保护模式，开启中断，初始化段寄存器使其指向内核代码段等等 */
@@ -175,7 +177,7 @@ void init_ap() {
 	/* ============================= Sending SIPI中断消息给APs ============================= */
 		/* 发送 SIPI message */
 		"movl $0x000C4691,0(%%eax)\n\t" /* SIPI中断的入口地址是0x91000 */  \
-		"mov $0x20,%%ecx\n\t" \
+		"mov $0x1000,%%ecx\n\t" \
 	    "wait_loop_sipi:\n\t" \
 	    "dec %%ecx\n\t" \
 	    "nop\n\t" \
@@ -183,6 +185,10 @@ void init_ap() {
 	    "jne wait_loop_sipi\n\t" \
 		::);
 	/* ============================= End Sending SIPI中断消息给APs ========================== */
+}
+
+void print_eax(int eax){
+	printk("ap eax: %d\n\r", eax);
 }
 
 /* 保存每个processor的apic-id,通过apic-id就可以解析处CPU的topology */
@@ -240,14 +246,17 @@ void init_apic_timer(int apic_index) {
 	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
 	unsigned long init_count = 1193180/HZ;
 	__asm__("movl %%eax,%%edx\n\t"      \
-			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
-			"movl %%ecx,0(%%edx)\n\t"   \
-			"movl %%eax,%%edx\n\t"      \
 			"addl $0x3E0,%%edx\n\t"     \
 			"movl $0x00,0(%%edx)\n\t"  /* Timer clock equals with bus clock divided by divide configuration register */ \
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x320,%%edx\n\t"     \
             "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
+			"pushl %%edx\n\t" \
+			"call print_eax\n\t" \
+			"popl %%edx\n\t" \
+			"movl %%ecx,0(%%edx)\n\t"   \
 			::"a" (addr),"c" (init_count));
 }
 
@@ -344,9 +353,9 @@ void main(void)		/* This really IS void, no error here. */
 	floppy_init();
 	//printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	init_ap();
-	//get_cpu_topology_info();
-	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
-			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
+	printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
+			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);
+	get_cpu_topology_info();
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

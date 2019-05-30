@@ -29,6 +29,8 @@ unsigned long sleep_on_semaphore = 0;
 unsigned long interruptible_sleep_on_semaphore = 0;
 /**************************************************************************/
 
+extern void ap_default_loop(void);
+
 void show_task(int nr,struct task_struct * p)
 {
 	int i,j = 4096-sizeof(struct task_struct);
@@ -160,6 +162,9 @@ __asm__ ("movl bsp_apic_icr_relocation,%%edx\n\t" \
 /* 发送中断处理结束信号： end of interrupt */
 void send_EOI() {
 	unsigned long apic_id = get_current_apic_id();
+	if (1) {
+		printk("send_eoi at ap \n\r");
+	}
 	struct apic_info* apic = get_apic_info(apic_id);
 	if (apic) {
 		unsigned long addr = apic->apic_regs_addr;
@@ -213,6 +218,23 @@ void unlock_op(unsigned long* sem_addr) {
 			);
 }
 
+void reset_ap_context() {
+	unsigned long apic_index =  get_current_apic_index();
+	/* 这里一定要将AP的CR3设置为0x00,因为当前进程已经被释放掉了，所以当前的CR3中的目录表基地址就无效了（此页有可能被其他进程占用了） */
+	reset_dir_base();
+	/* 重新加载AP的LTR寄存器,使其指向GDT表中NR=0x80的任务tss,这个任务是每个AP共享的,
+	 * 主要的作用是,当AP由halt状态被唤醒后执行scheduel操作造成任务切换,用来保存当前halt状态下的context
+	 * 如果不设置的话,当前LTR有可能指向0x00内核目录表,或上次执行过的TR(如果该TR已经执行结束了),这时把当前halt状态下的context
+	 * 保存到0x00地址处或当前AP的LTR指向的地址处会覆盖内核目录表或已经分配了新任务的TR NR,从而造成系统崩溃.
+	 * 这也是埋藏很深的巨坑,这里有必要解释一下.
+	 * */
+	reset_ap_tss(AP_DEFAULT_TASK_NR);
+	/* 下次任务调度的时候,保留当前的任务状态,否则,TSS默认值为0,会映射到0x00内核目录表处,这样会覆盖掉内核目录表,系统会崩溃的 */
+	reset_ap_default_task();
+	/* 重新设置AP的内核栈指针，然后跳转到idle_loop执行空循环，等待新的IPI中断 */
+	alloc_ap_kernel_stack(apic_index,ap_default_loop);
+}
+
 /*
  *  'math_state_restore()' saves the current math information in the
  * old math state array, and gets the new ones from the current task
@@ -247,7 +269,6 @@ void math_state_restore()
  */
 void schedule(void)
 {
-	//struct task_struct * current = get_current_task();
 	unsigned long current_apic_id = get_current_apic_id();
 	struct apic_info* apic_info = get_apic_info(current_apic_id);
 	struct task_struct ** current = &(apic_info->current);
@@ -256,6 +277,11 @@ void schedule(void)
 /* check alarm, wake up any interruptible tasks that have got a signal */
 
 	lock_op(&sched_semaphore);  /* 这里一定要加锁，否则会出现多个AP同时执行同一个task */
+	/*
+	 * 这里有必要解释下,为什么要加一个局部变量来释放锁
+	 * 因为这里锁的释放有好几处,程序最后还会释放一次,这个临时变量就是保证每个进程对自己加的锁只释放一次,
+	 * 如果不加这个临时变量判断一下,程序有可能会释放其他进程加的锁.
+	 * */
 	int lock_flag = 1;
 
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
@@ -292,6 +318,8 @@ void schedule(void)
 	}
 
 	if (current_apic_id == apic_ids[0].apic_id) {  /* 调度任务发生在BSP上 */
+		//printk("schedule at BSP \n\r");
+#if 0
 		unsigned long sched_apic_id = get_min_load_ap();
 		/* 这里禁止BSP将task[0]和task[1]调度到AP上执行 */
 		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
@@ -307,15 +335,26 @@ void schedule(void)
 			++apic_ids[sched_apic_id].load_per_apic;
 			next = 1;   /* BSP上只运行task0和task1 */
 		}
+#else
+		if (task[next] != task[0] && task[next] != task[1]) {
+			if (lock_flag) {
+				unlock_op(&sched_semaphore);
+				lock_flag = 0;
+			}
+			next = 1;   /* BSP上只运行task0和task1 */
+		}
+#endif
 	}
 	else {  /* 调度任务发生在AP上，这时AP只能调度除task[0]和task[1]之外的任务，后面会开启AP的timer自主调度。 */
+		printk("schedule at AP \n\r");
+#if 0
 		if (task[next] == task[0] || task[next] == task[1]) {
 			if (lock_flag) {
 				unlock_op(&sched_semaphore);
 				lock_flag = 0;
 			}
 			if (*current != 0) {  /* 这里要注意在执行sys_exit系统调用的时候一定要遍历所有AP的current，将对应的current清空 */
-				return;          /* 如果AP有已经执行过的task,这时不调度，继续执行老的task. */
+				return;           /* 如果AP有已经执行过的task,这时不调度，继续执行老的task. */
 			}
 			else {
 				/* halt等待新的调度IPI */
@@ -328,6 +367,40 @@ void schedule(void)
 			}
 			task[next]->sched_on_ap = 1;
 		}
+#else
+		if (task[next] == task[0] || task[next] == task[1]) {
+			if (lock_flag) {
+				unlock_op(&sched_semaphore);
+				lock_flag = 0;
+			}
+			if (*current != 0) {
+				return;          /* 如果AP有已经执行过的task(包括idle_loop,也就是ap_default_task任务),这时不调度，继续执行老的task. */
+			}
+			else {/* 执行到这个分之,说明内核是有问题的,current是不可能为0的,这里进行reset相当于错误自我修正吧. */
+				/* 重置AP的执行上下文,使其执行idle_loop程序,等待调度新的任务执行 */
+				printk("Errors occur on AP schedule\n\r");
+				reset_ap_context();
+			}
+		}
+		else {  /* 这时AP要调度新的task[n>1] */
+			unsigned long sched_apic_id = get_min_load_ap();
+			if (sched_apic_id == current_apic_id) {
+				if (*current) {
+					/* 只有这样，BSP之后才能继续调用该current到其他AP上运行，否则，该进程将永远不会被重新sched.(但ap_default_task是永远不会被调度的) */
+				    (*current)->sched_on_ap = 0;
+				}
+				task[next]->sched_on_ap = 1;      /* 设置任务占用符,这样释放锁以后,该任务是不会被其他AP调度执行的 */
+				++apic_ids[sched_apic_id].load_per_apic;
+			}
+			else {
+				if (lock_flag) {
+					unlock_op(&sched_semaphore);
+					lock_flag = 0;
+				}
+				return;
+			}
+		}
+#endif
 	}
 	if (lock_flag) {
 		unlock_op(&sched_semaphore);
@@ -529,6 +602,11 @@ void add_timer(long jiffies, void (*fn)(void))
 int timer_count = 0;
 void do_timer(long cpl)
 {
+	if (get_current_apic_id() > 0) {
+		printk("come to ap do_timer\n\r");
+		++timer_count;
+	}
+
 	struct task_struct* current = get_current_task();
 	extern int beepcount;
 	extern void sysbeepstop(void);
@@ -557,12 +635,9 @@ void do_timer(long cpl)
 		do_floppy_timer();
 	if ((--current->counter)>0) return;
 	current->counter=0;
-	if (get_current_apic_id() > 0) {
-		printk("apic_id: %d \n\r" , get_current_apic_id());
-		++timer_count;
-	}
 
-	if (!cpl) return;  /* 这里可以看出内核态是不支持timer中断进行进程调度的，其他的外部中断除外 */
+
+	//if (!cpl) return;  /* 这里可以看出内核态是不支持timer中断进行进程调度的，其他的外部中断除外 */
 
 	schedule();
 }
