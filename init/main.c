@@ -102,21 +102,18 @@ __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (cou
 
 
 void get_cpu_topology_info() {
-/*
 	int eax_value=0, ebx_value = 0 ,edx_value = 0, ecx_value = 0;
 #if 1
-    __asm__("movl $0x01,%%eax;"  \
-    		"movl $0x00,%%ecx;"  \
+    __asm__("movl $0x06,%%eax;"  \
     		"cpuid;" \
-    		:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value),"=c" (ecx_value));
+    		:"=a" (eax_value),"=b" (ebx_value),"=c" (ecx_value), "=d" (edx_value) :);
 #else
     __asm__("movl $0x1B,%%ecx;"  \
         	"rdmsr;" \
         	:"=a" (eax_value),"=b" (ebx_value),"=d" (edx_value));
 #endif
-*/
 
-    //printk("eax: %u, ebx: %u,ecx: %u, edx: %u \n\r", eax_value, ebx_value,ecx_value, edx_value);
+    printk("eax: %u, ebx: %u,ecx: %u, edx: %u \n\r", eax_value, ebx_value,ecx_value, edx_value);
 
     int sipi_cpu_count = *((unsigned short *) 0x90C00);
     int ipi_cpu_count  = *((unsigned short *) 0x90C04);
@@ -157,9 +154,9 @@ void init_ap() {
     /* ============================= End Relocating the Local APIC Registers of BSP ========================= */
 
 	/* ============================= Init APIC timer for BSP ============================= */
-		"pushl $0x00\n\t"  /* apic_index */ \
+		/*"pushl $0x00\n\t"   apic_index  \
 		"call init_apic_timer\n\t"  \
-		"popl %%eax\n\t" \
+		"popl %%eax\n\t" \*/
     /* ============================= End init APIC timer for BSP ========================= */
 
 	/* ============================= Sending INIT中断消息给APs  ============================= */
@@ -233,6 +230,9 @@ __asm__("xor %%eax,%%eax\n\t" \
 		"xor %%eax,%%eax\n\t"    /* just for test， todo remove */ \
 		"xor %%edx,%%edx\n\t" \
 		"rdmsr\n\t" \
+		/*"pushl %%eax\n\t" \
+		"call print_eax\n\t" \
+		"popl %%eax\n\t" \*/
 		::"b" (addr));
 }
 
@@ -253,10 +253,20 @@ void init_apic_timer(int apic_index) {
             "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
-			"pushl %%edx\n\t" \
+			/*"pushl %%edx\n\t" \
 			"call print_eax\n\t" \
-			"popl %%edx\n\t" \
+			"popl %%edx\n\t" \*/
 			"movl %%ecx,0(%%edx)\n\t"   \
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0xF0,%%edx\n\t"     \
+			"movl 0(%%edx),%%eax\n\t"  \
+			"addl $0x100,%%eax\n\t"    \
+			"movl %%eax,0(%%edx)\n\t"  \
+			"movl 0(%%edx),%%eax\n\t"  \
+			"pushl %%eax\n\t" \
+			"call print_eax\n\t" \
+			"popl %%eax\n\t" \
+
 			::"a" (addr),"c" (init_count));
 }
 

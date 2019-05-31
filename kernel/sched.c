@@ -162,9 +162,6 @@ __asm__ ("movl bsp_apic_icr_relocation,%%edx\n\t" \
 /* 发送中断处理结束信号： end of interrupt */
 void send_EOI() {
 	unsigned long apic_id = get_current_apic_id();
-	if (1) {
-		printk("send_eoi at ap \n\r");
-	}
 	struct apic_info* apic = get_apic_info(apic_id);
 	if (apic) {
 		unsigned long addr = apic->apic_regs_addr;
@@ -318,8 +315,7 @@ void schedule(void)
 	}
 
 	if (current_apic_id == apic_ids[0].apic_id) {  /* 调度任务发生在BSP上 */
-		//printk("schedule at BSP \n\r");
-#if 0
+#if 1
 		unsigned long sched_apic_id = get_min_load_ap();
 		/* 这里禁止BSP将task[0]和task[1]调度到AP上执行 */
 		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
@@ -346,8 +342,7 @@ void schedule(void)
 #endif
 	}
 	else {  /* 调度任务发生在AP上，这时AP只能调度除task[0]和task[1]之外的任务，后面会开启AP的timer自主调度。 */
-		printk("schedule at AP \n\r");
-#if 0
+#if 1
 		if (task[next] == task[0] || task[next] == task[1]) {
 			if (lock_flag) {
 				unlock_op(&sched_semaphore);
@@ -599,14 +594,11 @@ void add_timer(long jiffies, void (*fn)(void))
 	}
 	sti();
 }
-int timer_count = 0;
 void do_timer(long cpl)
 {
 	if (get_current_apic_id() > 0) {
 		printk("come to ap do_timer\n\r");
-		++timer_count;
 	}
-
 	struct task_struct* current = get_current_task();
 	extern int beepcount;
 	extern void sysbeepstop(void);
