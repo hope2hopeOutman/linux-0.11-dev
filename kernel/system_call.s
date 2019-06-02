@@ -192,7 +192,7 @@ timer_interrupt:
 	incl jiffies
 	//movb $0x20,%al    /* EOI to interrupt controller #1  for 8253 timer */
 	//outb %al,$0x20
-	call send_EOI       /* 自己挖的大坑,没有改成向APIC timer发送EOI,导致AP上的timer不起作用,EOI to interrupt controller #1  for APIC timer */
+	//call send_EOI       /* 自己挖的大坑,没有改成向APIC timer发送EOI,导致AP上的timer不起作用,EOI to interrupt controller #1  for APIC timer */
 	movl CS(%esp),%eax  /* 这里将CS段选择符的值复制到eax,大家知道，段选择符的低3位分别是:(高1位: tableIndex(0-GDT表，1-LDT表)，低2位: CPL) */
 	andl $3,%eax		/* %eax is CPL (0 or 3, 0=supervisor) 这里把CPL当作参数传递给do_timer，如果当前进程在内核态的话，是不会导致任务切换的 */
 	pushl %eax

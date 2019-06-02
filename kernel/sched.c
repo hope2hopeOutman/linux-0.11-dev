@@ -596,8 +596,8 @@ void add_timer(long jiffies, void (*fn)(void))
 }
 void do_timer(long cpl)
 {
-	if (get_current_apic_id() > 0) {
-		printk("come to ap do_timer\n\r");
+	if (get_current_apic_id() == 0) {
+		//printk("come to ap to execute do_timer\n\r");
 	}
 	struct task_struct* current = get_current_task();
 	extern int beepcount;

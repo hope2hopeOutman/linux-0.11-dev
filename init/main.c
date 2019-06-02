@@ -148,15 +148,15 @@ void init_ap() {
 	 * 到这里终于明白为什么现代OS要把内核的线性地址空间放在4G线性地址空间的高1G地址空间了，因为大量的MSRs寄存器都是映射到高地址空间的，这样就不用重映射了,
 	 * 当然对于多核CPU来说，还是要relocate的。
 	 */
-		"pushl $0x00\n\t"  /* apic_index */ \
-		"call init_apic_addr\n\t"  \
-		"popl %%eax\n\t" \
+		"pushl $0x00\n\t"           \
+		"call init_apic_addr\n\t"   \
+		"popl %%eax\n\t"            \
     /* ============================= End Relocating the Local APIC Registers of BSP ========================= */
 
 	/* ============================= Init APIC timer for BSP ============================= */
-		/*"pushl $0x00\n\t"   apic_index  \
-		"call init_apic_timer\n\t"  \
-		"popl %%eax\n\t" \*/
+		"pushl $0x00\n\t"           \
+		"call init_bsp_timer\n\t"   \
+		"popl %%eax\n\t"            \
     /* ============================= End init APIC timer for BSP ========================= */
 
 	/* ============================= Sending INIT中断消息给APs  ============================= */
@@ -242,7 +242,93 @@ void init_apic_addr(int apic_index) {
 	apic_ids[apic_index].apic_regs_addr = addr;
 }
 
-void init_apic_timer(int apic_index) {
+/*
+ * 这里终于搞清楚AP上的timer为什么不工作了
+ * 因为CPU reset后，会将APIC的spurious vector register设置为0x00FF,这样就会自动软件禁用APIC，
+ * 而Apic timer寄存器也会被重置为0，但是mask bit会被置为1，屏蔽timer中断，
+ * 当要重置tiemr寄存器时，其他位都可重置唯独maskbit是只读的，不能重置，这也是为什么timer没有启动，因为中断被屏蔽掉了，
+ * 所以要先软件开启APIC， reset APIC_BASE+0xFO SVR寄存器，然后再设置timer寄存器，将屏蔽位置0就可启动timer了。
+ * 尼玛这个问题搞了两天啊，主要是因为BSP reset后的timer是能正常工作的，所以就默认AP也是如此，被迷惑了。
+ * 不过文档上也没说BSP会重置SVR的APIC enable位，取消reset后的disable APIC，但是BSP既然reset，timer能正常工作，
+ * 说明BSP的init过程enbale了SVR的APIC位，所以这里我也就默认AP的初始化过程也是如此，所以就...
+ * 还是要仔细研读Intel文档啊。
+ * 10.4.7.1 Local APIC State After Power-Up or Reset
+  Following a power-up or reset of the processor, the state of local APIC and its registers are as follows:
+• The following registers are reset to all 0s:
+• IRR, ISR, TMR, ICR, LDR, and TPR
+• Timer initial count and timer current count registers
+• Divide configuration register
+• The DFR register is reset to all 1s.
+• !!! The LVT register is reset to 0s except for the mask bits; these are set to 1s !!!.
+• The local APIC version register is not affected.
+• The local APIC ID register is set to a unique APIC ID. (Pentium and P6 family processors only). The Arb ID
+register is set to the value in the APIC ID register.
+• The spurious-interrupt vector register is initialized to 000000FFH. By setting bit 8 to 0, software disables the
+local APIC.
+• If the processor is the only processor in the system or it is the BSP in an MP system (see Section 8.4.1, “BSP
+and AP Processors”); the local APIC will respond normally to INIT and NMI messages, to INIT# signals and to
+STPCLK# signals. If the processor is in an MP system and has been designated as an AP; the local APIC will
+respond the same as for the BSP. In addition, it will respond to SIPI messages. For P6 family processors only,
+an AP will not respond to a STPCLK# signal.
+
+10.4.7.2 Local APIC State After It Has Been Software Disabled
+When the APIC software enable/disable flag in the spurious interrupt vector register has been explicitly cleared (as
+opposed to being cleared during a power up or reset), the local APIC is temporarily disabled (see Section 10.4.3,
+“Enabling or Disabling the Local APIC”). The operation and response of a local APIC while in this software-disabled
+state is as follows:
+• The local APIC will respond normally to INIT, NMI, SMI, and SIPI messages.
+• Pending interrupts in the IRR and ISR registers are held and require masking or handling by the CPU.
+• The local APIC can still issue IPIs. It is software’s responsibility to avoid issuing IPIs through the IPI mechanism
+and the ICR register if sending interrupts through this mechanism is not desired.
+• The reception of any interrupt or transmission of any IPIs that are in progress when the local APIC is disabled
+are completed before the local APIC enters the software-disabled state.
+• !!! The mask bits for all the LVT entries are set. Attempts to reset these bits will be ignored. !!!
+• (For Pentium and P6 family processors) The local APIC continues to listen to all bus messages in order to keep
+its arbitration ID synchronized with the rest of the system.
+
+ *
+ *
+ *
+ *  */
+void init_ap_timer(int apic_index) {
+	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
+	unsigned long init_count = 1193180/HZ;
+	__asm__(
+
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x3E0,%%edx\n\t"     \
+			"movl $0x00,0(%%edx)\n\t"  /* Timer clock equals with bus clock divided by divide configuration register */ \
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x320,%%edx\n\t"     \
+            "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
+			"movl %%ecx,0(%%edx)\n\t"   \
+
+			"pushl %%eax\n\t"          \
+			"movl %%eax,%%edx\n\t"     \
+			"addl $0xF0,%%edx\n\t"     \
+			"movl 0(%%edx),%%eax\n\t"  \
+			"addl $0x100,%%eax\n\t"    \
+			"movl %%eax,0(%%edx)\n\t"  \
+
+/*			"pushl %%eax\n\t" \
+			"call print_eax\n\t" \
+			"popl %%eax\n\t" \*/
+			"popl %%eax\n\t" \
+
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x380,%%edx\n\t"     \
+			"movl 0(%%edx),%%eax\n\t"  \
+
+			"pushl %%eax\n\t" \
+			"call print_eax\n\t" \
+			"popl %%eax\n\t" \
+
+			::"a" (addr),"c" (init_count));
+}
+
+void init_bsp_timer(int apic_index) {
 	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
 	unsigned long init_count = 1193180/HZ;
 	__asm__("movl %%eax,%%edx\n\t"      \
@@ -253,16 +339,12 @@ void init_apic_timer(int apic_index) {
             "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
-			/*"pushl %%edx\n\t" \
-			"call print_eax\n\t" \
-			"popl %%edx\n\t" \*/
 			"movl %%ecx,0(%%edx)\n\t"   \
+
 			"movl %%eax,%%edx\n\t"      \
-			"addl $0xF0,%%edx\n\t"     \
+			"addl $0x380,%%edx\n\t"     \
 			"movl 0(%%edx),%%eax\n\t"  \
-			"addl $0x100,%%eax\n\t"    \
-			"movl %%eax,0(%%edx)\n\t"  \
-			"movl 0(%%edx),%%eax\n\t"  \
+
 			"pushl %%eax\n\t" \
 			"call print_eax\n\t" \
 			"popl %%eax\n\t" \

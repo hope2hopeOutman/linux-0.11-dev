@@ -613,7 +613,7 @@ return_addr:
 	/* 初始化并启用AP的timer,让AP能够定时调度task执行,不用再劳烦BSP指派任务了哈哈 */
     call get_current_apic_index
 	pushl %eax    /* current_apic_index作为返回值,存储在%eax中 */
-	call init_apic_timer
+	call init_ap_timer
 	popl %eax
 
 	addl $0x01,%ds:apic_index
