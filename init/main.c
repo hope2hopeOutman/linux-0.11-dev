@@ -155,7 +155,7 @@ void init_ap() {
 
 	/* ============================= Init APIC timer for BSP ============================= */
 		"pushl $0x00\n\t"           \
-		"call init_bsp_timer\n\t"   \
+		"call init_apic_timer\n\t"   \
 		"popl %%eax\n\t"            \
     /* ============================= End init APIC timer for BSP ========================= */
 
@@ -259,7 +259,7 @@ void init_apic_addr(int apic_index) {
 • Timer initial count and timer current count registers
 • Divide configuration register
 • The DFR register is reset to all 1s.
-• !!! The LVT register is reset to 0s except for the mask bits; these are set to 1s !!!.
+• 重点关注这一条: !!! The LVT register is reset to 0s except for the mask bits; these are set to 1s !!!.
 • The local APIC version register is not affected.
 • The local APIC ID register is set to a unique APIC ID. (Pentium and P6 family processors only). The Arb ID
 register is set to the value in the APIC ID register.
@@ -278,76 +278,63 @@ opposed to being cleared during a power up or reset), the local APIC is temporar
 state is as follows:
 • The local APIC will respond normally to INIT, NMI, SMI, and SIPI messages.
 • Pending interrupts in the IRR and ISR registers are held and require masking or handling by the CPU.
+  看到这里你应该明白,即使APIC被禁用了,但是APIC还是能发送和处理IPI消息的,这也就是为什么BSP发给AP的进程调度IPI,AP还是能够收到并处理,
+  因为BSP的SVR在BIOS init过程中已经开启了APIC,所以就不需要再次设置SVR的APIC enable位了,这些记忆使我想当然的以为AP在BIOS init后
+  也是默认开启了APIC,给自己挖了个大坑,搞了两天啊mama.
+  不过也就是凭借这个之前看过的模糊记忆作为切入点,再看手册找到了这一大段描述,再次研读,终于明白APIC上的timer为什么不触发中断.
 • The local APIC can still issue IPIs. It is software’s responsibility to avoid issuing IPIs through the IPI mechanism
 and the ICR register if sending interrupts through this mechanism is not desired.
 • The reception of any interrupt or transmission of any IPIs that are in progress when the local APIC is disabled
 are completed before the local APIC enters the software-disabled state.
-• !!! The mask bits for all the LVT entries are set. Attempts to reset these bits will be ignored. !!!
+• 重点关注这一条: !!! The mask bits for all the LVT entries are set. Attempts to reset these bits will be ignored. !!!
 • (For Pentium and P6 family processors) The local APIC continues to listen to all bus messages in order to keep
 its arbitration ID synchronized with the rest of the system.
-
- *
- *
  *
  *  */
-void init_ap_timer(int apic_index) {
+void init_apic_timer(int apic_index) {
 	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
 	unsigned long init_count = 1193180/HZ;
-	__asm__(
+	__asm__("pushl %%eax\n\t"          \
+			"movl %%eax,%%edx\n\t"     \
+			"addl $0xF0,%%edx\n\t"     /* +0xF0得到spurious vector register的addr */ \
+			"movl 0(%%edx),%%eax\n\t"  /* 将SVR的old value复制到eax */ \
+			"btsl $0x08,%%eax\n\t"     /* enable SVR的APIC功能,要先开启APIC功能,后面对APIC相关寄存器的操作才能生效啊. */ \
+			"movl %%eax,0(%%edx)\n\t"  /* 将新值写入SVR,开启APIC功能,这样下面设置APIC timer相关寄存器才能生效,尤其是timer寄存器的mask位重置才能生效. */ \
+			"popl %%eax\n\t"           /* 恢复APIC的base addr到eax,后面初始化APIC timer相关寄存器会用到. */ \
 
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x3E0,%%edx\n\t"     \
 			"movl $0x00,0(%%edx)\n\t"  /* Timer clock equals with bus clock divided by divide configuration register */ \
+
+			"cmpl $0x00,%%ebx\n\t"      \
+			"jne 1f\n\t"                \
+			"movl $0x20083,%%ebx\n\t"   \
+			"1:\n\t"                    \
+			"movl $0x30083,%%ebx\n\t"   \
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x320,%%edx\n\t"     \
-            "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
+            "movl $0x30083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 1 (mask timer intr), vector number: 0x83=APIC_TIMER_INTR_NO  */ \
+
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
 			"movl %%ecx,0(%%edx)\n\t"   \
 
-			"pushl %%eax\n\t"          \
-			"movl %%eax,%%edx\n\t"     \
-			"addl $0xF0,%%edx\n\t"     \
-			"movl 0(%%edx),%%eax\n\t"  \
-			"addl $0x100,%%eax\n\t"    \
-			"movl %%eax,0(%%edx)\n\t"  \
-
-/*			"pushl %%eax\n\t" \
-			"call print_eax\n\t" \
-			"popl %%eax\n\t" \*/
-			"popl %%eax\n\t" \
-
-			"movl %%eax,%%edx\n\t"      \
+			/*"movl %%eax,%%edx\n\t"      \
 			"addl $0x380,%%edx\n\t"     \
-			"movl 0(%%edx),%%eax\n\t"  \
+			"movl 0(%%edx),%%eax\n\t"   \
+			"pushl %%eax\n\t"           \
+			"call print_eax\n\t"        \
+			"popl %%eax\n\t"            \*/
 
-			"pushl %%eax\n\t" \
-			"call print_eax\n\t" \
-			"popl %%eax\n\t" \
-
-			::"a" (addr),"c" (init_count));
+			::"a" (addr),"b" (apic_index), "c" (init_count));
 }
 
-void init_bsp_timer(int apic_index) {
+void start_apic_timer(int apic_index) {
 	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
 	unsigned long init_count = 1193180/HZ;
 	__asm__("movl %%eax,%%edx\n\t"      \
-			"addl $0x3E0,%%edx\n\t"     \
-			"movl $0x00,0(%%edx)\n\t"  /* Timer clock equals with bus clock divided by divide configuration register */ \
-			"movl %%eax,%%edx\n\t"      \
 			"addl $0x320,%%edx\n\t"     \
-            "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
-			"movl %%eax,%%edx\n\t"      \
-			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
-			"movl %%ecx,0(%%edx)\n\t"   \
-
-			"movl %%eax,%%edx\n\t"      \
-			"addl $0x380,%%edx\n\t"     \
-			"movl 0(%%edx),%%eax\n\t"  \
-
-			"pushl %%eax\n\t" \
-			"call print_eax\n\t" \
-			"popl %%eax\n\t" \
+            "movl $0x30083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
 
 			::"a" (addr),"c" (init_count));
 }
