@@ -315,7 +315,7 @@ void schedule(void)
 	}
 
 	if (current_apic_id == apic_ids[0].apic_id) {  /* 调度任务发生在BSP上 */
-#if 1
+#if 0
 		unsigned long sched_apic_id = get_min_load_ap();
 		/* 这里禁止BSP将task[0]和task[1]调度到AP上执行 */
 		if (sched_apic_id != current_apic_id && task[next] != task[0] && task[next] != task[1]) {
@@ -338,11 +338,12 @@ void schedule(void)
 				lock_flag = 0;
 			}
 			next = 1;   /* BSP上只运行task0和task1 */
+			//return; /* 返回继续执行task0或task1 */
 		}
 #endif
 	}
 	else {  /* 调度任务发生在AP上，这时AP只能调度除task[0]和task[1]之外的任务，后面会开启AP的timer自主调度。 */
-#if 1
+#if 0
 		if (task[next] == task[0] || task[next] == task[1]) {
 			if (lock_flag) {
 				unlock_op(&sched_semaphore);
@@ -597,7 +598,7 @@ void add_timer(long jiffies, void (*fn)(void))
 void do_timer(long cpl)
 {
 	if (get_current_apic_id() == 0) {
-		//printk("come to ap to execute do_timer\n\r");
+		//printk("execute do_timer\n\r");
 	}
 	struct task_struct* current = get_current_task();
 	extern int beepcount;
@@ -628,8 +629,24 @@ void do_timer(long cpl)
 	if ((--current->counter)>0) return;
 	current->counter=0;
 
-
-	//if (!cpl) return;  /* 这里可以看出内核态是不支持timer中断进行进程调度的，其他的外部中断除外 */
+	/*
+	 * 后面有时间的话,会将调度改成在内核态可以进行抢占式调度,不过难度很大,最大的问题就是同步依赖问题,很容易造成锁的死锁状态.
+	 * 任务要根据优先级,时间片,锁的依赖关系(每个进程是否要维护一个锁依赖列表)等等,要考虑的因素太多了,当前任务就不展开了.
+	 *  */
+	if (get_current_apic_id() == 0) {
+		if (!cpl) return;  /* 这里可以看出内核态是不支持timer中断进行进程调度的，其他的外部中断除外 */
+	}
+	else {
+		/* 1. 如果AP上当前运行的task != ap_default_task,那么AP上运行的就是普通的task,那么这个task在内核态很可能用到了很多同步锁,
+		 *    如果调度运行其他任务的话,其他任务的时间片如果>当前任务的话,那么当前任务就有可能不会被调度,但是它占用的锁如果被其它进程依赖的话,
+		 *    那么这种情况就造成了死锁状态.
+		 * 2. 如果AP上运行的是当前任务是ap_default_task,其肯定是运行在内核态,但是它只执行idl_loop操作,
+		 *    因此不会占用锁,也就不会造成其它进程的锁依赖,所以可以在内核态进行进程的调度.
+		 *    */
+		if (get_current_task() != &ap_default_task.task) {
+			if (!cpl) return;
+		}
+	}
 
 	schedule();
 }

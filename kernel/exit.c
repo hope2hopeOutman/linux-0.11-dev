@@ -149,7 +149,7 @@ int do_exit(long code)
 	}
 	else {
 		unsigned long apic_id = get_current_apic_id();
-		printk("task[%d],exit at AP[%d]\n\r", current->task_nr, apic_id);
+		//printk("task[%d],exit at AP[%d]\n\r", current->task_nr, apic_id);
 		/* 进程退出后,要重置该AP的执行上下文. */
 		reset_ap_context();
 	}
