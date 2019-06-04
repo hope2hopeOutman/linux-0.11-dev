@@ -92,7 +92,7 @@ int sys_kill(int pid,int sig)
 void tell_father(int pid)
 {
 	int i;
-	struct task_struct * current = get_current_task();
+	//struct task_struct * current = get_current_task();
 	if (pid)
 		for (i=0;i<NR_TASKS;i++) {
 			if (!task[i])
@@ -104,8 +104,8 @@ void tell_father(int pid)
 		}
 /* if we don't find any fathers, we just release ourselves */
 /* This is not really OK. Must change it to make father 1 */
-	printk("BAD BAD - no father found\n\r");
-	release(current);
+	panic("BAD BAD - no father found\n\r");
+	//release(current);
 }
 
 int do_exit(long code)
@@ -142,7 +142,7 @@ int do_exit(long code)
 		kill_session();
 	current->state = TASK_ZOMBIE;
 	current->exit_code = code;
-	tell_father(current->father);
+	//tell_father(current->father);
 	if (get_current_apic_id() == apic_ids[0].apic_id) {
 		/* 在BSP上退出一个进程后，自主调用schedule，这里是不可能的，因为BSP只运行task0和task1，但这两个进程是不可能退出的，除非系统崩溃了 */
 	    schedule();

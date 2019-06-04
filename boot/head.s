@@ -93,7 +93,7 @@ AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个�
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
-.globl startup_32,sync_semaphore,idle_loop,ap_default_loop
+.globl startup_32,sync_semaphore,idle_loop,ap_default_loop,task_exit_clear
 startup_32:
 	movl $0x10,%eax
 	mov %ax,%ds
@@ -579,6 +579,7 @@ lock_loop:
 
     /* 这时eax存储的是apic_index,所以这里作为参数传给alloc_ap_kernel_stack */
     lea return_addr,%ebx
+    pushl $0x01  /* 该参数在此无意义 */
     pushl %ebx
     pushl %eax
     call alloc_ap_kernel_stack
@@ -632,7 +633,9 @@ idle_loop:
     //hlt
     xorl %ebx,%ebx
     jmp idle_loop
-
+task_exit_clear:
+   call tell_father
+   popl %eax          /* 这里弹出的是father_id */
 ap_default_loop:
     xorl %eax,%eax
     xorl %ecx,%ecx

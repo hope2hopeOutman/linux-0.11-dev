@@ -194,7 +194,7 @@ void set_apic_id(long apic_index,long apic_id) {
 }
 
 /* 为每个AP分配一个内核栈 */
-void alloc_ap_kernel_stack(long ap_index, long return_addr) {
+void alloc_ap_kernel_stack(long ap_index, long return_addr, int father_id) {
 	unsigned long stack_base = apic_ids[ap_index].kernel_stack;
 
 	struct ap_stack_struct{
@@ -205,10 +205,11 @@ void alloc_ap_kernel_stack(long ap_index, long return_addr) {
      * 在函数调用里用lss命令的时候一定要小心，要把函数返回的指令地址预先保存下来，
      * 因为重置esp后，调用ret指令弹出的栈顶数据是不正确的，懂否哈哈，这个问题太tricky了，排查了好长时间，
      * bochs的多核调试手段太匮乏了，不好用。 */
-	__asm__ ("lss %1,%%esp\n\t" \
-			 "pushl %%edx\n\t" \
+	__asm__ ("lss %2,%%esp\n\t" \
+			 "pushl %%ecx\n\t" /* 将father_id入栈，作为后面执行ap_exit_clear代码段中的tell_father函数的入参，这里这样做有点tricky. */ \
+			 "pushl %%edx\n\t"  \
 			 "ret\n\t" \
-			::"d" (return_addr),"m" (*(&ap_stack))
+			::"c" (father_id),"d" (return_addr),"m" (*(&ap_stack))
 			);
 }
 
