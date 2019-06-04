@@ -308,12 +308,15 @@ void init_apic_timer(int apic_index) {
 
 			"cmpl $0x00,%%ebx\n\t"      \
 			"jne 1f\n\t"                \
-			"movl $0x20083,%%ebx\n\t"   \
+			"movl $0x20083,%%ebx\n\t"  /* BSP立即开启timer中断,不屏蔽. */  \
+			"jmp 2f\n\t"                \
 			"1:\n\t"                    \
-			"movl $0x30083,%%ebx\n\t"   \
+			"movl $0x30083,%%ebx\n\t"  /* AP先屏蔽timer中断,后面会开启. */ \
+			"2:\n\t"                    \
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x320,%%edx\n\t"     \
             "movl %%ebx,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 1 (mask timer intr), vector number: 0x83=APIC_TIMER_INTR_NO  */ \
+
 
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
@@ -334,7 +337,7 @@ void start_apic_timer(int apic_index) {
 	unsigned long init_count = 1193180/HZ;
 	__asm__("movl %%eax,%%edx\n\t"      \
 			"addl $0x320,%%edx\n\t"     \
-            "movl $0x30083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
+            "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
 
 			::"a" (addr),"c" (init_count));
 }

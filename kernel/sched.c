@@ -64,7 +64,6 @@ union task_union {
 
 union task_union init_task = {INIT_TASK,};
 union task_union ap_default_task = {INIT_TASK,};
-//unsigned long padding[1024] = {1,};
 /*
  * 这里一次性分配64个processor，主要原因是这样可以使data_segment_align 4K对齐，
  * 如果设置为4的话就导致data_segment_align不能4K对齐了，导致运行有问题，
@@ -92,6 +91,9 @@ unsigned long get_current_apic_id(){
 			 "shr $24,%%ebx\n\t" \
 			 :"=b" (apic_id):
 			);
+	if (apic_id > 0) {
+		//printk("apic_id = %d\n\r", apic_id);
+	}
 	return apic_id;
 }
 
@@ -267,6 +269,9 @@ void math_state_restore()
 void schedule(void)
 {
 	unsigned long current_apic_id = get_current_apic_id();
+	/*if (current_apic_id > 0) {
+		printk("ap come to schedule\n\r");
+	}*/
 	struct apic_info* apic_info = get_apic_info(current_apic_id);
 	struct task_struct ** current = &(apic_info->current);
 	int i,next,c;
@@ -333,12 +338,12 @@ void schedule(void)
 		}
 #else
 		if (task[next] != task[0] && task[next] != task[1]) {
-			if (lock_flag) {
-				unlock_op(&sched_semaphore);
-				lock_flag = 0;
+			if (task[1]->state != 0) {
+				next = 0;
 			}
-			next = 1;   /* BSP上只运行task0和task1 */
-			//return; /* 返回继续执行task0或task1 */
+			else {
+				next = 1;
+			}
 		}
 #endif
 	}
@@ -370,15 +375,17 @@ void schedule(void)
 				lock_flag = 0;
 			}
 			if (*current != 0) {
+				//printk("no nr>1 can run on Ap\n\r");
 				return;          /* 如果AP有已经执行过的task(包括idle_loop,也就是ap_default_task任务),这时不调度，继续执行老的task. */
 			}
 			else {/* 执行到这个分之,说明内核是有问题的,current是不可能为0的,这里进行reset相当于错误自我修正吧. */
 				/* 重置AP的执行上下文,使其执行idle_loop程序,等待调度新的任务执行 */
-				printk("Errors occur on AP schedule\n\r");
+				//printk("Errors occur on AP schedule\n\r");
 				reset_ap_context();
 			}
 		}
 		else {  /* 这时AP要调度新的task[n>1] */
+			//printk("has nr>1 can run on Ap\n\r");
 			unsigned long sched_apic_id = get_min_load_ap();
 			if (sched_apic_id == current_apic_id) {
 				if (*current) {
@@ -595,10 +602,11 @@ void add_timer(long jiffies, void (*fn)(void))
 	}
 	sti();
 }
+
 void do_timer(long cpl)
 {
-	if (get_current_apic_id() == 0) {
-		//printk("execute do_timer\n\r");
+	if (get_current_apic_id() != 0) {
+		//printk("ap execute do_timer\n\r");
 	}
 	struct task_struct* current = get_current_task();
 	extern int beepcount;

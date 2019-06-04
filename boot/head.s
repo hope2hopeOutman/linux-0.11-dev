@@ -611,7 +611,7 @@ return_addr:
 	popl %eax
 
 	/* 初始化并启用AP的timer,让AP能够定时调度task执行,不用再劳烦BSP指派任务了哈哈,
-	 * 这里有问题,一旦开启了APIC的timer就执行schedule了,下面的解锁操作就不会执行了,大坑.
+	 * 这里有问题,一旦开启了APIC的timer就执行schedule了,下面的解锁操作就不会执行了,又一个自挖的大坑啊.
 	 * 要先初始化timer,但要设置其mask位,待AP释放了初始化锁后,就可开启timer了.*/
 
     call get_current_apic_index
@@ -619,10 +619,13 @@ return_addr:
 	call init_apic_timer
 	popl %eax
 
+    pushl %eax    /* 作为start_apic_timer的apic_index参数 */
 	addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
 
     /* 开启APtimer */
+    call start_apic_timer
+    popl %eax
 
     //hlt
 idle_loop:

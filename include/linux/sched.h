@@ -8,7 +8,7 @@
  */
 //#define NR_TASKS 1k=1024
 #define NR_TASKS 64
-#define HZ 100
+#define HZ 10
 
 #define FIRST_TASK task[0]
 #define LAST_TASK task[NR_TASKS-1]

@@ -184,11 +184,16 @@ timer_interrupt:
 	pushl %ecx		# save those across function calls. %ebx
 	pushl %ebx		# is saved as we use that in ret_sys_call
 	pushl %eax
-	movl $0x10,%eax
-	mov %ax,%ds
-	mov %ax,%es
-	movl $0x17,%eax
-	mov %ax,%fs
+	movl $0x10,%edx
+	mov %dx,%ds
+	mov %dx,%es
+	call get_current_apic_id
+	cmpl $0x00,%eax
+	jne 1f
+	movl $0x17,%edx
+	jmp 2f
+1:  movl $0x10,%edx     /* 这里要再次给edx赋值0x10,因为GCC在编译函数调用时,是不会自动保存eax,ecx,和edx的值的,所以在调用完get_current_apic_id后,edx的值被修改了,要重新赋值*/
+2:	mov %dx,%fs         /* 这块会引起AP报general protection错误,因为AP初始化的时候压根就没有加载默认的LDT,只加载了默认的TSS了. */
 	incl jiffies
 	//movb $0x20,%al    /* EOI to interrupt controller #1  for 8253 timer */
 	//outb %al,$0x20
