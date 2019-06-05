@@ -20,6 +20,8 @@
 
 #include <signal.h>
 
+#include <linux/head.h>
+
 #define _S(nr) (1<<((nr)-1))
 #define _BLOCKABLE (~(_S(SIGKILL) | _S(SIGSTOP)))
 
@@ -97,6 +99,8 @@ unsigned long get_current_apic_id(){
 	return apic_id;
 }
 
+
+
 struct apic_info* get_apic_info(unsigned long apic_id) {
 	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
 		if (apic_ids[i].apic_id == apic_id) {
@@ -138,6 +142,18 @@ unsigned long get_min_load_ap() {
 	}
 
 	return apic_ids[apic_index].apic_id;
+}
+
+int check_default_task_running_on_ap() {
+	if (get_current_apic_id()) {
+		if (get_current_task() == &ap_default_task.task) {
+			return 1;
+		}
+		else {
+			return 0;
+		}
+	}
+	return 0;
 }
 
 /*
@@ -185,8 +201,9 @@ unsigned long get_current_apic_index() {
 }
 
 /* 主要是为了AP初始化的时候使用，用于任务一开始切换时，将当前内核态的context信息存储到指定的位置，而不是一开始默认的0x00地址处，这样就不会覆盖内核的目录表了。 */
-void reload_ap_ltr(int nr) {
+void reload_ap_ltr() {
 	//set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(ap_default_task.task.tss));
+	int nr = (get_current_apic_index() + AP_DEFAULT_TASK_NR);
 	ltr(nr);
 }
 
@@ -233,7 +250,7 @@ void reset_ap_context() {
 	 * 保存到0x00地址处或当前AP的LTR指向的地址处会覆盖内核目录表或已经分配了新任务的TR NR,从而造成系统崩溃.
 	 * 这也是埋藏很深的巨坑,这里有必要解释一下.
 	 * */
-	reload_ap_ltr(AP_DEFAULT_TASK_NR);
+	reload_ap_ltr();
 	printk("exit after reset_ap_tss\n\r");
 	/* 下次任务调度的时候,保留当前的任务状态,否则,TSS默认值为0,会映射到0x00内核目录表处,这样会覆盖掉内核目录表,系统会崩溃的 */
 	//reset_ap_default_task();

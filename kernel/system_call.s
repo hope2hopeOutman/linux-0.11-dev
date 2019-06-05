@@ -187,7 +187,7 @@ timer_interrupt:
 	movl $0x10,%edx
 	mov %dx,%ds
 	mov %dx,%es
-	call get_current_apic_id
+	call check_default_task_running_on_ap
 	cmpl $0x00,%eax
 	jne 1f
 	movl $0x17,%edx

@@ -124,7 +124,10 @@ void get_cpu_topology_info() {
 void init_ap() {
 	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
 		apic_ids[i].kernel_stack = get_free_page(PAGE_IN_REAL_MEM_MAP);
-		init_ap_tss(AP_DEFAULT_TASK_NR+i);
+		printk("apic[%d].kstack = %p\n\r", i, (unsigned long*)apic_ids[i].kernel_stack);
+		if (i > 0) {
+			init_ap_tss(AP_DEFAULT_TASK_NR+i);
+		}
 	}
 	apic_ids[0].bsp_flag = 1;  /* 这里的代码只有BSP能执行到，所以这里把apic_ids[0]设置为BSP。 */
 
@@ -442,8 +445,8 @@ void main(void)		/* This really IS void, no error here. */
 	floppy_init();
 	//printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	init_ap();
-	printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
-			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);
+	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
+			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
 	get_cpu_topology_info();
 	sti();
 	move_to_user_mode();
