@@ -124,8 +124,10 @@ void get_cpu_topology_info() {
 void init_ap() {
 	for (int i=0;i<LOGICAL_PROCESSOR_NUM;i++) {
 		apic_ids[i].kernel_stack = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		init_ap_tss(AP_DEFAULT_TASK_NR+i);
 	}
 	apic_ids[0].bsp_flag = 1;  /* 这里的代码只有BSP能执行到，所以这里把apic_ids[0]设置为BSP。 */
+
 
 	__asm__(
 	/* ============================= Set Apic ID for BSP ============================= */
@@ -186,6 +188,10 @@ void init_ap() {
 
 void print_eax(int eax){
 	printk("ap eax: %d\n\r", eax);
+}
+
+void print_ap_test() {
+	printk("come to ap clear\n\r");
 }
 
 /* 保存每个processor的apic-id,通过apic-id就可以解析处CPU的topology */

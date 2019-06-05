@@ -185,9 +185,13 @@ unsigned long get_current_apic_index() {
 }
 
 /* 主要是为了AP初始化的时候使用，用于任务一开始切换时，将当前内核态的context信息存储到指定的位置，而不是一开始默认的0x00地址处，这样就不会覆盖内核的目录表了。 */
-void reset_ap_tss(int nr) {
-	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(ap_default_task.task.tss));
+void reload_ap_ltr(int nr) {
+	//set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(ap_default_task.task.tss));
 	ltr(nr);
+}
+
+void init_ap_tss(int nr) {
+	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(ap_default_task.task.tss));
 }
 
 void reset_ap_default_task() {
@@ -229,11 +233,11 @@ void reset_ap_context() {
 	 * 保存到0x00地址处或当前AP的LTR指向的地址处会覆盖内核目录表或已经分配了新任务的TR NR,从而造成系统崩溃.
 	 * 这也是埋藏很深的巨坑,这里有必要解释一下.
 	 * */
-	reset_ap_tss(AP_DEFAULT_TASK_NR);
+	reload_ap_ltr(AP_DEFAULT_TASK_NR);
 	printk("exit after reset_ap_tss\n\r");
 	/* 下次任务调度的时候,保留当前的任务状态,否则,TSS默认值为0,会映射到0x00内核目录表处,这样会覆盖掉内核目录表,系统会崩溃的 */
-	reset_ap_default_task();
-	printk("exit after reset_ap_default_task\n\r");
+	//reset_ap_default_task();
+	//printk("exit after reset_ap_default_task\n\r");
 	/* 重新设置AP的内核栈指针，然后跳转到idle_loop执行空循环，等待新的IPI中断 */
 	alloc_ap_kernel_stack(apic_index,task_exit_clear,father_id);
 }
@@ -273,9 +277,9 @@ void math_state_restore()
 void schedule(void)
 {
 	unsigned long current_apic_id = get_current_apic_id();
-	/*if (current_apic_id > 0) {
-		printk("ap come to schedule\n\r");
-	}*/
+	if (current_apic_id == 1) {
+		//printk("ap1 come to schedule\n\r");
+	}
 	struct apic_info* apic_info = get_apic_info(current_apic_id);
 	struct task_struct ** current = &(apic_info->current);
 	int i,next,c;
@@ -384,7 +388,7 @@ void schedule(void)
 			}
 			else {/* 执行到这个分之,说明内核是有问题的,current是不可能为0的,这里进行reset相当于错误自我修正吧. */
 				/* 重置AP的执行上下文,使其执行idle_loop程序,等待调度新的任务执行 */
-				//printk("Errors occur on AP schedule\n\r");
+				panic("Errors occur on AP schedule\n\r");
 				reset_ap_context();
 			}
 		}

@@ -608,7 +608,7 @@ return_addr:
     * 会将当前内核态的context保存到内核目录表中的(TSS未初始化的默认值是0x00,内核目录表的地址)，大问题啊.
     */
 	pushl $AP_DEFAULT_TASK_NR
-	call reset_ap_tss
+	call reload_ap_ltr
 	popl %eax
 
 	/* 初始化并启用AP的timer,让AP能够定时调度task执行,不用再劳烦BSP指派任务了哈哈,
@@ -636,6 +636,11 @@ idle_loop:
 task_exit_clear:
    call tell_father
    popl %eax          /* 这里弹出的是father_id */
+   pushl %eax
+   call print_eax
+   popl %eax
+   call print_ap_test
+   call reset_ap_default_task
 ap_default_loop:
     xorl %eax,%eax
     xorl %ecx,%ecx

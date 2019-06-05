@@ -66,7 +66,7 @@ static void die(char * str,long esp_ptr,long nr)
 	struct task_struct* current = get_current_task();
 	long * esp = (long *) esp_ptr;
 	int i;
-
+    printk("die at apic_id: %d, nr: %d, pid: %d\n\r", get_current_apic_id(), current->task_nr, current->pid);
 	printk("%s: %04x\n\r",str,nr&0xffff);
 	printk("EIP:\t%04x:%p\nEFLAGS:\t%p\nESP:\t%04x:%p\n",
 		esp[1],esp[0],esp[2],esp[4],esp[3]);

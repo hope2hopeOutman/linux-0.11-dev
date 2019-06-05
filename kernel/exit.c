@@ -18,6 +18,7 @@ int sys_pause(void);
 int sys_close(int fd);
 extern void ap_default_loop(void);
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
+extern unsigned long sched_semaphore;
 
 void release(struct task_struct * p)
 {
@@ -27,11 +28,13 @@ void release(struct task_struct * p)
 		return;
 	for (i=1 ; i<NR_TASKS ; i++)
 		if (task[i]==p) {
+			lock_op(&sched_semaphore);
 			task[i]=NULL;
 			if (!free_page((long)(p->tss.cr3)))  /* 先把该进程占用的目录表释放掉 */
 				panic("exit.release dir: trying to free free page");
 			if (!free_page((long)p))
 				panic("exit.release: trying to free free page");
+			unlock_op(&sched_semaphore);
 			schedule();
 			return;
 		}
@@ -149,7 +152,7 @@ int do_exit(long code)
 	}
 	else {
 		unsigned long apic_id = get_current_apic_id();
-		//printk("task[%d],exit at AP[%d]\n\r", current->task_nr, apic_id);
+		printk("task[%d],exit at AP[%d]\n\r", current->task_nr, apic_id);
 		/* 进程退出后,要重置该AP的执行上下文. */
 		reset_ap_context();
 	}
