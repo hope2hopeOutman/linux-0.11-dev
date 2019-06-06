@@ -241,21 +241,50 @@ void unlock_op(unsigned long* sem_addr) {
 void reset_ap_context() {
 	unsigned long apic_index =  get_current_apic_index();
 	int father_id = get_current_task()->father;
-	/* 这里一定要将AP的CR3设置为0x00,因为当前进程已经被释放掉了，所以当前的CR3中的目录表基地址就无效了（此页有可能被其他进程占用了） */
+	/* tricky 1:
+	 * 因为task运行到这,一定是处于内核态的,因此目录表的前256项(管理1G的内核线性地址空间)都是指向相同的页表的.
+	 * 这里一定要将AP的CR3设置为0x00,那是因为当前进程随后会被释放掉，其对应的目录表也会被释放掉,就会被其他进程占用,
+	 * 这样就会导致当前AP的CR3中的目录表基地址就无效了,所以要将CR3重置为0x00,这样随后的指令依旧可以继续运行在内核态.
+	 * */
 	reset_dir_base();
 
-	/* 重新加载AP的LTR寄存器,使其指向GDT表中NR=0x80的任务tss,这个任务是每个AP共享的,
-	 * 主要的作用是,当AP由halt状态被唤醒后执行scheduel操作造成任务切换,用来保存当前halt状态下的context
-	 * 如果不设置的话,当前LTR有可能指向0x00内核目录表,或上次执行过的TR(如果该TR已经执行结束了),这时把当前halt状态下的context
-	 * 保存到0x00地址处或当前AP的LTR指向的地址处会覆盖内核目录表或已经分配了新任务的TR NR,从而造成系统崩溃.
-	 * 这也是埋藏很深的巨坑,这里有必要解释一下.
+	/* trick 2:
+	 * 这里有必要解释下,为什么在AP上的运行的普通任务,在执行退出程序过程中,要重新设置该AP的TR寄存器,这是埋藏很深的巨坑.
+	 * 因为一旦AP上的普通task退出后,要让AP运行特殊的loop程序(ap_default_loop,定义在head.s中),以等待timer中断到来.
+	 * 这个任务之所以特殊,那是因为它没有设置LDT寄存器仅设置了TR寄存器,也就是只在内核态下运行内核的一段loop程序,
+	 * 当timer中断到来时,在中断处理函数中调用schedule调度新的进程运行,一旦要运行新的任务时,就会导致任务切换,将当前任务的context
+	 * 保存到TR寄存器中存储的TSS数据结构内存地址中.
+	 * 如果不设置值TR寄存器的话,会在两种情况下导致两种致命错误:
+	 * 1. AP第一次发生任务切换时
+	 *    这时AP上的TR寄存器还是reset后的初始值0x00,其指向的地址是0x00,这是内核目录表的基地址啊,任务切换会覆盖它的,系统就崩溃了.
+	 *    因此在AP初始化的时候就要重置TR寄存器,在head.s中已经这么做了.
+	 * 2. AP上执行do_exit函数时
+	 *    这意味着当前运行的是普通任务,这时TR存储的是当前普通任务的TSS内存地址,当AP执行完do_exit后,就进入特殊loop程序以等待timer中断的到来,
+	 *    在这等待的过程中,这个TR指向的TSS内存地址,很有可能被新任务所占用的,这时中断到来引起新的进程切换的话,会将当前的特殊loop程序的context
+	 *    复制到TR寄存器指向的TSS内存地址,这样就覆盖了其他进程的内存页内容,从而会导致其他进程的崩溃. 相当tricky啊
+	 *    所以这里要重置TR寄存器指向每个AP私有的,专用于存储特殊loop程序的context的TSS内存地址,这样就不会覆盖其他进程的内存页了.
+	 *
+	 * 重新加载AP的LTR寄存器,使其指向GDT表中NR=0x81,0x82或0x83每个AP私有的TSS内存页,这些TSS描述符记录的基地址都是相同的(&ap_default_task.tss).
+	 *
+	 * 注意: 这里之前是所有的AP都共享GDT表中相同的NR=0x80的TSS,但是每次重置都要重复设置GDT表的NR=0x80表项的TSS描述符,如果不重置该TSS描述符表项的话,
+	 * 不同AP的TR寄存器加载相同的TSS会报General protection错误的.
+	 * 例如AP1重置了GDT表NR=0x80 TSS描述符项,然后LTR加载了该TSS, 随后的AP2和AP3也执行AP1相同的操作,那么AP2和AP3是不会报GP错误的,
+	 * 但是,AP2和AP2如果仅执行LTR指令加载NR=0x80的TSS描述符项就会报GP错误,这一点Intel手册上没有相关的描述:不同的TR加载相同的TSS.
+	 * 这里为了解决这个问题就为每个AP分配一个私有TSS描述符项,NR=0x81,0x82,0x83,这样就不会有问题了,而且NR>64也不会参与schedule调度.
 	 * */
 	reload_ap_ltr();
-	printk("exit after reset_ap_tss\n\r");
-	/* 下次任务调度的时候,保留当前的任务状态,否则,TSS默认值为0,会映射到0x00内核目录表处,这样会覆盖掉内核目录表,系统会崩溃的 */
+
+	/*
+	 * 这里很有必要解释下: 为什么要把reset_ap_default_task函数注释掉,将它放到task_exit_clear函数里最后才调用.
+	 * 因为reset_ap_default_task就是将每个AP的默认task设置为ap_default_task,这也表明AP处于运行特殊loop程序的状态,随时可以响应timer中断进行新任务调度.
+	 * 如果这里就设置为ap_default_task,意味着随时会响应timer进行任务切换,注意:这时TR已经重载了指向AP default TSS了,所以这时要是发生任务切换的话,那么当前
+	 * 任务的context会被保存到default TSS而不是当前普通任务自己的TSS;而且由于当前任务的state被设置为zombie和sched_on_ap=1,在任务切换时因为current已经
+	 * 不指向自己了,所以不能被设置为running状态,或sched_on_ap=0,也就是说该进程以后就永远没机会被再次schedule到了,
+	 * 从而成为真正的zombie进程了哈哈,这样就造成严重的内存泄露问题.
+	 * 所以reset_ap_default_task一定要放在tell_father之后调用.
+	 *  */
 	//reset_ap_default_task();
-	//printk("exit after reset_ap_default_task\n\r");
-	/* 重新设置AP的内核栈指针，然后跳转到idle_loop执行空循环，等待新的IPI中断 */
+	/* 重新设置AP的内核栈指针，然后跳转到ap_default_loop执行空循环，等待新的IPI/timer中断 */
 	alloc_ap_kernel_stack(apic_index,task_exit_clear,father_id);
 }
 
@@ -339,6 +368,7 @@ void schedule(void)
 		if (c) break;
 		for(p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
 			if (*p) {
+				/* 此时如果release其他AP执行介于这之间的话,是会有问题的.具体看release描述. */
 				(*p)->counter = ((*p)->counter >> 1) + (*p)->priority;
 			}
 		}
@@ -400,17 +430,13 @@ void schedule(void)
 				lock_flag = 0;
 			}
 			if (*current != 0) {
-				//printk("no nr>1 can run on Ap\n\r");
 				return;          /* 如果AP有已经执行过的task(包括idle_loop,也就是ap_default_task任务),这时不调度，继续执行老的task. */
 			}
-			else {/* 执行到这个分之,说明内核是有问题的,current是不可能为0的,这里进行reset相当于错误自我修正吧. */
-				/* 重置AP的执行上下文,使其执行idle_loop程序,等待调度新的任务执行 */
+			else {/* 执行到这个分支,说明内核是有问题的,current是不可能为0的 */
 				panic("Errors occur on AP schedule\n\r");
-				reset_ap_context();
 			}
 		}
 		else {  /* 这时AP要调度新的task[n>1] */
-			//printk("has nr>1 can run on Ap\n\r");
 			unsigned long sched_apic_id = get_min_load_ap();
 			if (sched_apic_id == current_apic_id) {
 				if (*current) {

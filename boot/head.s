@@ -607,9 +607,7 @@ return_addr:
    /* 这里一定要设置一个TSS段的默认保存地址，因为AP在执行第一次任务切换时如果不设置的话，
     * 会将当前内核态的context保存到内核目录表中的(TSS未初始化的默认值是0x00,内核目录表的地址)，大问题啊.
     */
-	//pushl $AP_DEFAULT_TASK_NR
 	call reload_ap_ltr
-	//popl %eax
 
 	/* 初始化并启用AP的timer,让AP能够定时调度task执行,不用再劳烦BSP指派任务了哈哈,
 	 * 这里有问题,一旦开启了APIC的timer就执行schedule了,下面的解锁操作就不会执行了,又一个自挖的大坑啊.
@@ -624,30 +622,27 @@ return_addr:
 	addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
 
-    /* 开启APtimer */
+    /* 开启AP timer */
     call start_apic_timer
     popl %eax
 
-    //hlt
+    hlt
 idle_loop:
-    //hlt
+    hlt
     xorl %ebx,%ebx
     jmp idle_loop
 task_exit_clear:
-   call tell_father
+   call tell_father   /* 这时通知父进程释放其子进程就没问题了 */
    popl %eax          /* 这里弹出的是father_id */
+   /*
    pushl %eax
    call print_eax
    popl %eax
-
-   call reset_ap_default_task
-
+   */
+   call reset_ap_default_task  /* 设置AP的current_task=ap_default_task,当timer中断调度执行新的task,用于保存当前人executing context */
 ap_default_loop:
-
+    hlt
     xorl %eax,%eax
-    xorl %ecx,%ecx
-    xorl %edx,%edx
-    //call print_ap_test
     jmp ap_default_loop
 
 

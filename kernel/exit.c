@@ -28,6 +28,30 @@ void release(struct task_struct * p)
 		return;
 	for (i=1 ; i<NR_TASKS ; i++)
 		if (task[i]==p) {
+			/*
+			 * 这里太有必要解释为甚么要加sched_semaphore同步锁,与schedule方法要同步.
+			 * 因为我们知道每个AP的timer都开启了,都有机会定时执行schedule方法调度新的进程了,
+			 * while (--i) {
+			 *    if (!*--p)
+		     *		 continue;
+			 *	     这里要是发生AP2上release *p,这种情况是没问题的.
+			 *    if ((*p)->state == TASK_RUNNING && (*p)->counter > c && (*p)->sched_on_ap == 0) {
+			 *       c = (*p)->counter, next = i;
+			 *     }
+		     *  }
+			 * 假设AP1上schedule执行时该task[i]还没有被设置为null,此时AP2上执行了下面代码被设置为NULL了,那么该页此时
+			 * 很有可能被AP3上的进程初始化并占用了,在初始化的过程中会将running,counter和sched_on_ap都设置为0,此时AP1上是不可能调度该task再次执行的
+			 * 因为初始化是从页的高地址向低地址开始的, 此时的running=zombie,sched_on_ap=1,running是页的起始地址(低地址),
+			 * 所以在页的初始化过程中是不会引起该进程在其他AP上被调度执行的,因为running==zombie是不能被调度到的;而且初始化完成后counter=0,也不会被调度,
+			 * 真正可能处问题的是schedule里的下面这个loop操作:
+			 * for(p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
+			 *  if (*p) {
+			 *	 此时AP2上执行release介于这之间的话,是会有问题的.
+			 *	 AP2释放完该*p,那么有可能被AP3上的进程占用了,此时AP1上在执行如下的代码,就可能会破坏AP3上进程的内存页数据,
+			 *	 造成AP3上运行的进程崩溃.
+			 *	(*p)->counter = ((*p)->counter >> 1) + (*p)->priority;
+			 * }
+			 */
 			lock_op(&sched_semaphore);
 			task[i]=NULL;
 			if (!free_page((long)(p->tss.cr3)))  /* 先把该进程占用的目录表释放掉 */
@@ -145,14 +169,20 @@ int do_exit(long code)
 		kill_session();
 	current->state = TASK_ZOMBIE;
 	current->exit_code = code;
+	/*
+	 * 这里有必要解释下: 为什么这里注释掉tell_fater,而将它放在了task_exit_clear函数里.
+	 * 因为如果这里就通知父进程当前进程可以销毁了,那么父进程就会执行release操作,释放当前进程的目录页和task_struct占用的内存页,
+	 * 一旦释放了这两个内存页,她们就有可能被其他新进程占用,以上的操作早于随后执行的reset_ap_context那么,当前进程的目录页就作废了,
+	 * 内存映射就出问题了程序就崩溃了.
+	 * 所以把tell_father放在task_exit_clear里就不可能会出现这个错误.
+	 *  */
 	//tell_father(current->father);
 	if (get_current_apic_id() == apic_ids[0].apic_id) {
 		/* 在BSP上退出一个进程后，自主调用schedule，这里是不可能的，因为BSP只运行task0和task1，但这两个进程是不可能退出的，除非系统崩溃了 */
-	    schedule();
+	    panic("System encounters fatal errors, abort.");
 	}
 	else {
-		unsigned long apic_id = get_current_apic_id();
-		printk("task[%d],exit at AP[%d]\n\r", current->task_nr, apic_id);
+		printk("task[%d],exit at AP[%d]\n\r", current->task_nr, get_current_apic_id());
 		/* 进程退出后,要重置该AP的执行上下文. */
 		reset_ap_context();
 	}
@@ -211,7 +241,6 @@ repeat:
 
 	if (flag) {
 		if (options & WNOHANG){
-			//printk("flag: %d \n\r", flag);
 			return 0;
 		}
 
