@@ -213,7 +213,20 @@ void alloc_ap_kernel_stack(long ap_index, long return_addr, int father_id) {
      * 在函数调用里用lss命令的时候一定要小心，要把函数返回的指令地址预先保存下来，
      * 因为重置esp后，调用ret指令弹出的栈顶数据是不正确的，懂否哈哈，这个问题太tricky了，排查了好长时间，
      * bochs的多核调试手段太匮乏了，不好用。 */
-	__asm__ ("movl $0x10,%%eax\n\t" \
+
+	/* 这里也太有必要解释下,为什么要强行将fs设置为执行内核数据段,
+	 * 因为普通进程退出后会调用该方法,这时fs是指向普通任务LDT的数据段的值为0x17,普通任务退出后会在内核态运行特殊的ap_default_loop(loop操作),
+	 * 等待ap上的timer中断,调度新的进程运行,这时会出现两种情况:
+	 * 1. 没有新的进程可供调度,返回继续执行特殊的Loop程序.
+	 *    注意,timer中断默认会先push所有段寄存器的,当返回pop这些段寄存器时,有分两种情况:
+	 *    1.1 因为fs还是0x17,这时LDT指向的普通任务已经被释放了,所以执行pop fs会报GP 0x14错误.
+	 *    1.2 如果当前AP的LDT指向的任务虽然销毁了,但随后该LDT在GDT中的的描述符又被其他AP创建的新任务填上了,这时是不会报GP 0x14, load segment error.
+	 * 2. 调度执行了新的任务,发生了任务切换操作.
+	 *    注意,当执行TSS switch时,会将当前AP的executing context保存到我们指向定义的ap_default_task.tss中.
+	 *    这时因为没有执行pop fs操作是不会检查load segment的有效性的,所以是不会报load segment error的.
+	 * 1.1这种情况出现的频率比较高,是个巨坑啊,搞了好长时间,调试手段太匮乏了,也是过了好几遍代码灵光乍现想到的,解决了这个问题,AP自主调度就完全搞定了mama.
+	 *  */
+	__asm__ ("movl $0x10,%%eax\n\t"  \
 			 "mov %%ax,%%fs\n\t" \
 			 "lss %2,%%esp\n\t" \
 			 "pushl %%ecx\n\t" /* 将father_id入栈，作为后面执行ap_exit_clear代码段中的tell_father函数的入参，这里这样做有点太tricky了,不过我喜欢哈哈. */ \
