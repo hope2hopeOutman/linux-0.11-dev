@@ -147,6 +147,13 @@ Mainly study linux system and try to refact it for practice.
    
         6.5.1  已经实现将BSP上的8253 timer替换为APIC timer，为AP开启APIC timer做好准备。
 	
+        6.5.2  终于实现BSP和AP自主调度进程运行了
+   
+         历史性的一天啊，里面有太多太多值得回味的地方，逻辑层的山路十八弯啊，太多大坑和tricky值得你去填和思考，
+	 详细实现和感悟，请看实现里的注释吧。
+	 
+	 下一步support-KVM
+	
     
            
 				 
