@@ -154,13 +154,16 @@ Mainly study linux system and try to refact it for practice.
 	 
  
  7. support-VMX (minimum KVM)
-    看了近一个月的VMX，东西太多了从第chapter 23~33,终于搞明白了virtualization based on precessor-level是怎么搞得了，包括内存和中断的
+ 
+    看了近一个月的VMX，东西太多了从第chapter 23~33,
     
-    虚拟化，不过对于在non-root VM 状态下不能进行task switch有点费解，难道VM在non-root状态下只能通过ljmp tss触发VM-EXIT
+    终于搞明白了virtualization based on precessor-level是怎么搞得了，
     
-    回到VMM状态，通过调整VMCS去实现进程切换？
+    包括内存和中断的虚拟化，不过对于在non-root VM 状态下不能进行task switch有点费解，
     
-    下面终于可以开始VMX了，不够要先把OS迁到qemu，bochs不支持VMX (Nested VM).
+    难道VM在non-root状态下只能通过ljmp tss触发VM-EXIT回到VMM状态，通过调整VMCS去实现进程切换？
+    
+    下面终于可以开始VMX了，不过要先把OS迁到qemu，bochs不支持VMX (Nested VM).
     
     
            
