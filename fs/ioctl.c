@@ -29,6 +29,7 @@ static ioctl_ptr ioctl_table[]={
 
 int sys_ioctl(unsigned int fd, unsigned int cmd, unsigned long arg)
 {	
+	struct task_struct* current = get_current_task();
 	struct file * filp;
 	int dev,mode;
 

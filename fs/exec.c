@@ -187,6 +187,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 
 unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long code_limit,data_limit,code_base,data_base;
 	int i;
 
@@ -228,6 +229,8 @@ unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 int do_execve(unsigned long * eip,long tmp,char * filename,
 	char ** argv, char ** envp)  /* 这里的tmp是call _sys_call_table 压入的返回地址，所以这里用不到。  */
 {
+	//printk("do_exec\n\r");
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	struct buffer_head * bh;
 	struct exec ex;
@@ -279,6 +282,7 @@ restart_interp:
 	 * 然后读取内核buf去初始化shell解释程序的参数和环境列表 ，这就涉及copy内核buf的内容到参数页了，所以会用到from_kmem=1或2这种情况，
 	 * 普通的可执行文件是不需要的。
 	*/
+
 	if ((bh->b_data[0] == '#') && (bh->b_data[1] == '!') && (!sh_bang)) {
 		/*
 		 * This section does the #! interpretation.
@@ -449,6 +453,7 @@ restart_interp:
 	 * 用户态的堆栈指针；eip[3]=p，就是指向我们之前费了那么大劲初始化的参数和环境列表的offset。
 	 */
 	eip[3] = p;			 /* stack pointer */
+
 	return 0;            /* 中断返回，在用户态执行新的可执行文件喽，心中一万个mama^_^ */
 exec_error2:
 	iput(inode);

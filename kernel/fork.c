@@ -17,11 +17,17 @@
 #include <asm/segment.h>
 #include <asm/system.h>
 #include <linux/head.h>
+/************************ semaphore variable ******************************/
+extern unsigned long sched_semaphore;
+unsigned long find_empty_process_semaphore = 0;
+/**************************************************************************/
+
 
 extern void write_verify(unsigned long address);
 long last_pid = 0;
 
 void verify_area(void * addr, int size) {
+	struct task_struct* current = get_current_task();
 	unsigned long start;
 
 	start = (unsigned long) addr;
@@ -62,23 +68,33 @@ int copy_mem(int nr, struct task_struct * p) {
  * information (task[nr]) and sets up the necessary registers. It
  * also copies the data segment in it's entirety.
  */
+unsigned long copy_process_semaphore = 0;
 int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		long ebx, long ecx, long edx, long fs, long es, long ds, long eip,
 		long cs, long eflags, long esp, long ss) {
-	struct task_struct *p;
+
+	struct task_struct* current = get_current_task();
+	struct task_struct *p = task[nr];
 	int i;
 	struct file *f;
     /* 此版本将进程的task_struct和目录表都分配在内核实地址寻址的空间(mem>512M && mem<(512-64)M) */
-	p = (struct task_struct *) get_free_page(PAGE_IN_REAL_MEM_MAP);
 	if (!p)
 		return -EAGAIN;
-	task[nr] = p;
+	long pid = p->pid;   /* 现将新分配的PID保存起来 */
 
-	//printk("task nr: %d,last_pid: %d, task_struct:%p \n\r", nr, last_pid,p);
-
+	lock_op(&sched_semaphore);
+	/*
+	 * 这也是个巨坑啊
+	 * 这里一定要在copy操作之前先获得schedule的锁,这样确保在COPY老任务的时候,如果将新任务的state设置为running时,也不会被调度.
+	 *  */
 	*p = *current; /* NOTE! this doesn't copy the supervisor stack */
 	p->state = TASK_UNINTERRUPTIBLE;
-	p->pid = last_pid;
+	unlock_op(&sched_semaphore);
+
+	p->task_nr = nr;
+	p->father_nr = current->task_nr;
+	p->sched_on_ap = 0; /* 这里是自己埋的最后一个大坑，如果在AP上运行的task调用fork的话，其子进程的sched_on_ap肯定等于1了，这样它就永远不能被BSP调度运行 */
+	p->pid = pid;
 	p->father = current->pid;
 	p->counter = p->priority;
 	p->signal = 0;
@@ -116,6 +132,9 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 			panic("fork.copy_process: trying to free free page");
 		return -EAGAIN;
 	}
+
+	/* 共享的inode节点一定要同步 */
+	lock_op(&copy_process_semaphore);
 	for (i = 0; i < NR_OPEN; i++)
 		if (f = p->filp[i])
 			f->f_count++;
@@ -125,32 +144,48 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 		current->root->i_count++;
 	if (current->executable)
 		current->executable->i_count++;
+	unlock_op(&copy_process_semaphore);
+
 	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(p->tss));
 	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY, &(p->ldt));
 	p->state = TASK_RUNNING; /* do this last, just in case */
-	return last_pid;
+
+	return pid;  /* 这时的子进程ID不能用last_pid了 */
 }
 
 int find_empty_process(void) {
+	lock_op(&find_empty_process_semaphore);
+	int lock_flag = 1;
 	int i;
 
 	repeat: if ((++last_pid) < 0)
 		last_pid = 1;
 	for (i = 0; i < NR_TASKS; i++)
 		if (task[i]) {
-			/*printk("find, pid: %d, fpid: %d, currentPid: %d, status: %d\n\r",
-					task[i]->pid, task[i]->father, current->pid,
-					current->state);*/
 			if (task[i]->pid == last_pid)
 				goto repeat;
 		}
 
 	for (i = 1; i < NR_TASKS; i++) {
 		if (!task[i]) {
-			//printk("NR: %d, last_pid: %d\n\r", i, last_pid);
+			/* 多进程并发的时候,这里要先分配一页,起到站位的作用,否则会两个进程共用一个NR. */
+			struct task_struct* task_page = (struct task_struct *) get_free_page(PAGE_IN_REAL_MEM_MAP);
+			/* 这里一定要先设置任务的状态为不可中断状态,因为默认的是running状态,一旦赋值给task[nr],schedule就能调度运行了
+			 * 但是这时相应的任务状态信息还没有设置,所以会报错,这是个大坑啊
+			 *  */
+			task_page->state = TASK_UNINTERRUPTIBLE;
+			task_page->pid = last_pid;  /* 这里要设置PID,否则后面进程并发会造成多个进程共用同一个PID */
+			task[i] = task_page;  /* 这样就确保任务此时,是不会被调度的. */
+			if (lock_flag) {
+				unlock_op(&find_empty_process_semaphore);
+				lock_flag = 0;
+			}
 			return i;
 		}
 	}
-
+    if (lock_flag) {
+    	unlock_op(&find_empty_process_semaphore);
+    	lock_flag = 0;
+    }
 	return -EAGAIN;
 }

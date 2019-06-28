@@ -5,6 +5,22 @@ typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
 
+struct apic_info {
+	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
+	unsigned long apic_id;
+	unsigned long apic_regs_addr;
+	unsigned long kernel_stack;
+	/*
+	 * 每次调用shedule方法，就会将task分配到指定processorN上运行，就会递增相应load_per_apic上的数值，表示processor的负载，
+	 * 数值越大表明该processorN比较繁忙，可以将task调度到其他processor上运行。
+	 * 这里将BSP用作Master processor，APs用作slave processor，slave上任务的运行全靠master调度，这时AP上的apic timer都是禁用的，不能定时自主调度任务，
+	 * 这里这样做的目的是：想先易后难，等这一步走通了，后面会开启所有processor的apic timer，让每个processor都能定时自主调度任务。
+	 * 为什么要这样？通过我之前的惨痛经历和教训来看，内核代码的改造，一定要先易后难，先把技术链路打通能运行起来，然后再迭代优化，一股脑把自己的想法一次性全堆上，调试起来会搞死你。
+	 */
+	unsigned long load_per_apic;
+	struct task_struct *current;
+};
+
 //extern unsigned long pg_dir[1024];
 extern unsigned long* pg_dir;
 extern desc_table idt,gdt;
@@ -72,6 +88,14 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define OS_INIT_PARAMS_LIMIT      0x0008   /* granularity 4K,系统初始化参数总大小设置为32K，足够了。 */
 #define OS_INIT_PARAMS_ADDR       0x90000  /* granularity byte,系统初始化参数在boot阶段存放的地址，后面会复制到内核高地址空间。 */
 
+#define LOGICAL_PROCESSOR_NUM       0x04    /* 这里设置有4个processor */
+#define LOGICAL_PROCESSOR_MAXIMUM   0x64    /* 这里设置processor个数的上限 */
+#define BSP_APIC_REGS_RELOCATION  0x20000   /* BSP Local APIC Registers在内存中的remap */
+#define BSP_APIC_ICR_RELOCATION   0x20300   /* BSP ICR(Interrupt command register) 在内存中的位置 */
 
+#define SCHED_INTR_NO         0x82      /* AP响应BSP发来的进程调度IPI中断号 */
+
+#define AP_DEFAULT_TASK_NR    0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
+#define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
 
 #endif

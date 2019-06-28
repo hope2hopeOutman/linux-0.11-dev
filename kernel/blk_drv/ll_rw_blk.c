@@ -14,6 +14,10 @@
 
 #include "blk.h"
 
+/************************ semaphore variable ******************************/
+unsigned long buffer_semaphore = 0;
+/**************************************************************************/
+
 /*
  * The request-struct contains all necessary data
  * to load a nr of sectors into memory
@@ -39,16 +43,20 @@ struct blk_dev_struct blk_dev[NR_BLK_DEV] = {
 	{ NULL, NULL }		/* dev lp */
 };
 
-static inline void lock_buffer(struct buffer_head * bh)
+void lock_buffer(struct buffer_head * bh)
 {
+    lock_op(&buffer_semaphore);
 	cli();
-	while (bh->b_lock)
+	while (bh->b_lock) {
+		unlock_op(&buffer_semaphore);
 		sleep_on(&bh->b_wait);
+	}
 	bh->b_lock=1;
 	sti();
+	unlock_op(&buffer_semaphore);
 }
 
-static inline void unlock_buffer(struct buffer_head * bh)
+void unlock_buffer(struct buffer_head * bh)
 {
 	if (!bh->b_lock)
 		printk("ll_rw_block.c: buffer not locked\n\r");
@@ -72,6 +80,10 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 	if (!(tmp = dev->current_request)) {
 		dev->current_request = req;
 		sti();
+		/* 这里有必要解释一下：调用do_hd_request，处理请求项队列,如果是第一个就立刻处理，
+		 * 如果不是第一个的话，要么在该请求项处理完后是下一个插入的请求项成为第一个，要么在该正在处理的请求项还没处理完之前，插入新的请求项，
+		 * 这样后续会继续调用该函数处理，这样就处理不息了呵呵。
+		 */
 		(dev->request_fn)();
 		return;
 	}
@@ -102,11 +114,12 @@ static void make_request(int major,int rw, struct buffer_head * bh)
 	}
 	if (rw!=READ && rw!=WRITE)
 		panic("Bad block dev command, must be R/W/RA/WA");
-	lock_buffer(bh);
+	lock_buffer(bh);  /* 这一步一定要加同步锁 */
 	if ((rw == WRITE && !bh->b_dirt) || (rw == READ && bh->b_uptodate)) {
 		unlock_buffer(bh);
 		return;
 	}
+
 repeat:
 /* we don't allow the write-requests to fill up the queue completely:
  * we want some room for reads: they take precedence. The last third
@@ -139,6 +152,7 @@ repeat:
 	req->waiting = NULL;
 	req->bh = bh;
 	req->next = NULL;
+
 	add_request(major+blk_dev,req);
 }
 

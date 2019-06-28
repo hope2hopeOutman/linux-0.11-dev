@@ -250,6 +250,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 
 void mount_root(void)
 {
+	struct task_struct* current = get_current_task();
 	int i,free;
 	struct super_block * p;
 	struct m_inode * mi;

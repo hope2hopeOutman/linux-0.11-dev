@@ -114,6 +114,8 @@ is_disk1:
 
 	mov	ax,#0x0000
 	cld			! 'direction'=0, movs moves forward
+
+/*
 do_move:
 	mov	es,ax		! destination segment
 	add	ax,#0x1000
@@ -123,6 +125,8 @@ do_move:
 	mov cx,#NEEDMOVE
 	rep
 	movsb
+*/
+
 ! then we load the segment descriptors
 
 end_move:
@@ -186,9 +190,10 @@ end_move:
 ! we let the gnu-compiled 32-bit programs do that. We just jump to
 ! absolute address 0x00000, in 32-bit protected mode.
 
-	mov	ax,#0x0001	! protected mode (PE) bit
-	lmsw	ax		! This is it!
-	jmpi	0,8		! jmp offset 0 of segment 8 (cs)
+switch_to_protect:
+	mov	ax,#0x0001	    ! protected mode (PE) bit
+	lmsw	ax		    ! This is it!
+	jmpi	0x10000,8	! jmp offset 0 of segment 8 (cs)
 
 ! This routine checks that the keyboard command queue is empty
 ! No timeout is used - if this hangs there is something wrong with
@@ -196,9 +201,10 @@ end_move:
 empty_8042:
 	.word	0x00eb,0x00eb
 	in	al,#0x64	! 8042 status port
-	test	al,#2		! is input buffer full?
+	test	al,#2	! is input buffer full?
 	jnz	empty_8042	! yes - loop
 	ret
+
 !注意这里的limit也要根据内存实际的大小动态调整才行，因为head.s里会在内存最大处建立临时堆栈，
 !当call setup_gdt或setup_idt是会自动将下一条指令入栈，这时如果不将这里limit调为实际内存大小，会报beyong limit错误。
 !注意如果内存过大的话，例如4G那么就超出了实地址模式能计算的最大值了，所以这里直接将其limit设置为4G即可,因为后面进入保护模式的时候，
@@ -217,13 +223,84 @@ gdt:
 	.word	0x00CF		! granularity=4096, 386
 
 idt_48:
-	.word	0			! idt limit=0
+	.word	0x400		! idt limit=0
 	.word	0,0			! idt base=0L
 
 gdt_48:
-	.word	0x800		! gdt limit=2048, 256 GDT entries
-	.word	512+gdt,0x9	! gdt base = 0X9xxxx
-	
+	.word	0x400		! gdt limit=2048, 256 GDT entries
+	.word	512+gdt,0x9	! gdt base = 0x9xxxx ,这里的512表示的是地址，一定要搞清楚了,因为bootsect.s占用一个扇区，所以要+512。
+
+/* CPU个数的存储地址是1K对齐，(base=0x90000)+3K处 */
+.org 0xA00
+sipi_cpu_count:
+    .word 0x01
+    .word 0x00
+ipi_cpu_count:
+    .word 0x01
+    .word 0x00
+/* head.s中定义的中断描述符表的大小，和基地址 */
+idt_descr:
+    .word 256*8
+    .word 0x2000,0x0050
+    .word 0
+/* head.s中定义的全局描述符表的大小，和基地址 */
+gdt_descr:
+    .word 256*8
+    .word 0x2800,0x0050
+    .word 0
+/*
+ * 因为bootsect.s占用一个sector,这里设置ap_init起始地址是第8个sector开始处，
+ * 链接后，加上bootsect.s占用的一个sector,ap_init就是从第九个sector开始了，所以是4K对齐的,这样做就是为了AP能处理SIFI中断消息，这里稍微有点tricky。
+ * 这也是内核很有魅力的地方，如今已进入知命境，想怎么玩都可以了，下一步就要适配MESI还有根据thermal&performance monitor(这是实现cgroup的根本)将进程调度到合适的processor上，
+ * 搞完这些应该就是知命上品了吧，当然夫子的无矩境是神往哈哈。
+ */
+.org 0xE00
+ap_sipi:
+    mov ax,#0x9020   !这里的基地址就是0x90200,必须要加上bootsect.s占用的512个字节
+    mov ds,ax
+    mov fs,ax
+    mov es,ax
+	lock
+	inc sipi_cpu_count
+	lidt idt_descr
+	lgdt gdt_descr
+	sti
+	mov	ax,#0x0001	                 ! protected mode (PE) bit
+	lmsw	ax		                 ! load machine status word,set CR0 bit
+	jmpi	0x500000+0x4000,8	     ! jmp offset 0 of segment 8 (cs),这里的cs的基地址是0x00，所以这里要计算segment_init实际的offset.
+
+/*
+segment_init:
+    mov ax,0x10
+    mov ds,ax
+    mov ss,ax
+    mov fs,ax
+    mov es,ax
+
+sipi_nop_loop:
+    nop
+    nop
+    nop
+    jmp sipi_nop_loop
+*/
+
+/*
+ * 实地址模式下，处理IFI中断消息
+ */
+.org 0xF00
+ap_ipi:
+    mov ax,#0x9020
+    mov ds,ax
+    mov fs,ax
+    mov es,ax
+	lock
+	inc ipi_cpu_count
+ipi_nop_loop:
+    nop
+    nop
+    nop
+    jmp ipi_nop_loop
+
 .text
 endtext:
 .data

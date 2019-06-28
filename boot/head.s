@@ -87,11 +87,13 @@ OS_PRELOAD_SIZE    = 0x8000
  * 当然head.h中的6个有关内核线性地址空间的参数也要作相应的调整，将 (#if 0) 改为 (#if 1) 即可。
  */
 //KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K (512M) */
-KERNEL_LINEAR_ADDR_SPACE = 0x40000  /* granularity 4K (1G) */
+KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
+
+AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
-.globl startup_32
+.globl startup_32,sync_semaphore,idle_loop,ap_default_loop,task_exit_clear
 startup_32:
 	movl $0x10,%eax
 	mov %ax,%ds
@@ -106,7 +108,7 @@ startup_32:
 	 * 这样做的目的是为了能根据内存实际大小，动态分配页表，管理最大4G的内存，并且最大化利用物理内存，同时利于物理内存管理。
 	 */
     movl $OS_PRELOAD_SIZE,%ecx   /* 总共要复制的字节数0x8000=32k */
-    movl $0x0000,%esi            /* origin addr */
+    movl $0x10000,%esi           /* origin addr */
     movl $OS_BASE_ADDR,%edi      /* dest addr */
     cld
     rep
@@ -114,11 +116,15 @@ startup_32:
     //jmp real_entry    /* 注意这里千万别这么用，这里real_entry标号是相对与head.o的offset，所以要获得其在整个CS段内的offset要加上head的入口地址（既0x500000）*/
     xorl %ecx,%ecx
     lea real_entry,%ecx  /*这里获得的有效地址就是head.o编译时分配的基地址（0x500000+real_enry）*/
+    /*
+     * 这里再说明一下，这行之前的代码还是以0x00作为基地址执行的，后面的代码通过JMP操作就跳转到以5M为基地址的代码段中执行了，其实还是相同的代码，不过是在以5M为基地址的地址空间寻址运行了。
+     */
     jmp *%ecx
+
 /* 下面计算内存的大小统一用4K作为粒度。 */
 real_entry:
     xor %edx,%edx
-	movw %ds:0x90002,%edx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K, 这里也是个小坑，mem长度是2字节，之前用movl是4字节有问题啊 */
+	movw %ds:0x90002,%dx         /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K, 这里也是个小坑，mem长度是2字节，之前用movl是4字节有问题啊 */
 	shl  $0x04,%edx               /* 左移4位乘以16*/
 	addl $0x1000,%edx             /* +16M得到总的内存大小，以4K为单位。 */
 	movl %edx,total_memory_size   /* 将内存总大小(4K granularity)存储到全局变量total_memory_size */
@@ -175,6 +181,16 @@ init_temp_stack:
 	call do_hd_read_request
 	/* Pay much more Attenttion here, you must make sure all sectors has been loaded from HD before executing below command. */
 	cli
+
+	/* 设置BSP的apic_id */
+	movl $0x01,%eax
+	cpuid
+	shr $24,%ebx
+	pushl %ebx
+	pushl $0x00
+	call set_apic_id
+	popl %ebx
+	popl %ebx
 
 	lss stack_start,%esp
 	xorl %eax,%eax
@@ -456,7 +472,7 @@ init_dir:
 
 /* 初始化所有页表，从最后一个页表的最后一个页表项初始化。 */
 init_pgt:
-    addl $4092,%edx         /* 注意：这里的edx经过上面的init_dir操作后，存储的就是最后一个页表的首地址，所以+4094就得到了最后一个页表项的首地址了。*/
+    addl $4092,%edx      /* 注意：这里的edx经过上面的init_dir操作后，存储的就是最后一个页表的首地址，所以+4094就得到了最后一个页表项的首地址了。*/
     movl %edx,%edi
 	movl %ecx,%eax       /* 获取内核要实地址映射的内存对应的目录项个数 */
     shl $22,%eax         /* 获得内核要实地址映射的的内存的大小(*4M),单位是byte */
@@ -475,26 +491,26 @@ init_pgt:
 	ret			        /* this also flushes prefetch-queue */
 
 .align 4
-.word 0
 idt_descr:
 	.word 256*8-1		# idt contains 256 entries
 	.long idt
+	.word 0
+
 .align 4
-.word 0
 gdt_descr:
 	.word 256*8		# so does gdt (not that that's any
 	.long gdt		# magic number, but it works for me :^)
+	.word 0
 
-	.align 8
+.org 0x2000
+.align 8
 idt:	.fill 256,8,0		# idt is uninitialized
-
 gdt:
 	.quad 0x0000000000000000	/* NULL descriptor */
 	.quad 0x00c09a0000000fff	/* Code seg, limit default size: 16Mb,it will be changed by set_limit */
 	.quad 0x00c0920000000fff	/* Data seg, limit default size: 16Mb */
 	.quad 0x0000000000000000	/* TEMPORARY - don't use */
 	.fill 252,8,0			    /* space for LDT's and TSS's etc */
-
 /*
  * Record the address of the params table for main func to init.
  * allocated in here to avoid erasing when setup dir_page.
@@ -507,4 +523,127 @@ params_table_addr:
 .align 4
 total_memory_size:
     .long 0
+.align 4
+sync_semaphore:
+    .long 0
+apic_index:
+    .long 1
+
+/* setup.s中，处理SIPI中断会用这段代码来初始化各个AP的段寄存器 */
+.org 0x4000
+sipi_segment_init:
+    xor %eax,%eax
+    mov $0x10,%ax
+    mov %ax,%ds
+    mov %ax,%ss
+    mov %ax,%fs
+    mov %ax,%es
+
+lock_loop:
+    cmp $0x00,%ds:sync_semaphore
+    jne lock_loop
+    movl $0x01,%eax
+
+    lock   /* xchg默认会加上lock前缀的，这里显示加上lock prefix是为了统一风格 */
+    xchg %eax,%ds:sync_semaphore
+    /*
+     * 这里有必要解释一下，为什么eax!=0就进入等待循环
+     * 因为xchg操作默认是加锁操作，所以第一个加锁成功的processor会把sync_semaphore设置为1，对应的eax设置为0(sync_semaphore初始化值为0)
+     * 其它加锁不成功的会block住，等到获得锁的processor写完sync_semaphore后，会自动释放锁，然后其它的processor再次竞争，这时加锁成功的第二个processor
+     * 会将自己对应的eax设置为1(因为此时的sync_semaphore已经被第一个processor设置为1了)，所以下面的cmp $0x00,%eax就好理解了，这也是Java中sync实现的基础，
+     * 通过这个操作，可以实现对大块内存或代码段的执行实现同步。
+     * 当然，至于lock操作是通过bus-lock实现的还是cacheline-lock实现的，这就和要写的内存的类型有关了，这就需要配置MTRR了。
+     * 1. 如果该块内存是WB(write back)类型的，就是cacheline-lock，这时是不会阻塞其它进程访问其它内存块的.
+     * 2. 如果该块内存是UC(uncacheable)类型的，就是bus-lock，这时会阻塞其它进程对内存的访问.
+     */
+    cmp $0x00,%eax
+    jne lock_loop
+
+    /*
+     * AP要想用call指令进行函数调用，必须要先初始化esp，因为power reset或init后APs的esp都是设置为0,
+     * 而此时系统的内核的页目录表是放置在0x00地址处的，Ap的所有段的base也都是设置为0的，所以AP的函数调用操作对栈的操作，会覆盖内核的目录表项，
+     * 造成内核崩溃的，这点一定要注意。
+     * 当内核进入保护模式并开启了分页模式，此时内核的目录表和页表都已经初始化好了，也就是内核完成了对内核线性地址空间的物理内存的实地址映射，
+     * 所以这时，所有的中断操作，都会涉及到对栈的操作，这时一定要搞清楚栈的基地址是否在内存最开始的一页地址范围内，那是内核的目录表位置，千万别覆盖了。
+     */
+    lss tmp_floppy_area,%esp
+    movl $0x01,%eax
+    cpuid
+    shr $24,%ebx
+
+    push %ebx
+    push %ds:apic_index
+    call set_apic_id
+    pop %eax
+    pop %ebx
+
+    /* 这时eax存储的是apic_index,所以这里作为参数传给alloc_ap_kernel_stack */
+    lea return_addr,%ebx
+    pushl $0x01  /* 该参数在此无意义 */
+    pushl %ebx
+    pushl %eax
+    call alloc_ap_kernel_stack
+return_addr:
+    /* 下面连续两个pop操作应该去掉,因为这时内核栈已经重新分配了,指向一个新的内存页的顶端,
+     * 这里要是执行pop操作的话,会使ESP指向下一页内存了,会造成下一页内存有效数据被覆盖的错误.
+     * */
+    //pop %eax
+    //pop %eax
+    /* 初始化AP apic regs addr */
+    push %ds:apic_index
+    call init_apic_addr
+    pop %ebx
+
+   /* 开启分页机制.
+    * 自己挖的巨坑啊，后面老是报readlimit，把current.cr3打印出来映射的都是对的，就是不起作用，
+    * 后来发现log里cpu1的cr3总是等于0，恍然大悟啊，分页没开启,ljmp对cr3不起作用的.
+    */
+    xorl %eax,%eax		 /* pg_dir is at 0x0000 */
+	movl %eax,%cr3		 /* cr3 - page directory start */
+	movl %cr0,%eax
+	orl $0x80000000,%eax
+	movl %eax,%cr0		 /* set paging (PG) bit */
+
+   /* 这里一定要设置一个TSS段的默认保存地址，因为AP在执行第一次任务切换时如果不设置的话，
+    * 会将当前内核态的context保存到内核目录表中的(TSS未初始化的默认值是0x00,内核目录表的地址)，大问题啊.
+    */
+	call reload_ap_ltr
+
+	/* 初始化并启用AP的timer,让AP能够定时调度task执行,不用再劳烦BSP指派任务了哈哈,
+	 * 这里有问题,一旦开启了APIC的timer就执行schedule了,下面的解锁操作就不会执行了,又一个自挖的大坑啊.
+	 * 要先初始化timer,但要设置其mask位,待AP释放了初始化锁后,就可开启timer了.*/
+
+    call get_current_apic_index
+	pushl %eax
+	call init_apic_timer
+	popl %eax
+
+    pushl %eax    /* 作为start_apic_timer的apic_index参数 */
+	addl $0x01,%ds:apic_index
+    subl $1,%ds:sync_semaphore
+
+    /* 开启AP timer */
+    call start_apic_timer
+    popl %eax
+
+    hlt
+idle_loop:
+    hlt
+    xorl %ebx,%ebx
+    jmp idle_loop
+task_exit_clear:
+   call tell_father   /* 这时通知父进程释放其子进程就没问题了 */
+   popl %eax          /* 这里弹出的是father_id */
+   /*
+   pushl %eax
+   call print_eax
+   popl %eax
+   */
+   call reset_ap_default_task  /* 设置AP的current_task=ap_default_task,当timer中断调度执行新的task,用于保存当前人executing context */
+ap_default_loop:
+    hlt
+    xorl %eax,%eax
+    jmp ap_default_loop
+
+
 

@@ -14,11 +14,13 @@ volatile void do_exit(int error_code);
 
 int sys_sgetmask()
 {
+	struct task_struct* current = get_current_task();
 	return current->blocked;
 }
 
 int sys_ssetmask(int newmask)
 {
+	struct task_struct* current = get_current_task();
 	int old=current->blocked;
 
 	current->blocked = newmask & ~(1<<(SIGKILL-1));
@@ -47,6 +49,7 @@ static inline void get_new(char * from,char * to)
 
 int sys_signal(int signum, long handler, long restorer)
 {
+	struct task_struct* current = get_current_task();
 	struct sigaction tmp;
 
 	if (signum<1 || signum>32 || signum==SIGKILL)
@@ -63,6 +66,7 @@ int sys_signal(int signum, long handler, long restorer)
 int sys_sigaction(int signum, const struct sigaction * action,
 	struct sigaction * oldaction)
 {
+	struct task_struct* current = get_current_task();
 	struct sigaction tmp;
 
 	if (signum<1 || signum>32 || signum==SIGKILL)
@@ -84,6 +88,7 @@ void do_signal(long signr,long eax, long ebx, long ecx, long edx,
 	long eip, long cs, long eflags,
 	unsigned long * esp, long ss)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long sa_handler;
 	long old_eip=eip;
 	struct sigaction * sa = current->sigaction + signr - 1;

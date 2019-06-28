@@ -48,13 +48,14 @@ extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY, memory_end, total_memory_size;
 
 
 #define CODE_SPACE(addr) ((((addr)+4095)&~4095) < \
-current->start_code + current->end_code)
+		get_current_task()->start_code + get_current_task()->end_code)
 
 #define copy_page(from,to) \
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 unsigned char linear_addr_swap_map[KERNEL_REMAP_ADDR_SPACE] = {0,};
+unsigned long page_lock_semaphore = 0;  /* 用于同步get_free_page方法 */
 /*
  * 当完成对>1G的一页物理地址的重映射并对这一页物理内存初始化后，就会将该物理地址设置到进程用户空间对应的页表项中，这样进程在用户太就可以读写该>1G的一页物理内存了
  * 这个时候，我们要将linear_addr_swap_map数组中对应的线性地址的占用标志位设置为0，表明该线性地址可以被映射到其他>(1G-128M)的物理地址。
@@ -79,6 +80,7 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long* dir_item         = (unsigned long*)(current->tss.cr3 + (linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
 	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
 	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
@@ -86,9 +88,16 @@ void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
 }
 
+unsigned long remap_linear_addr_semaphore = 0;
 /* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long remap_linear_addr(unsigned long phy_addr)
 {
+	/*
+	 * 当内存>1G时,内核用于映射>1G内存的保留线性地址空间也是多进程共享资源,所以一定要加锁同步,
+	 * 否则会导致多个>1G的内存页被映射到了相同的线性地址空间,导致系统崩溃,大坑一口哈哈.
+	 * */
+    lock_op(&remap_linear_addr_semaphore);
+	struct task_struct* current = get_current_task();
 	unsigned long linear_addr = 0;
 	for (int i=0; i< KERNEL_REMAP_ADDR_SPACE; i++)
 	{
@@ -100,6 +109,7 @@ unsigned long remap_linear_addr(unsigned long phy_addr)
 			break;
 		}
 	}
+	unlock_op(&remap_linear_addr_semaphore);
 	if (!linear_addr) {
 		panic("Linear address has been full \n\r");
 	}
@@ -150,6 +160,12 @@ unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigne
  */
 unsigned long get_free_page(int real_space)
 {
+/*
+ * 首先获得同步锁，然后才能执行页面请求操作
+ * 这里还没有配置MTRR,所以page_lock_semaphore是不会缓存的，施加的是bus-lock，
+ * 后面会将共享变量设置为WB类型，这样施加的就是cacheline-lock,这样效率就高多了。
+ */
+lock_op(&page_lock_semaphore);
 
 register unsigned long __res asm("ax");
 unsigned long compare_addr = KERNEL_LINEAR_ADDR_SPACE;
@@ -204,10 +220,21 @@ __asm__("std ; repne ; scasb\n\t"
 	"rep ; stosl\n\t"
 	"movl %%edx,%%eax\n\t"         /* 将该物理地址页放入eax，作为返回值。 */
 	"2:\n\t"
-	"cld;"
+	"cld\n\t"
+	"lea page_lock_semaphore,%%ebx\n\t"
+	"pushl %%eax\n\t"              /* eax作为get_free_page函数的返回值,这里必须要备份一下,因为下面unlock_op函数调用会重置eax,作为返回值,即使该函数是void类型 */
+	"pushl %%ebx\n\t"
+	"call unlock_op\n\t"
+	"popl %%ebx\n\t"
+	"popl %%eax\n\t"
 	:"=a" (__res)
 	:"0" (0),"r" (paging_start),"c" (paging_num),
 	"D" (paging_end), "b" (compare_addr));
+
+/* 要在返回之前释放同步锁
+ * 在此处调用该解锁方法,GCC编译的时候有问题,会遗漏一些操作,对于这种嵌入式混合汇编,觉的GCC在处理上下文依赖关系上,还是不完善.
+ * */
+//unlock_op(&page_lock_semaphore);
 return __res;
 }
 
@@ -244,6 +271,7 @@ int free_page(unsigned long addr)
  */
 int free_page_tables(unsigned long from,unsigned long size, struct task_struct* task_p)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long *pg_table = 0;
 	unsigned long * dir = 0;
 	unsigned long nr = 0, pti_size = 1024;
@@ -251,7 +279,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 	if (from & 0x3fffff)
 		panic("free_page_tables called with wrong alignment");
 	if (!from) {
-		printk("Free pg_dir, currentPid: %d, fid: %d \n\r", current->pid, current->father);
+		//printk("Free pg_dir, currentPid: %d, fid: %d \n\r", current->pid, current->father);
 		panic("Trying to free up swapper memory space");
 	}
 
@@ -281,7 +309,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		for (nr=0 ; nr<pti_size ; nr++) {
 			if (*pg_table >= LOW_MEM) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
 				if (!free_page(0xfffff000 & *pg_table)) {
-					printk("error linear addr: %p \n\r", pg_table);
+					//printk("error linear addr: %p \n\r", pg_table);
 					panic("free_page_tables1: trying to free free page");
 				}
 			}
@@ -316,6 +344,7 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
  */
 int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_struct* new_task)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long * from_page_table = 0;
 	unsigned long * to_page_table = 0;  /* 这两个变量也是，一定要初始化为0，凡是有++或--操作的一定要先初始化，不然栈上的old_value会是你的噩梦。 */
 	unsigned long this_page = 0;
@@ -329,6 +358,8 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
 	unsigned long *new_dir_page = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);  /* 为新进程分配一页物理内存用于存储目录表 */
+	//printk("new_dir=%p, nr=%d, f_pid=%d, f_nr: %d\n\r",new_dir_page, new_task->task_nr, new_task->father, new_task->father_nr);
+
 	if (!new_dir_page) {
 		panic("Can not allocate a physical page for new process's dir-table. \n\r ");
 	}
@@ -459,6 +490,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size,struct task_s
  */
 unsigned long put_page(unsigned long page,unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long tmp, *page_table;
 
     /* NOTE !!! This uses the fact that kernel_pg_dir=0 */
@@ -488,9 +520,13 @@ unsigned long put_page(unsigned long page,unsigned long address)
     /* no need for invalidate */
 	return page;
 }
+
+unsigned long un_wp_page_semaphore = 0;
+
 /* 处理写保护异常，table_entry是页表中某个页表项的物理地址，不是线性地址搞清楚喽。 */
 void un_wp_page(unsigned long * table_entry)
 {
+	struct task_struct* current = get_current_task();
 	//printk("table_entry: %p \n\r", table_entry);
 	unsigned long* old_page = 0;
 	unsigned long* new_page = 0;
@@ -509,6 +545,7 @@ void un_wp_page(unsigned long * table_entry)
 	 * 会将其占有标志--，当另一个进程第一次写该页时也会触发WP,这时就要判读占有标志是否为1，为1说明另一个进程已经write on copy了
 	 * 所以这里直接将自己的页表项设置为可写就行了。
 	 */
+	repeat:
 	if ((unsigned long)old_page >= LOW_MEM && mem_map[MAP_NR((unsigned long)old_page)]==1) {
 		*table_entry |= 2;
 		recov_swap_linear_addrs(cached_linear_addrs, length);
@@ -533,8 +570,23 @@ void un_wp_page(unsigned long * table_entry)
 	 * 当第一个进程对某个物理页执行写操作时会触发WP，这时该物理页的占用标记是2，所以会执行到这里，先把占用标记--，然后将新分配的物理页
 	 * 地址设置为RWX，并赋值给对应的页表项，刷新TLB后，然后将old_page的内容分配到new_page，所以是第一个执行写操作的进程会触发write on copy.
 	 */
-	if ((unsigned long)old_page >= LOW_MEM)
+	if ((unsigned long)old_page >= LOW_MEM) {
+		/*
+		 * 这是个巨坑啊,多核的时候,父子进程会并发执行的,这个时候会同时执行到这,将mem_map[MAP_NR((unsigned long)old_page)]设置为0了,
+		 * 相当于释放了该内存页了,造成ESP老是报错.
+		 * 这个问题搞了一天,几乎把内核又过了一遍,磁盘块和内存块的同步终于搞定了,为BSP和AP都能自主调度进程执行打下坚实的基础哈哈哈.
+		 * 再次吐槽下bochs的多核调试,功能太不完善了,至少得提供打印每个CPU的通用寄存器和控制寄存器的功能吧,目前只能打印CPU0(BSP)的,
+		 * 官方文档上说是用info cpu可以打印所有CPU的寄存器信息,但是用这个命令,整个bochs就挂了,直接退出了,所以调试工具真的是很重要啊,
+		 * 这里就是根据很少的日志信息,结合源码硬看的,每个函数都带入并发上下文,尼玛真是佩服自己,太虐了.
+		 *  */
+		lock_op(&un_wp_page_semaphore);
+		if (mem_map[MAP_NR((unsigned long)old_page)] == 1) {
+			unlock_op(&un_wp_page_semaphore);
+			goto repeat;
+		}
 		mem_map[MAP_NR((unsigned long)old_page)]--;
+		unlock_op(&un_wp_page_semaphore);
+	}
 	*table_entry = (unsigned long)new_page | 7;
 	invalidate(current->tss.cr3);
 	caching_linear_addr(cached_linear_addrs,length,check_remap_linear_addr(&old_page));
@@ -553,6 +605,7 @@ void un_wp_page(unsigned long * table_entry)
  */
 void do_wp_page(unsigned long error_code,unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 #if 0
 /* we cannot do this yet: the estdio library writes to code space */
 /* stupid, stupid. I really want the libc.a from GNU */
@@ -575,6 +628,7 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 /* address是线性地址且是4K align */
 void write_verify(unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long * page_table_entry;  /* 注意：该变量存储的是页表项的物理地址，不是线性地址哦。 */
 	unsigned long * page_table;
 	/* 计算该地址对应的目录项地址，从而可以获取对应页表的基地址,也是物理地址 */
@@ -606,7 +660,7 @@ void get_empty_page(unsigned long address)
 	if (!(tmp=get_free_page(PAGE_IN_MEM_MAP)) || !put_page(tmp,address)) {
 		if (!free_page(tmp)) /* 0 is ok - ignored */
 			panic("get_empty_page: trying to free free page");
-		printk("get_empty_page trigger oom,tmp: %u, address: %u \n\r", tmp, address);
+		//printk("get_empty_page trigger oom,tmp: %u, address: %u \n\r", tmp, address);
 		oom();
 	}
 }
@@ -622,6 +676,7 @@ void get_empty_page(unsigned long address)
  */
 int try_to_share(unsigned long address_offset, struct task_struct * p)
 {
+	struct task_struct* current = get_current_task();
 	unsigned long from;
 	unsigned long to;
 	unsigned long* from_page;
@@ -698,6 +753,7 @@ int try_to_share(unsigned long address_offset, struct task_struct * p)
  */
 int share_page(unsigned long address_offset)
 {
+	struct task_struct* current = get_current_task();
 	struct task_struct ** p;
 
 	if (!current->executable)
@@ -719,6 +775,7 @@ int share_page(unsigned long address_offset)
 /* 注意：这里的address是出错的线性地址,这地址可不是4K对齐的 */
 void do_no_page(unsigned long error_code,unsigned long address)
 {
+	struct task_struct* current = get_current_task();
 	int nr[4];
 	unsigned long tmp;
 	unsigned long* page;
@@ -726,13 +783,14 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	address &= 0xfffff000;
 	tmp = address - current->start_code;  /* 这里的start_code等于进程地址空间的base,这里的tmp是相对于base的offset */
-	//printk("addr: %u, errcode: %d \n\r", address, error_code);
+
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;
 	}
-	if (share_page(tmp))
+	if (share_page(tmp)) {
 		return;
+	}
 	if (!(page = (unsigned long*)get_free_page(PAGE_IN_MEM_MAP))) {
 		printk("do_no_page embedded trigger oom \n\r");
 		oom();
@@ -748,7 +806,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
 	unsigned long linear_addr = 0;
 	if (i > 0) {
-		printk("directly remap maybe have some problem \n\r");
+		//printk("directly remap maybe have some problem \n\r");
 		linear_addr = remap_linear_addr((unsigned long) page);
 		if (linear_addr) {
 			tmp = (unsigned long) linear_addr + 4096;

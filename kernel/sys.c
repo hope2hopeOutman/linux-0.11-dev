@@ -50,6 +50,7 @@ int sys_prof()
 
 int sys_setregid(int rgid, int egid)
 {
+	struct task_struct* current = get_current_task();
 	if (rgid>0) {
 		if ((current->gid == rgid) || 
 		    suser())
@@ -117,6 +118,7 @@ int sys_time(long * tloc)
  */
 int sys_setreuid(int ruid, int euid)
 {
+	struct task_struct* current = get_current_task();
 	int old_ruid = current->uid;
 	
 	if (ruid>0) {
@@ -156,6 +158,7 @@ int sys_stime(long * tptr)
 int sys_times(struct tms * tbuf)
 {
 	if (tbuf) {
+		struct task_struct* current = get_current_task();
 		verify_area(tbuf,sizeof *tbuf);
 		put_fs_long(current->utime,(unsigned long *)&tbuf->tms_utime);
 		put_fs_long(current->stime,(unsigned long *)&tbuf->tms_stime);
@@ -167,6 +170,7 @@ int sys_times(struct tms * tbuf)
 
 int sys_brk(unsigned long end_data_seg)
 {
+	struct task_struct* current = get_current_task();
 	if (end_data_seg >= current->end_code &&
 	    end_data_seg < current->start_stack - 16384)
 		current->brk = end_data_seg;
@@ -180,6 +184,7 @@ int sys_brk(unsigned long end_data_seg)
  */
 int sys_setpgid(int pid, int pgid)
 {
+	struct task_struct* current = get_current_task();
 	int i;
 
 	if (!pid)
@@ -200,11 +205,13 @@ int sys_setpgid(int pid, int pgid)
 
 int sys_getpgrp(void)
 {
+	struct task_struct* current = get_current_task();
 	return current->pgrp;
 }
 
 int sys_setsid(void)
 {
+	struct task_struct* current = get_current_task();
 	if (current->leader && !suser())
 		return -EPERM;
 	current->leader = 1;
@@ -230,6 +237,7 @@ int sys_uname(struct utsname * name)
 
 int sys_umask(int mask)
 {
+	struct task_struct* current = get_current_task();
 	int old = current->umask;
 
 	current->umask = mask & 0777;

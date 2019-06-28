@@ -9,9 +9,9 @@ LD86	=ld86 -0
 DISASM  =objdump
 AS	=as --32
 LD	=ld
-LDFLAGS	=-s -x -M -m elf_i386 -Ttext 0x500000 -e startup_32
+LDFLAGS	=-s -x -M -m elf_i386  -Ttext 0x500000 -e startup_32
 CC	=gcc $(RAMDISK)
-CFLAGS	=-fno-stack-protector -m32 -O -Wall -fstrength-reduce -fomit-frame-pointer
+CFLAGS	=-fno-stack-protector -m32 -O -Wall -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables
 DISASMFLAGS=-D
 CPP	=cpp -nostdinc -Iinclude
 # cpp == gcc -E

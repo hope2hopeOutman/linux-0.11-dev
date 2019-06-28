@@ -11,32 +11,37 @@
  */
 #include <stdarg.h>
 #include <stddef.h>
+#include <asm/system.h>
 
 #include <linux/kernel.h>
 
-static char buf[1024];
+char print_buf[1024];
 
 extern int vsprintf(char * buf, const char * fmt, va_list args);
+
+extern unsigned long tty_io_semaphore;
 
 int printk(const char *fmt, ...)
 {
 	va_list args;
 	int i;
 
+	lock_op(&tty_io_semaphore);
+
 	va_start(args, fmt);
-	i=vsprintf(buf,fmt,args);
+	i=vsprintf(print_buf,fmt,args);
 	va_end(args);
 	__asm__("push %%fs\n\t"
-		"push %%ds\n\t"
-		"pop %%fs\n\t"
-		"pushl %0\n\t"
-		"pushl $buf\n\t"
-		"pushl $0\n\t"
-		"call tty_write\n\t"
-		"addl $8,%%esp\n\t"
-		"popl %0\n\t"
-		"pop %%fs"
-		::"r" (i):"ax","cx","dx");
+			"push %%ds\n\t"
+			"pop %%fs\n\t"
+			"pushl %0\n\t"
+			"pushl $print_buf\n\t"
+			"pushl $0\n\t"
+			"call tty_write\n\t"
+			"addl $8,%%esp\n\t"
+			"popl %0\n\t"
+			"pop %%fs"
+			::"r" (i):"ax","cx","dx");
 	return i;
 }
 

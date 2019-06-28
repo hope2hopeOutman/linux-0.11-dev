@@ -58,13 +58,15 @@ void page_fault(void);
 void coprocessor_error(void);
 void reserved(void);
 void parallel_interrupt(void);
+void handle_ipi_interrupt(void);
 void irq13(void);
 
 static void die(char * str,long esp_ptr,long nr)
 {
+	struct task_struct* current = get_current_task();
 	long * esp = (long *) esp_ptr;
 	int i;
-
+    printk("die at apic_id: %d, nr: %d, pid: %d, task_addr: %p\n\r", get_current_apic_id(), current->task_nr, current->pid, current);
 	printk("%s: %04x\n\r",str,nr&0xffff);
 	printk("EIP:\t%04x:%p\nEFLAGS:\t%p\nESP:\t%04x:%p\n",
 		esp[1],esp[0],esp[2],esp[4],esp[3]);
@@ -169,7 +171,7 @@ void do_stack_segment(long esp,long error_code)
 
 void do_coprocessor_error(long esp, long error_code)
 {
-	if (last_task_used_math != current)
+	if (last_task_used_math != get_current_task())
 		return;
 	die("coprocessor error",esp,error_code);
 }
@@ -206,4 +208,12 @@ void trap_init(void)
 	outb_p(inb_p(0x21)&0xfb,0x21);
 	outb(inb_p(0xA1)&0xdf,0xA1);
 	set_trap_gate(39,&parallel_interrupt);
+}
+
+void parse_cpu_topology(void);
+void handle_ipi_interrupt(void);
+void ipi_intr_init(void)
+{
+	set_intr_gate(0x81,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */
+	set_intr_gate(0x82,&handle_ipi_interrupt);
 }

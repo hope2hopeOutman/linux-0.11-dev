@@ -43,6 +43,7 @@ int sys_utime(char * filename, struct utimbuf * times) {
  * so as to make this call useful to setuid programs.
  */
 int sys_access(const char * filename, int mode) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	int res, i_mode;
 
@@ -69,6 +70,7 @@ int sys_access(const char * filename, int mode) {
 }
 
 int sys_chdir(const char * filename) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 
 	if (!(inode = namei(filename)))
@@ -83,6 +85,7 @@ int sys_chdir(const char * filename) {
 }
 
 int sys_chroot(const char * filename) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 
 	if (!(inode = namei(filename)))
@@ -97,6 +100,7 @@ int sys_chroot(const char * filename) {
 }
 
 int sys_chmod(const char * filename, int mode) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 
 	if (!(inode = namei(filename)))
@@ -127,14 +131,16 @@ int sys_chown(const char * filename, int uid, int gid) {
 	return 0;
 }
 
+unsigned long sys_open_semaphore = 0;
 int sys_open(const char * filename, int flag, int mode) {
+	struct task_struct* current = get_current_task();
 	struct m_inode * inode;
 	struct file * f;
 	int i, fd;
 
 	/*char kstr[32] = { 0 };
 	cpy_str_to_kernel(kstr, filename);
-	printk("open a file name: %s \n\r", kstr);*/
+	printk("apcid:%d,file:%s\n\r", get_current_apic_id(), kstr);*/
 
 	mode &= 0777 & ~current->umask;
 	for (fd = 0; fd < NR_OPEN; fd++) {
@@ -148,10 +154,14 @@ int sys_open(const char * filename, int flag, int mode) {
 	}
 	current->close_on_exec &= ~(1 << fd);
 	f = 0 + file_table;
+    lock_op(&sys_open_semaphore);
 	for (i = 0; i < NR_FILE; i++, f++) {
-		if (!f->f_count)
+		if (!f->f_count) {
+			f->f_count = 1;
 			break;
+		}
 	}
+	unlock_op(&sys_open_semaphore);
 	if (i >= NR_FILE) {
 		printk("errorno1: %d \n\r", EINVAL);
 		return -EINVAL;
@@ -203,6 +213,7 @@ int sys_creat(const char * pathname, int mode) {
 }
 
 int sys_close(unsigned int fd) {
+	struct task_struct* current = get_current_task();
 	struct file * filp;
 
 	if (fd >= NR_OPEN)

@@ -21,6 +21,7 @@ void math_emulate(long edi, long esi, long ebp, long sys_call_ret,
 	unsigned long eip,unsigned short cs,unsigned long eflags,
 	unsigned short ss, unsigned long esp)
 {
+	struct task_struct* current = get_current_task();
 	unsigned char first, second;
 
 /* 0x0007 means user code space */

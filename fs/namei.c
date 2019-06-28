@@ -37,6 +37,7 @@
  * uid, but that should be easily changed.
  */
 static int permission(struct m_inode * inode, int mask) {
+	struct task_struct* current = get_current_task();
 	int mode = inode->i_mode;
 
 	/* special case: not even root can read/write a deleted file */
@@ -97,6 +98,7 @@ static struct buffer_head * find_entry(struct m_inode ** dir, const char * name,
 	struct buffer_head * bh;
 	struct dir_entry * de;
 	struct super_block * sb;
+	struct task_struct* current = get_current_task();
 
 #ifdef NO_TRUNCATE
 	if (namelen > NAME_LEN)
@@ -105,7 +107,7 @@ static struct buffer_head * find_entry(struct m_inode ** dir, const char * name,
 	if (namelen > NAME_LEN)
 		namelen = NAME_LEN;
 #endif
-	entries = (*dir)->i_size / (sizeof(struct dir_entry));
+	entries = (*dir)->i_size / (sizeof(struct dir_entry));  /* 目录下有子目录或文件,每个子目录或文件都要占用一个目录项(dir_entry) */
 	*res_dir = NULL;
 	if (!namelen)
 		return NULL;
@@ -235,6 +237,7 @@ static struct buffer_head * add_entry(struct m_inode * dir, const char * name,
  * It returns NULL on failure.
  */
 static struct m_inode * get_dir(const char * pathname) {
+	struct task_struct* current = get_current_task();
 	char c;
 	const char * thisname;
 	struct m_inode * inode;
@@ -244,25 +247,23 @@ static struct m_inode * get_dir(const char * pathname) {
 
 	//printk("currentPid: %d, root: %u, icount: %d \n\r", current->pid, current->root, current->root->i_count);
 	if (!current->root || !current->root->i_count) {
-		char kstr[32] = { 0 };
-		cpy_str_to_kernel(kstr, pathname);
+		//char kstr[32] = { 0 };
+		//cpy_str_to_kernel(kstr, pathname);
 		/*printk("Pid: %d, tty: %d, fileName: %s, idev: %d, inum: %d\n\r",
 				current->pid, current->tty, kstr, current->root->i_dev, current->root->i_num);*/
 		panic("No root inode");
-	} else {
-		if (current->pid == 4) {
-			//printk("father: %d, Pid:%d, base: %p, limit: %p\n",current->father,current->pid, get_base(current->ldt[1]), get_limit(0x17));
-		}
 	}
 	if (!current->pwd || !current->pwd->i_count)
 		panic("No cwd inode");
 	if ((c = get_fs_byte(pathname)) == '/') {
 		inode = current->root;
 		pathname++;
-	} else if (c)
+	} else if (c) {
 		inode = current->pwd;
-	else
+	}
+	else {
 		return NULL; /* empty name is bad */
+	}
 	inode->i_count++;
 	while (1) {
 		thisname = pathname;
@@ -353,6 +354,7 @@ struct m_inode * namei(const char * pathname) {
  */
 int open_namei(const char * pathname, int flag, int mode,
 		struct m_inode ** res_inode) {
+	struct task_struct* current = get_current_task();
 	const char * basename;
 	int inr, dev, namelen;
 	struct m_inode * dir, *inode;
@@ -480,6 +482,7 @@ int sys_mknod(const char * filename, int mode, int dev) {
 }
 
 int sys_mkdir(const char * pathname, int mode) {
+	struct task_struct* current = get_current_task();
 	const char * basename;
 	int namelen;
 	struct m_inode * dir, *inode;
@@ -607,6 +610,7 @@ int sys_rmdir(const char * name) {
 	struct m_inode * dir, *inode;
 	struct buffer_head * bh;
 	struct dir_entry * de;
+	struct task_struct * current = get_current_task();
 
 	if (!suser())
 		return -EPERM;
@@ -677,6 +681,7 @@ int sys_rmdir(const char * name) {
 }
 
 int sys_unlink(const char * name) {
+	struct task_struct* current = get_current_task();
 	const char * basename;
 	int namelen;
 	struct m_inode * dir, *inode;
