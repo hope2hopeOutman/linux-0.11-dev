@@ -52,8 +52,9 @@ start:
 	sub	di,di
 	rep
 	movw
-	jmpi	go,INITSEG
-go:	mov	ax,cs
+	jmpi go,#INITSEG
+go:
+    mov	ax,cs
 	mov	ds,ax
 	mov	es,ax
 ! put stack at 0x9ff00.

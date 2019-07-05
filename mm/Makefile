@@ -1,5 +1,5 @@
 CC	=gcc
-CFLAGS	=-fno-stack-protector -m32 -march=i386 -O  -Wall -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables \
+CFLAGS	=-g -fno-stack-protector -m32 -march=i386 -O  -Wall -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables \
 	-finline-functions -nostdinc -I../include
 AS	=as --32
 AR	=ar
