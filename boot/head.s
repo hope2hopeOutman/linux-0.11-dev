@@ -66,7 +66,7 @@
 	 *        到这进程的目录表就可以管理内核空间和用户空间了，进程在用户态和内核态切换是不需要切换cr3寄存器的。
  *
  */
-
+EMULATOR_TYPE      = 0x01       /* 模拟器类型：0:bochs, 1:qemu */
 HD_INTERRUPT_READ  = 0x20
 OS_BASE_ADDR       = 0x500000
 PG_DIR_BASE_ADDR   = 0x000000   /* 内核目录表基地址 */
@@ -93,7 +93,7 @@ AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个�
 
 .text
 .globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
-.globl startup_32,sync_semaphore,idle_loop,ap_default_loop,task_exit_clear
+.globl startup_32,sync_semaphore,idle_loop,ap_default_loop,task_exit_clear,globle_var_test_start,globle_var_test_end
 startup_32:
 	movl $0x10,%eax
 	mov %ax,%ds
@@ -125,6 +125,12 @@ startup_32:
 real_entry:
     xor %edx,%edx
 	movw %ds:0x90002,%dx          /* 这里得到的是granularity为64K的extend2的大小，所以要乘以16，前面的16M/4K=4K, 这里也是个小坑，mem长度是2字节，之前用movl是4字节有问题啊 */
+	xorl %eax,%eax
+	movl $EMULATOR_TYPE,%eax
+	cmpl $0x00,%eax
+	je bochs_emulator
+	addl $0x03,%dx    /* Qemu模拟器，在取扩展内存extend2的时候，会默认少3*64K,原因还不清楚(也是个巨坑，排查好长时间)，这里默认加上+3；用bochs的话，一定要去掉这里。 */
+bochs_emulator:
 	shl  $0x04,%edx               /* 左移4位乘以16*/
 	addl $0x1000,%edx             /* +16M得到总的内存大小，以4K为单位。 */
 	movl %edx,total_memory_size   /* 将内存总大小(4K granularity)存储到全局变量total_memory_size */
@@ -175,12 +181,14 @@ init_temp_stack:
     call move_params_to_memend
     /* Mask all other inerrupts except hd interrupt, and register a hd handler to IDT table for handling HD int */
 	call set_hd_intr_gate
+globle_var_test_start:
     /* Open Interrupt here, just for HD intr. */
 	sti
 	/* Capture HD intr and handle it , mainly work is get data from HD controller (HD_DATA port), sector by sector. intr trigger per sector. */
 	call do_hd_read_request
 	/* Pay much more Attenttion here, you must make sure all sectors has been loaded from HD before executing below command. */
 	cli
+globle_var_test_end:
 
 	/* 设置BSP的apic_id */
 	movl $0x01,%eax
