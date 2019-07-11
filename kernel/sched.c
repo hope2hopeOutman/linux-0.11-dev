@@ -71,8 +71,12 @@ union task_union ap_default_task = {INIT_TASK,};
  * 如果设置为4的话就导致data_segment_align不能4K对齐了，导致运行有问题，
  * 至于具体的原因，没有深入研究GCC这块是怎么编译的，后面会详细研究一下。
  */
-struct apic_info apic_ids[LOGICAL_PROCESSOR_MAXIMUM] = {{0,0,0,0,0,&(init_task.task)},{0,0,0,0,0,&(ap_default_task.task)},
-		      {0,0,0,0,0,&(ap_default_task.task)},{0,0,0,0,0,&(ap_default_task.task)},};/* 所有processor的apicId存储在这里 */
+
+/* 所有processor的apicId存储在这里 */
+struct apic_info apic_ids[LOGICAL_PROCESSOR_MAXIMUM] = {{0,0,BSP_APIC_REGS_DEFAULT_LOCATION,0,0,&(init_task.task)},
+		                                                {0,0,BSP_APIC_REGS_DEFAULT_LOCATION,0,0,&(ap_default_task.task)},
+		                                                {0,0,BSP_APIC_REGS_DEFAULT_LOCATION,0,0,&(ap_default_task.task)},
+														{0,0,BSP_APIC_REGS_DEFAULT_LOCATION,0,0,&(ap_default_task.task)},};
 long volatile jiffies=0;
 long startup_time=0;
 //struct task_struct *current = &(init_task.task);
@@ -160,6 +164,46 @@ int check_default_task_running_on_ap() {
  * 向指定的AP发送IPI中断消息,要先写ICR的高32位，因为写低32位就会触发IPI了，
  * 所以要现将apic_id写到destination field,然后再触发IPI。
  */
+#if EMULATOR_TYPE
+void send_IPI(int apic_id, int v_num) {
+__asm__ ("movl bsp_apic_default_location,%%edx\n\t" \
+		 "pushl %%edx\n\t" \
+		 "call remap_msr_linear_addr\n\t" \
+		 "popl %%edx\n\t" \
+		 "movl %%eax,%%edx\n\t"          /* eax中存储映射后的linear addr */ \
+		 "addl $0x10,%%edx\n\t"          /* 获得ICR的高32位地址 */ \
+		 "shll $24,%%ecx\n\t" \
+		 "movl %%ecx,0(%%edx)\n\t"       /* 设置ICR高32位中的destination field */  \
+		 "movl %%eax,%%edx\n\t" \
+		 "addl $0x00004000,%%ebx\n\t" \
+		 "movl %%ebx,0(%%edx)\n\t"       /* 设置ICR低32位的vector field */   \
+		 "pushl %%eax\n\t" \
+		 "call recov_msr_swap_linear\n\t" \
+		 "popl %%eax\n\t" \
+		 "wait_loop_ipi:\n\t" \
+		 "xorl %%eax,%%eax\n\t" \
+		 "movl 0(%%edx),%%eax\n\t" \
+		 "andl $0x00001000,%%eax\n\t"    /* 判断ICR低32位的delivery status field, 0: idle, 1: send pending */  \
+		 "cmpl $0x00,%%eax\n\t"   \
+		 "jne wait_loop_ipi\n\t"  \
+		 ::"c" (apic_id),"b" (v_num));
+}
+
+/* 发送中断处理结束信号： end of interrupt */
+void send_EOI() {
+	unsigned long apic_id = get_current_apic_id();
+	struct apic_info* apic = get_apic_info(apic_id);
+	if (apic) {
+		unsigned long addr = apic->apic_regs_addr;
+		addr = remap_msr_linear_addr(addr);
+		__asm__("addl $0xB0,%%eax\n\t" /* EOI register offset relative with APIC_REGS_BASE is 0xB0 */ \
+				"movl $0x00,0(%%eax)"  /* Write EOI register */ \
+				::"a" (addr)
+				);
+		recov_msr_swap_linear(addr);
+	}
+}
+#else
 void send_IPI(int apic_id, int v_num) {
 __asm__ ("movl bsp_apic_icr_relocation,%%edx\n\t" \
 		 "addl $0x10,%%edx\n\t" \
@@ -189,6 +233,8 @@ void send_EOI() {
 				);
 	}
 }
+#endif
+
 
 unsigned long get_current_apic_index() {
 	unsigned long apic_id = get_current_apic_id();

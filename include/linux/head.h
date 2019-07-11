@@ -1,6 +1,8 @@
 #ifndef _HEAD_H
 #define _HEAD_H
 
+#define EMULATOR_TYPE 0x01   /* 0x00: bochs, 0x01: qemu */
+
 typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
@@ -76,6 +78,15 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 /**************************************************************************************************************************/
 #endif
 
+/*
+ * 因为QEMU的APIC base addresss是不能通过wrmsr进行relocate，所以在paging模式下，要想访问APIC的registers必须要remap
+ * 1M的低地址范围内，4K~640K没有被使用，所以可以用来remap >3G物理地址空间的APIC base address.
+ * */
+#if EMULATOR_TYPE
+#define KERNEL_MSR_REMAP_ADDR_START 0x0001   /* granularity 4K,起始地址空间是4K. */
+#define KERNEL_MSR_REMAP_ADDR_SPACE 0x009F   /* granularity 4K,可用于remap APIC base address的地址空间大小，636K=159*4K=0x9F*4K */
+#endif
+
 #define PAGE_IN_REAL_MEM_MAP 1               /* 表示分配的物理地址来自于内核实地址映射的空间，mem_map开始的一部分是内核实地址映射的 */
 #define PAGE_IN_MEM_MAP 0                    /* 表示分配的物理地址来自于整个mem_map管理的内存 */
 
@@ -90,6 +101,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 
 #define LOGICAL_PROCESSOR_NUM       0x04    /* 这里设置有4个processor */
 #define LOGICAL_PROCESSOR_MAXIMUM   0x64    /* 这里设置processor个数的上限 */
+#define BSP_APIC_REGS_DEFAULT_LOCATION  0xFEE00000    /* Default addr for APIC base address  */
 #define BSP_APIC_REGS_RELOCATION  0x20000   /* BSP Local APIC Registers在内存中的remap */
 #define BSP_APIC_ICR_RELOCATION   0x20300   /* BSP ICR(Interrupt command register) 在内存中的位置 */
 

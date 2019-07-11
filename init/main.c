@@ -64,9 +64,11 @@ long main_memory_start = 0;  /* Granularity is 4K */
 long PAGING_PAGES = 0;
 long LOW_MEM      = 0;       /* Granularity is byte */
 long HIGH_MEMORY  = 0;       /* Granularity is byte */
+unsigned long bsp_apic_default_location = BSP_APIC_REGS_DEFAULT_LOCATION;
+unsigned long bsp_apic_regs_relocation  = BSP_APIC_REGS_RELOCATION;
+unsigned long bsp_apic_icr_relocation   = BSP_APIC_ICR_RELOCATION;
 
-unsigned long bsp_apic_regs_relocation = BSP_APIC_REGS_RELOCATION;
-unsigned long bsp_apic_icr_relocation = BSP_APIC_ICR_RELOCATION;
+
 
 struct drive_info { char dummy[32]; } drive_info;
 
@@ -130,7 +132,56 @@ void init_ap() {
 	}
 	apic_ids[0].bsp_flag = 1;  /* 这里的代码只有BSP能执行到，所以这里把apic_ids[0]设置为BSP。 */
 
+#if EMULATOR_TYPE
+	__asm__(
+	/* ============================= Set Apic ID for BSP ============================= */
+        "movl $0x01,%%eax\n\t" \
+		"cpuid\n\t"            \
+		"shr $24,%%ebx\n\t"    \
+		"push %%ebx\n\t"       \
+		"push $0x00\n\t"       \
+		"call set_apic_id\n\t" \
+		"pop %%ebx\n\t"        \
+		"pop %%ebx\n\t"        \
+	/* ============================= End Set Apic ID for BSP ============================= */
 
+	/* ============================= Init APIC timer for BSP ============================= */
+		"pushl $0x00\n\t"            \
+		"call init_apic_timer\n\t"   \
+		"popl %%eax\n\t"             \
+    /* ============================= End init APIC timer for BSP ========================= */
+
+	/* ============================= Sending INIT中断消息给APs  ============================= */
+	    "movl bsp_apic_default_location,%%edx\n\t" \
+		"pushl %%edx\n\t"  \
+		"call remap_msr_linear_addr\n\t" /* 返回的linear addr存储在eax中 */ \
+		"popl %%edx\n\t" \
+		"addl $0x300,%%edx\n\t"          /* The offset of ICR register is 0x300 */  \
+		/* 发送 INIT message */
+	    "movl $0x000C4500,0(%%eax)\n\t" \
+	    "mov $0x05,%%ecx\n\t" \
+	    "wait_loop_init:\n\t" \
+	    "dec %%ecx\n\t" \
+	    "nop\n\t" \
+	    "cmp $0x0,%%ecx\n\t" \
+	    "jne wait_loop_init\n\t" \
+	/* ============================= End sending INIT中断消息给APs ========================== */
+
+	/* ============================= Sending SIPI中断消息给APs ============================= */
+		/* 发送 SIPI message */
+		"movl $0x000C4691,0(%%eax)\n\t" /* SIPI中断的入口地址是0x91000 */  \
+		"pushl %%eax\n\t"                 \
+		"call recov_msr_swap_linear\n\t"  \
+		"popl %%eax\n\t"                  \
+		"mov $0x1000,%%ecx\n\t"           \
+	    "wait_loop_sipi:\n\t"             \
+	    "dec %%ecx\n\t"                   \
+	    "nop\n\t"                         \
+	    "cmp $0x0,%%ecx\n\t"              \
+	    "jne wait_loop_sipi\n\t"          \
+		::);
+	/* ============================= End Sending SIPI中断消息给APs ========================== */
+#else
 	__asm__(
 	/* ============================= Set Apic ID for BSP ============================= */
         "movl $0x01,%%eax\n\t" \
@@ -186,6 +237,7 @@ void init_ap() {
 	    "jne wait_loop_sipi\n\t" \
 		::);
 	/* ============================= End Sending SIPI中断消息给APs ========================== */
+#endif
 }
 
 void print_eax(int eax){
@@ -266,6 +318,7 @@ void init_apic_addr(int apic_index) {
 	apic_ids[apic_index].apic_regs_addr = addr;
 }
 
+
 /*
  * 这里终于搞清楚AP上的timer为什么不工作了
  * 因为CPU reset后，会将APIC的spurious vector register设置为0x00FF,这样就会自动软件禁用APIC，
@@ -316,8 +369,54 @@ its arbitration ID synchronized with the rest of the system.
  *
  *  */
 void init_apic_timer(int apic_index) {
-	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
 	unsigned long init_count = 1193180/HZ;
+#if EMULATOR_TYPE
+	unsigned long addr = BSP_APIC_REGS_DEFAULT_LOCATION; /* apic.regs base addr for QEMU, default addr: 0xFEE0 0000 */
+
+	__asm__("pushl %%eax\n\t"          \
+			"call remap_msr_linear_addr\n\t" /* 因为内核地址空间<=1G,因此访问>1G的物理地址要进行remap */ \
+			"movl %%eax,%%edx\n\t"     /* 将映射到物理地址0xFEE00000的线性地址(返回值存在eax中)，保存到edx中 */ \
+			"popl %%eax\n\t"           /* 弹出APIC default address 0xFEE00000到eax */ \
+			"pushl %%edx\n\t"          /* 备份映射后的线性地址 */ \
+			"addl $0xF0,%%edx\n\t"     /* +0xF0得到spurious vector register的addr,这是线性地址了，在4K~640K范围内 */ \
+			"movl 0(%%edx),%%eax\n\t"  /* 将SVR的old value复制到eax */ \
+			"btsl $0x08,%%eax\n\t"     /* enable SVR的APIC功能,要先开启APIC功能,后面对APIC相关寄存器的操作才能生效啊. */ \
+			"movl %%eax,0(%%edx)\n\t"  /* 将新值写入SVR,开启APIC功能,这样下面设置APIC timer相关寄存器才能生效,尤其是timer寄存器的mask位重置才能生效. */ \
+			"popl %%eax\n\t"           /* 恢复APIC的base addr到eax,后面初始化APIC timer相关寄存器会用到，这是映射后4K~640K的linear addr */ \
+
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x3E0,%%edx\n\t"     \
+			"movl $0x00,0(%%edx)\n\t"  /* Timer clock equals with bus clock divided by divide configuration register */ \
+
+			"cmpl $0x00,%%ebx\n\t"      \
+			"jne 1f\n\t"                \
+			"movl $0x20083,%%ebx\n\t"  /* BSP立即开启timer中断,不屏蔽. */  \
+			"jmp 2f\n\t"                \
+			"1:\n\t"                    \
+			"movl $0x30083,%%ebx\n\t"  /* AP先屏蔽timer中断,后面会开启. */ \
+			"2:\n\t"                    \
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x320,%%edx\n\t"     \
+            "movl %%ebx,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 1 (mask timer intr), vector number: 0x83=APIC_TIMER_INTR_NO  */ \
+
+
+			"movl %%eax,%%edx\n\t"      \
+			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
+			"movl %%ecx,0(%%edx)\n\t"   \
+
+			"call recov_msr_swap_linear\n\t" /* reset被占用的线性地址，这样这个4K align的线性地址就可以映射到其他物理地址了 */ \
+
+			/*"movl %%eax,%%edx\n\t"      \
+			"addl $0x380,%%edx\n\t"     \
+			"movl 0(%%edx),%%eax\n\t"   \
+			"pushl %%eax\n\t"           \
+			"call print_eax\n\t"        \
+			"popl %%eax\n\t"            \*/
+
+			::"a" (addr),"b" (apic_index), "c" (init_count));
+#else
+	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr for bochs */
+
 	__asm__("pushl %%eax\n\t"          \
 			"movl %%eax,%%edx\n\t"     \
 			"addl $0xF0,%%edx\n\t"     /* +0xF0得到spurious vector register的addr */ \
@@ -354,16 +453,27 @@ void init_apic_timer(int apic_index) {
 			"popl %%eax\n\t"            \*/
 
 			::"a" (addr),"b" (apic_index), "c" (init_count));
+#endif
+
 }
 
 void start_apic_timer(int apic_index) {
+#if EMULATOR_TYPE
+	unsigned long addr = remap_msr_linear_addr(BSP_APIC_REGS_DEFAULT_LOCATION);
+#else
 	unsigned long addr = bsp_apic_regs_relocation + (apic_index*0x1000); /* apic.regs base addr */
+#endif
+
 	unsigned long init_count = 1193180/HZ;
 	__asm__("movl %%eax,%%edx\n\t"      \
 			"addl $0x320,%%edx\n\t"     \
             "movl $0x20083,0(%%edx)\n\t" /* LVT timer register, mode: 1(periodic,bit 17), mask: 0, vector number: 0x83=APIC_TIMER_INTR_NO  */ \
 
 			::"a" (addr),"c" (init_count));
+
+#if EMULATOR_TYPE
+	recov_msr_swap_linear(addr);
+#endif
 }
 
 /*

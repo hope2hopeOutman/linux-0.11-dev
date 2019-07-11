@@ -54,12 +54,88 @@ extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY, memory_end, total_memory_size;
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
+#if EMULATOR_TYPE
+unsigned char linear_msr_addr_swap_map[KERNEL_MSR_REMAP_ADDR_SPACE] = {0,};
+#endif
 unsigned char linear_addr_swap_map[KERNEL_REMAP_ADDR_SPACE] = {0,};
 unsigned long page_lock_semaphore = 0;  /* 用于同步get_free_page方法 */
+unsigned long remap_linear_addr_semaphore = 0;
+
+/* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
+void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
+{
+	struct task_struct* current = get_current_task();
+	unsigned long* dir_item         = (unsigned long*)(current->tss.cr3 + (linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
+	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
+	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
+	unsigned long* table_entry      = (unsigned long*)(table_base + table_item_offset);  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
+	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
+}
+
 /*
  * 当完成对>1G的一页物理地址的重映射并对这一页物理内存初始化后，就会将该物理地址设置到进程用户空间对应的页表项中，这样进程在用户太就可以读写该>1G的一页物理内存了
  * 这个时候，我们要将linear_addr_swap_map数组中对应的线性地址的占用标志位设置为0，表明该线性地址可以被映射到其他>(1G-128M)的物理地址。
  */
+#if EMULATOR_TYPE
+void recov_msr_swap_linear(unsigned long linear_addr)
+{
+	if (linear_addr) {
+		linear_msr_addr_swap_map[(linear_addr>>12)-KERNEL_MSR_REMAP_ADDR_START] = 0;
+	}
+}
+
+void recov_msr_swap_linear_addrs(unsigned long* linear_addrs, int length) {
+	unsigned long linear_addr = 0;
+	for (int i=0;i<length;i++){
+		linear_addr = *(linear_addrs+i);
+		if (linear_addr) {
+			recov_msr_swap_linear(linear_addr);
+		}
+	}
+}
+
+/* 对>3G的MSR物理地址进行重映射。返回的是被重映射的内核线性地址 */
+unsigned long remap_msr_linear_addr(unsigned long phy_addr)
+{
+	/*
+	 * 当内存>3G时,内核用于映射>3G内存的保留线性地址空间也是多进程共享资源,所以一定要加锁同步,
+	 * 否则会导致多个>3G的内存页被映射到了相同的线性地址空间,导致系统崩溃,大坑一口哈哈.
+	 * */
+    lock_op(&remap_linear_addr_semaphore);
+	struct task_struct* current = get_current_task();
+	unsigned long linear_addr = 0;
+	for (int i=0; i< KERNEL_MSR_REMAP_ADDR_SPACE; i++)
+	{
+		if (linear_msr_addr_swap_map[i] == 0)
+		{
+			linear_msr_addr_swap_map[i] = 1;
+			linear_addr = (KERNEL_MSR_REMAP_ADDR_START + i) << 12; /* 计算需要被重映射的内核空间线性地址 */
+			reset_swap_table_entry(linear_addr, phy_addr & 0xFFFFF000);
+			break;
+		}
+	}
+	unlock_op(&remap_linear_addr_semaphore);
+	if (!linear_addr) {
+		panic("Linear address has been full \n\r");
+	}
+	invalidate(current->tss.cr3);
+	return linear_addr;
+}
+
+/* 对>3G的MSR base addr物理地址进行重映射。返回的是被重映射的内核线性地址(4K~640K) */
+unsigned long check_msr_remap_linear_addr(unsigned long** phy_addr) {
+	unsigned long linear_addr = 0;
+
+	linear_addr = remap_msr_linear_addr((unsigned long)(*phy_addr));    /* 映射的一定是4K对齐的物理页 */
+	*phy_addr = (unsigned long*)linear_addr;
+	if (!linear_addr) {
+		panic("check_remap_linear_addr is error. \n\r");
+	}
+
+	return linear_addr;
+}
+#endif
+
 void recov_swap_linear(unsigned long linear_addr)
 {
 	if (linear_addr) {
@@ -77,18 +153,6 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 	}
 }
 
-/* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
-void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
-{
-	struct task_struct* current = get_current_task();
-	unsigned long* dir_item         = (unsigned long*)(current->tss.cr3 + (linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
-	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
-	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
-	unsigned long* table_entry      = (unsigned long*)(table_base + table_item_offset);  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
-	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
-}
-
-unsigned long remap_linear_addr_semaphore = 0;
 /* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long remap_linear_addr(unsigned long phy_addr)
 {
@@ -130,6 +194,7 @@ unsigned long check_remap_linear_addr(unsigned long** phy_addr) {
 	}
 	return linear_addr;
 }
+
 /* 将被重映射的线性地址缓存起来，等到某个时机，统一释放。 */
 unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigned long linear_addr) {
 	if (linear_addr) {

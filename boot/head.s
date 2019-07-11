@@ -597,7 +597,10 @@ return_addr:
      * */
     //pop %eax
     //pop %eax
-    /* 初始化AP apic regs addr */
+    /* 初始化AP apic regs addr, just for bochs, qemu can't support this feature. */
+    movl $EMULATOR_TYPE,%eax
+    cmpl $0x00,%eax
+    jne enable_paging
     push %ds:apic_index
     call init_apic_addr
     pop %ebx
@@ -606,6 +609,7 @@ return_addr:
     * 自己挖的巨坑啊，后面老是报readlimit，把current.cr3打印出来映射的都是对的，就是不起作用，
     * 后来发现log里cpu1的cr3总是等于0，恍然大悟啊，分页没开启,ljmp对cr3不起作用的.
     */
+enable_paging:
     xorl %eax,%eax		 /* pg_dir is at 0x0000 */
 	movl %eax,%cr3		 /* cr3 - page directory start */
 	movl %cr0,%eax
