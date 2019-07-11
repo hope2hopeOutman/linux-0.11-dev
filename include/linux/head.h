@@ -101,9 +101,11 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 
 #define LOGICAL_PROCESSOR_NUM       0x04    /* 这里设置有4个processor */
 #define LOGICAL_PROCESSOR_MAXIMUM   0x64    /* 这里设置processor个数的上限 */
+
 #define BSP_APIC_REGS_DEFAULT_LOCATION  0xFEE00000    /* Default addr for APIC base address  */
 #define BSP_APIC_REGS_RELOCATION  0x20000   /* BSP Local APIC Registers在内存中的remap */
 #define BSP_APIC_ICR_RELOCATION   0x20300   /* BSP ICR(Interrupt command register) 在内存中的位置 */
+
 
 #define SCHED_INTR_NO         0x82      /* AP响应BSP发来的进程调度IPI中断号 */
 

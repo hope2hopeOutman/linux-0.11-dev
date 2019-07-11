@@ -203,9 +203,9 @@ void init_ap() {
 	 * 到这里终于明白为什么现代OS要把内核的线性地址空间放在4G线性地址空间的高1G地址空间了，因为大量的MSRs寄存器都是映射到高地址空间的，这样就不用重映射了,
 	 * 当然对于多核CPU来说，还是要relocate的。
 	 */
-		"pushl $0x00\n\t"           \
+		/*"pushl $0x00\n\t"           \
 		"call init_apic_addr\n\t"   \
-		"popl %%eax\n\t"            \
+		"popl %%eax\n\t"            \*/
     /* ============================= End Relocating the Local APIC Registers of BSP ========================= */
 
 	/* ============================= Init APIC timer for BSP ============================= */
