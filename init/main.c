@@ -156,7 +156,7 @@ void init_ap() {
 		"pushl %%edx\n\t"  \
 		"call remap_msr_linear_addr\n\t" /* 返回的linear addr存储在eax中 */ \
 		"popl %%edx\n\t" \
-		"addl $0x300,%%edx\n\t"          /* The offset of ICR register is 0x300 */  \
+		"addl $0x300,%%eax\n\t"          /* The offset of ICR register is 0x300 */  \
 		/* 发送 INIT message */
 	    "movl $0x000C4500,0(%%eax)\n\t" \
 	    "mov $0x05,%%ecx\n\t" \
@@ -373,7 +373,8 @@ void init_apic_timer(int apic_index) {
 #if EMULATOR_TYPE
 	unsigned long addr = BSP_APIC_REGS_DEFAULT_LOCATION; /* apic.regs base addr for QEMU, default addr: 0xFEE0 0000 */
 
-	__asm__("pushl %%eax\n\t"          \
+	__asm__("pushl %%ecx\n\t"    /* 备份init_count的值，后面的call函数调用会覆盖ecx的值。 */      \
+			"pushl %%eax\n\t"          \
 			"call remap_msr_linear_addr\n\t" /* 因为内核地址空间<=1G,因此访问>1G的物理地址要进行remap */ \
 			"movl %%eax,%%edx\n\t"     /* 将映射到物理地址0xFEE00000的线性地址(返回值存在eax中)，保存到edx中 */ \
 			"popl %%eax\n\t"           /* 弹出APIC default address 0xFEE00000到eax */ \
@@ -402,9 +403,12 @@ void init_apic_timer(int apic_index) {
 
 			"movl %%eax,%%edx\n\t"      \
 			"addl $0x380,%%edx\n\t"    /* Initial count register for timer */ \
+			"popl %%ecx\n\t"           /* 弹出一开始备份的init_count值 */        \
 			"movl %%ecx,0(%%edx)\n\t"   \
 
-			"call recov_msr_swap_linear\n\t" /* reset被占用的线性地址，这样这个4K align的线性地址就可以映射到其他物理地址了 */ \
+            "pushl %%eax\n\t"                /* 注意：此时eax中存储的还是APIC base address(0xFEE00000)对应的linear address */        \
+			"call recov_msr_swap_linear\n\t" /* reset被占用的线性地址，这样这个4K align的线性地址就可以映射到其他物理地址了 */            \
+			"popl %%eax\n\t"            \
 
 			/*"movl %%eax,%%edx\n\t"      \
 			"addl $0x380,%%edx\n\t"     \

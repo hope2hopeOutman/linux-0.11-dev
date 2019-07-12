@@ -81,6 +81,15 @@ void recov_msr_swap_linear(unsigned long linear_addr)
 {
 	if (linear_addr) {
 		linear_msr_addr_swap_map[(linear_addr>>12)-KERNEL_MSR_REMAP_ADDR_START] = 0;
+		/* 注意：这里是个大坑，要详细解释一下，后悔自己当初为什么不把内核地址空间分配在高地址空间>=3G
+		 * 因为QEMU不支持relocate APIC base address,所以只能使用其默认值，但是其默认物理地址是>1G(0xFEE00000)的，
+		 * 由于内核的地址空间是分配在低1G的地址空间，所以要访问>1G的地址空间就必须要重映射，这里用4K~640K(内核不用的低地址空间)地址范围remap >1G的物理地址，
+		 * 又因为task1要在用户态能执行内核代码，在task1的>1G的地址空间copy了LOW_MEM/4M个内核页表，这样就可以在用户太访问内核代码了，
+		 * 又因为(haha原谅我词穷了)所有的NR>1 task都是由task1创建的，都会默认copy task1的目录表，而此时>1G的目录表对应的页表中会存储APIC base address(0xFEE00000),
+		 * 因此，当新进程(NR>1)在执行do_execve().free_page_tables().free_page()的时候，会报“trying to free nonexistent page”。
+		 * 如果内存是4G的话，这段内存就只能定义为preseverd mem,而不能放到mem_map中被进程所使用。
+		 * 后面会完善这块？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？ */
+		reset_swap_table_entry(linear_addr, 0);
 	}
 }
 
@@ -372,7 +381,13 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, check_remap_linear_addr(&pg_table));
 
 		for (nr=0 ; nr<pti_size ; nr++) {
-			if (*pg_table >= LOW_MEM) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
+			/* 这里再详细解释下吧，为什么要加这个判断条件，
+			 * 当task0创建task1的时候，因为task1在用户模式执行的还是内核代码，所以在>=1G的地址空间，映射的是<LOW_MEN的内核代码空间，
+			 * 所以会分配LOW_MEM/4M个页表用于映射内核代码空间，这些页表存储的页地址肯定都是<LOW_MEM的，所以是不能释放的，其实在free_page里也有判断。
+			 * 当task1创建新的进程时，会copy自己的目录表，因此NR>1的进程也是有机会在用户空间运行内核代码的，不过内核是不会给它这个机会的，
+			 * 因为会紧接着执行do_execve并调用该方法释放>=1G地址空间的页表映射的。
+			 */
+			if (*pg_table >= LOW_MEM) {
 				if (!free_page(0xfffff000 & *pg_table)) {
 					//printk("error linear addr: %p \n\r", pg_table);
 					panic("free_page_tables1: trying to free free page");

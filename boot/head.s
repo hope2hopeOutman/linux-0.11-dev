@@ -66,7 +66,7 @@
 	 *        到这进程的目录表就可以管理内核空间和用户空间了，进程在用户态和内核态切换是不需要切换cr3寄存器的。
  *
  */
-EMULATOR_TYPE      = 0x00       /* 模拟器类型：0:bochs, 1:qemu */
+EMULATOR_TYPE      = 0x01       /* 模拟器类型：0:bochs, 1:qemu */
 HD_INTERRUPT_READ  = 0x20
 OS_BASE_ADDR       = 0x500000
 PG_DIR_BASE_ADDR   = 0x000000   /* 内核目录表基地址 */
