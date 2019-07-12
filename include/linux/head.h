@@ -1,7 +1,7 @@
 #ifndef _HEAD_H
 #define _HEAD_H
 
-#define EMULATOR_TYPE 0x01   /* 0x00: bochs, 0x01: qemu */
+#define EMULATOR_TYPE 0x00   /* 0x00: bochs, 0x01: qemu */
 
 typedef struct desc_struct {
 	unsigned long a,b;

@@ -66,7 +66,7 @@
 	 *        到这进程的目录表就可以管理内核空间和用户空间了，进程在用户态和内核态切换是不需要切换cr3寄存器的。
  *
  */
-EMULATOR_TYPE      = 0x01       /* 模拟器类型：0:bochs, 1:qemu */
+EMULATOR_TYPE      = 0x00       /* 模拟器类型：0:bochs, 1:qemu */
 HD_INTERRUPT_READ  = 0x20
 OS_BASE_ADDR       = 0x500000
 PG_DIR_BASE_ADDR   = 0x000000   /* 内核目录表基地址 */
@@ -87,8 +87,7 @@ OS_PRELOAD_SIZE    = 0x8000
  * 当然head.h中的6个有关内核线性地址空间的参数也要作相应的调整，将 (#if 0) 改为 (#if 1) 即可。
  */
 //KERNEL_LINEAR_ADDR_SPACE = 0x20000  /* granularity 4K (512M) */
-//KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
-KERNEL_LINEAR_ADDR_SPACE = 0x100000    /* granularity 4K (4G) just for test, to init APIC registers at default addr (0xFEE0 0000)  */
+KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 
 AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 
@@ -138,8 +137,8 @@ bochs_emulator:
     lss tmp_floppy_area,%esp      /* 设置GDT表中内核代码段和代码段的limit为实际物理内存大小,这里使用废弃的floppy数据区作为临时栈。 */
 
     /* 设置内核代码段的limit,因为要支持每个进程都有4G的地址空间，所以内核的地址空间是512M,当内存>512M的时候，也只能设置为512M=0x20000(4K) */
-    //cmp $KERNEL_LINEAR_ADDR_SPACE,%edx   Here comment for test, later will resume.
-    //jle 1f
+    cmp $KERNEL_LINEAR_ADDR_SPACE,%edx
+    jle 1f
     movl $KERNEL_LINEAR_ADDR_SPACE,%edx  /* 如果内存>512M，那么设置内核的limit为512M */
 1:  lea gdt,%ebx
     add $0x08,%ebx
@@ -446,8 +445,8 @@ setup_paging:
      * 注意:此时的内核空间512M是可以完全实地址映射的，因为在内核初始化阶段是不会调用get_free_page，所以也不会remap保留地址空间，
      * 因此保留地址空间的实地址映射还是有效的，可以直接访问。
      */
-    //cmp $KERNEL_LINEAR_ADDR_SPACE,%eax    Here comment for test, later will resume.
-    //jle 1f
+    cmp $KERNEL_LINEAR_ADDR_SPACE,%eax
+    jle 1f
     /*
      * 设置内核实地址映射的地址空间为512M，这里可能有人会问，不是说好了(KERNEL_LINEAR_ADDR_SPACE-64M)的吗，怎么又是了512M了，其实这里512M的地址空间都实地址映射是没问题的，
      * 因为，在调用get_free_page的时候会重置内核保留的64M地址空间对应的物理页的，所以在内核初始化的时候实地址映射内核这64M地址空间是没问题的
