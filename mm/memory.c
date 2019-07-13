@@ -58,8 +58,9 @@ unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 unsigned char linear_msr_addr_swap_map[KERNEL_MSR_REMAP_ADDR_SPACE] = {0,};
 #endif
 unsigned char linear_addr_swap_map[KERNEL_REMAP_ADDR_SPACE] = {0,};
-unsigned long page_lock_semaphore = 0;  /* 用于同步get_free_page方法 */
-unsigned long remap_linear_addr_semaphore = 0;
+unsigned long page_lock_semaphore = 0;              /* 用于同步get_free_page方法 */
+unsigned long remap_linear_addr_semaphore = 0;      /* 896M~1024M */
+unsigned long remap_msr_linear_addr_semaphore = 0;  /* 4k~640K    */
 
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
@@ -110,7 +111,7 @@ unsigned long remap_msr_linear_addr(unsigned long phy_addr)
 	 * 当内存>3G时,内核用于映射>3G内存的保留线性地址空间也是多进程共享资源,所以一定要加锁同步,
 	 * 否则会导致多个>3G的内存页被映射到了相同的线性地址空间,导致系统崩溃,大坑一口哈哈.
 	 * */
-    lock_op(&remap_linear_addr_semaphore);
+    lock_op(&remap_msr_linear_addr_semaphore);
 	struct task_struct* current = get_current_task();
 	unsigned long linear_addr = 0;
 	for (int i=0; i< KERNEL_MSR_REMAP_ADDR_SPACE; i++)
@@ -123,7 +124,7 @@ unsigned long remap_msr_linear_addr(unsigned long phy_addr)
 			break;
 		}
 	}
-	unlock_op(&remap_linear_addr_semaphore);
+	unlock_op(&remap_msr_linear_addr_semaphore);
 	if (!linear_addr) {
 		panic("Linear address has been full \n\r");
 	}

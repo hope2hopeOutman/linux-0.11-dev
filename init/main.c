@@ -536,7 +536,7 @@ void main(void)		/* This really IS void, no error here. */
 		memory_end = 64*1024*1024;
 	}*/
 
-	if (memory_end == 0x100000 || memory_end*0x1000 >= 16*1024*1024) {
+	if (memory_end == 0x100000 || (((memory_end-1)*0x1000)+0xFFF) >= 16*1024*1024) {
 		unsigned long code_szie = (code_end-OS_BASE_ADDR);
 		if (code_szie < 0x100000) {
 		    //buffer_memory_end = (OS_BASE_ADDR + 4*1024*1024) / 0x1000; //因为内核最终加载到以5M为基地址的内存处，所以这里要调整。
