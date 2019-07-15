@@ -54,12 +54,98 @@ extern long PAGING_PAGES, LOW_MEM, HIGH_MEMORY, memory_end, total_memory_size;
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
+#if EMULATOR_TYPE
+unsigned char linear_msr_addr_swap_map[KERNEL_MSR_REMAP_ADDR_SPACE] = {0,};
+#endif
 unsigned char linear_addr_swap_map[KERNEL_REMAP_ADDR_SPACE] = {0,};
-unsigned long page_lock_semaphore = 0;  /* 用于同步get_free_page方法 */
+unsigned long page_lock_semaphore = 0;              /* 用于同步get_free_page方法 */
+unsigned long remap_linear_addr_semaphore = 0;      /* 896M~1024M */
+unsigned long remap_msr_linear_addr_semaphore = 0;  /* 4k~640K    */
+
+/* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
+void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
+{
+	struct task_struct* current = get_current_task();
+	unsigned long* dir_item         = (unsigned long*)(current->tss.cr3 + (linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
+	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
+	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
+	unsigned long* table_entry      = (unsigned long*)(table_base + table_item_offset);  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
+	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
+}
+
 /*
  * 当完成对>1G的一页物理地址的重映射并对这一页物理内存初始化后，就会将该物理地址设置到进程用户空间对应的页表项中，这样进程在用户太就可以读写该>1G的一页物理内存了
  * 这个时候，我们要将linear_addr_swap_map数组中对应的线性地址的占用标志位设置为0，表明该线性地址可以被映射到其他>(1G-128M)的物理地址。
  */
+#if EMULATOR_TYPE
+void recov_msr_swap_linear(unsigned long linear_addr)
+{
+	if (linear_addr) {
+		linear_msr_addr_swap_map[(linear_addr>>12)-KERNEL_MSR_REMAP_ADDR_START] = 0;
+		/* 注意：这里是个大坑，要详细解释一下，后悔自己当初为什么不把内核地址空间分配在高地址空间>=3G
+		 * 因为QEMU不支持relocate APIC base address,所以只能使用其默认值，但是其默认物理地址是>1G(0xFEE00000)的，
+		 * 由于内核的地址空间是分配在低1G的地址空间，所以要访问>1G的地址空间就必须要重映射，这里用4K~640K(内核不用的低地址空间)地址范围remap >1G的物理地址，
+		 * 又因为task1要在用户态能执行内核代码，在task1的>1G的地址空间copy了LOW_MEM/4M个内核页表，这样就可以在用户太访问内核代码了，
+		 * 又因为(haha原谅我词穷了)所有的NR>1 task都是由task1创建的，都会默认copy task1的目录表，而此时>1G的目录表对应的页表中会存储APIC base address(0xFEE00000),
+		 * 因此，当新进程(NR>1)在执行do_execve().free_page_tables().free_page()的时候，会报“trying to free nonexistent page”。
+		 * 如果内存是4G的话，这段内存就只能定义为preseverd mem,而不能放到mem_map中被进程所使用。
+		 * 后面会完善这块？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？ */
+		reset_swap_table_entry(linear_addr, 0);
+	}
+}
+
+void recov_msr_swap_linear_addrs(unsigned long* linear_addrs, int length) {
+	unsigned long linear_addr = 0;
+	for (int i=0;i<length;i++){
+		linear_addr = *(linear_addrs+i);
+		if (linear_addr) {
+			recov_msr_swap_linear(linear_addr);
+		}
+	}
+}
+
+/* 对>3G的MSR物理地址进行重映射。返回的是被重映射的内核线性地址 */
+unsigned long remap_msr_linear_addr(unsigned long phy_addr)
+{
+	/*
+	 * 当内存>3G时,内核用于映射>3G内存的保留线性地址空间也是多进程共享资源,所以一定要加锁同步,
+	 * 否则会导致多个>3G的内存页被映射到了相同的线性地址空间,导致系统崩溃,大坑一口哈哈.
+	 * */
+    lock_op(&remap_msr_linear_addr_semaphore);
+	struct task_struct* current = get_current_task();
+	unsigned long linear_addr = 0;
+	for (int i=0; i< KERNEL_MSR_REMAP_ADDR_SPACE; i++)
+	{
+		if (linear_msr_addr_swap_map[i] == 0)
+		{
+			linear_msr_addr_swap_map[i] = 1;
+			linear_addr = (KERNEL_MSR_REMAP_ADDR_START + i) << 12; /* 计算需要被重映射的内核空间线性地址 */
+			reset_swap_table_entry(linear_addr, phy_addr & 0xFFFFF000);
+			break;
+		}
+	}
+	unlock_op(&remap_msr_linear_addr_semaphore);
+	if (!linear_addr) {
+		panic("Linear address has been full \n\r");
+	}
+	invalidate(current->tss.cr3);
+	return linear_addr;
+}
+
+/* 对>3G的MSR base addr物理地址进行重映射。返回的是被重映射的内核线性地址(4K~640K) */
+unsigned long check_msr_remap_linear_addr(unsigned long** phy_addr) {
+	unsigned long linear_addr = 0;
+
+	linear_addr = remap_msr_linear_addr((unsigned long)(*phy_addr));    /* 映射的一定是4K对齐的物理页 */
+	*phy_addr = (unsigned long*)linear_addr;
+	if (!linear_addr) {
+		panic("check_remap_linear_addr is error. \n\r");
+	}
+
+	return linear_addr;
+}
+#endif
+
 void recov_swap_linear(unsigned long linear_addr)
 {
 	if (linear_addr) {
@@ -77,18 +163,6 @@ void recov_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 	}
 }
 
-/* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
-void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
-{
-	struct task_struct* current = get_current_task();
-	unsigned long* dir_item         = (unsigned long*)(current->tss.cr3 + (linear_addr >> 20) & 0xFFC);     /* 计算该线性地址所在的目录项，既相对于目录表基地址的offset */
-	unsigned long table_base        = (unsigned long)(*dir_item & 0xFFFFF000);           /* 通过目录项获得对应页表的起始地址,因为内核的目录表基地址是0x00,所以可以这样直接访问 */
-	unsigned long table_item_offset = (linear_addr >> 10) & 0xFFC;                       /* 计算页表项在页表中的位置，即相对于页表基地址的offset */
-	unsigned long* table_entry      = (unsigned long*)(table_base + table_item_offset);  /* 页表基地址加上页表项的offset就得到对应页表项的实际物理地址了 */
-	*table_entry                    = phy_addr | 7; /* 将>(512-64)M的一页物理地址，设置在该页表项中，下次再对该线性地址进行读写操作就会映射到该>(512-64)M的物理地址了哈哈 */
-}
-
-unsigned long remap_linear_addr_semaphore = 0;
 /* 对>1G的物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long remap_linear_addr(unsigned long phy_addr)
 {
@@ -130,6 +204,7 @@ unsigned long check_remap_linear_addr(unsigned long** phy_addr) {
 	}
 	return linear_addr;
 }
+
 /* 将被重映射的线性地址缓存起来，等到某个时机，统一释放。 */
 unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigned long linear_addr) {
 	if (linear_addr) {
@@ -307,7 +382,13 @@ int free_page_tables(unsigned long from,unsigned long size, struct task_struct* 
 		caching_linear_addr(cached_pg_table_base, cached_pg_table_length, check_remap_linear_addr(&pg_table));
 
 		for (nr=0 ; nr<pti_size ; nr++) {
-			if (*pg_table >= LOW_MEM) { /* 如果页表项存在且是可写的，那么是重分配的物理页，需要被释放，如果是只读的话说明是从内核copy过来的不可以释放。 */
+			/* 这里再详细解释下吧，为什么要加这个判断条件，
+			 * 当task0创建task1的时候，因为task1在用户模式执行的还是内核代码，所以在>=1G的地址空间，映射的是<LOW_MEN的内核代码空间，
+			 * 所以会分配LOW_MEM/4M个页表用于映射内核代码空间，这些页表存储的页地址肯定都是<LOW_MEM的，所以是不能释放的，其实在free_page里也有判断。
+			 * 当task1创建新的进程时，会copy自己的目录表，因此NR>1的进程也是有机会在用户空间运行内核代码的，不过内核是不会给它这个机会的，
+			 * 因为会紧接着执行do_execve并调用该方法释放>=1G地址空间的页表映射的。
+			 */
+			if (*pg_table >= LOW_MEM) {
 				if (!free_page(0xfffff000 & *pg_table)) {
 					//printk("error linear addr: %p \n\r", pg_table);
 					panic("free_page_tables1: trying to free free page");

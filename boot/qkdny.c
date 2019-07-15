@@ -14,7 +14,7 @@
 #include <asm/io.h>
 #include <asm/system.h>
 
-#define OS_SIZE 0x40000         /* 因为当前的OS只有不到120K,所以这里先把OS的大小设置为128K,以后随着功能扩展，OS会变大的，自己调整就行了。 */
+#define OS_SIZE 0x80000         /* 因为当前的OS只有不到120K,所以这里先把OS的大小设置为512K,以后随着功能扩展，OS会变大的，自己调整就行了。 */
 #define OS_PRELOAD_SIZE 0x8000  /* 被预加载的OS-CODE大小，这部分代码用于加载剩余的OS-CODE，OS-CODE完全加载后再初始化内核。 */
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;

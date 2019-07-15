@@ -2,7 +2,7 @@ AR	=ar
 AS	=as --32
 CC	=gcc
 LD	=ld -M -m elf_i386
-CFLAGS	=-fno-stack-protector -m32 -march=i386 -Wall -O -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables \
+CFLAGS	=-g -fno-stack-protector -m32 -march=i386 -Wall -O -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables \
 	     -finline-functions -nostdinc -I../include
 CPP	=gcc -E -nostdinc -I../include
 

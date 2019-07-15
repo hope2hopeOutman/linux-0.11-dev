@@ -9,9 +9,10 @@
 AR	=ar
 AS	=as
 LD	=ld
-LDFLAGS	=-s -x -M -m elf_i386
+#LDFLAGS	=-s -x -M -m elf_i386
+LDFLAGS	=-M -m elf_i386
 CC	=gcc
-CFLAGS	=-m32 -Wall -O -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables \
+CFLAGS	=-g -m32 -Wall -O -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables \
 	-finline-functions -nostdinc -I../../include
 CPP	=gcc -E -nostdinc -I../../include
 
