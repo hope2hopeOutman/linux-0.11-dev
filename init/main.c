@@ -102,11 +102,20 @@ __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (cou
 	printk("apic_status: %d \n\r", apic_status);
 }*/
 
+/* 判断是否支持VMX feature. */
+int vmx_support_verify() {
+	int ecx_value = 0;
+	__asm__("movl $0x01,%%eax;"   \
+			"cpuid;"              \
+			:"=c" (ecx_value):);
+	return 	ecx_value & 0x20;  /* Bit 5 of ecx indicate whether support VMX, 1: support, 0: not support. */
+}
+
 
 void get_cpu_topology_info() {
 	int eax_value=0, ebx_value = 0 ,edx_value = 0, ecx_value = 0;
 #if 1
-    __asm__("movl $0x06,%%eax;"  \
+    __asm__("movl $0x01,%%eax;"  \
     		"cpuid;" \
     		:"=a" (eax_value),"=b" (ebx_value),"=c" (ecx_value), "=d" (edx_value) :);
 #else
