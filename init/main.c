@@ -102,6 +102,18 @@ __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (cou
 	printk("apic_status: %d \n\r", apic_status);
 }*/
 
+void read_msr(unsigned long index,unsigned long* msr_values) {
+	__asm__ ("xorl %%eax,%%eax\n\t"  \
+             "xorl %%edx,%%edx\n\t"  \
+			 "rdmsr\n\t"             \
+			 :"=a" (msr_values[0]),"=d" (msr_values[1]):"c" (index));
+}
+
+void write_msr(unsigned long index,unsigned long eax_value,unsigned long edx_value) {
+	__asm__ ("wrmsr\n\t"             \
+			 ::"a" (eax_value),"d" (edx_value),"c" (index));
+}
+
 /* 判断是否支持VMX feature. */
 int vmx_support_verify() {
 	int ecx_value = 0;
@@ -109,6 +121,68 @@ int vmx_support_verify() {
 			"cpuid;"              \
 			:"=c" (ecx_value):);
 	return 	ecx_value & 0x20;  /* Bit 5 of ecx indicate whether support VMX, 1: support, 0: not support. */
+}
+
+void vmx_capability_verify() {
+	if (vmx_support_verify()) {
+		unsigned long msr_index = IA32_VMX_BASIC;
+		unsigned long msr_values[2] = {0,};
+		read_msr(msr_index,msr_values);
+		unsigned long vmcs_revision = msr_values[0];
+		unsigned long vmcs_size = msr_values[1] & (0x1FFF);          /* bit:32~44, 表示vmcs的大小。 */
+		unsigned long vmcs_memory_type = msr_values[1] & (0x3C0000); /* bit:50~53, 表示VMCS占用内存类型：WB,UC,WT */
+		int bit55 = (msr_values[1] & (1<<(55-32)));
+		printk("IA32_VMX_BASIC: %u:%u, bit55: %u\n\r", msr_values[1], msr_values[0], bit55);
+		if (bit55) {
+			msr_index = IA32_VMX_PINBASED_CTLS;
+			read_msr(msr_index,msr_values);
+			printk("IA32_VMX_PINBASED_CTLS: %u:%u\n\r", msr_values[1], msr_values[0]);
+		}
+		else {
+
+		}
+	}
+	else {
+		panic("Processor can not support VMX feature.");
+	}
+}
+
+void enter_vmx() {
+	unsigned long* vmxon_region = (unsigned long*) get_free_page(PAGE_IN_REAL_MEM_MAP);
+	if (vmx_support_verify()) {
+		unsigned long msr_index = IA32_VMX_BASIC;
+		unsigned long msr_values[2] = {0,};
+		read_msr(msr_index,msr_values);
+		unsigned long vmcs_revision = msr_values[0];
+		unsigned long vmcs_size = msr_values[1] & (0x1FFF);          /* bit:32~44, 表示vmcs的大小。 */
+		unsigned long vmcs_memory_type = msr_values[1] & (0x3C0000); /* bit:50~53, 表示VMCS占用内存类型：WB,UC,WT */
+		*vmxon_region = vmcs_revision;   /* 设置processor revision. */
+		int bit55 = (msr_values[1] & (1<<(55-32)));
+		printk("IA32_VMX_BASIC: %u:%u, bit55: %u\n\r", msr_values[1], msr_values[0], bit55);
+		if (bit55) {
+			msr_index = IA32_VMX_PINBASED_CTLS;
+			read_msr(msr_index,msr_values);
+			printk("IA32_VMX_PINBASED_CTLS: %u:%u\n\r", msr_values[1], msr_values[0]);
+		}
+		else {
+
+		}
+
+		msr_index = IA32_VMX_CR0_FIXED0;
+		read_msr(msr_index,msr_values);
+
+		msr_index = IA32_VMX_CR0_FIXED1;
+		read_msr(msr_index,msr_values);
+
+		msr_index = IA32_VMX_CR4_FIXED1;
+		read_msr(msr_index,msr_values);
+
+		msr_index = IA32_VMX_CR4_FIXED1;
+		read_msr(msr_index,msr_values);
+	}
+	else {
+		panic("Processor can not support VMX feature.");
+	}
 }
 
 
@@ -585,6 +659,7 @@ void main(void)		/* This really IS void, no error here. */
 	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
 	get_cpu_topology_info();
+	vmx_capability_verify();
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
