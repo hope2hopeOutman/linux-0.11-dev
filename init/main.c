@@ -71,8 +71,9 @@ unsigned long bsp_apic_icr_relocation   = BSP_APIC_ICR_RELOCATION;
 
 
 struct drive_info { char dummy[32]; } drive_info;
-
+/* 官方文档规定，VMXON_REGION的地址是64bits，所以这里用来保存vmxon_region的物理地址。 */
 struct vmxon_region_address {unsigned long address[2];} vmxon_region_address;
+struct vmcs_region_address {unsigned long address[2];} vmcs_region_address;
 
 /*
  * This is set up by the setup-routine at boot-time
@@ -149,7 +150,26 @@ void vmx_capability_verify() {
 	}
 }
 
-void enter_vmx() {
+/*
+ * 进入VMX operation env需要一下5个步骤：
+ *
+ * 1. Create a VMXON region in non-pageable memory of a size specified by IA32_VMX_BASIC MSR and aligned to a
+      4-KByte boundary. Software should read the capability MSRs to determine width of the physical addresses that
+      may be used for the VMXON region and ensure the entire VMXON region can be addressed by addresses with
+      that width. Also, software must ensure that the VMXON region is hosted in cache-coherent memory.
+   2. Initialize the version identifier in the VMXON region (the first 31 bits) with the VMCS revision identifier reported
+      by capability MSRs. Clear bit 31 of the first 4 bytes of the VMXON region.
+   3. Ensure the current processor operating mode meets the required CR0 fixed bits (CR0.PE = 1, CR0.PG = 1).
+      Other required CR0 fixed bits can be detected through the IA32_VMX_CR0_FIXED0 and IA32_VMX_CR0_FIXED1 MSRs.
+      注意：”这里仅需要设置PE和PG让CPU处于保护且分页状态即可，其他的状态位不需要现在就根据FIXED msr进行设置，这里会迷惑人，其他的FIXED bit是在执行VM entry操作时设置“。
+   4. Enable VMX operation by setting CR4.VMXE = 1. Ensure the resultant CR4 value supports all the CR4 fixed bits
+      reported in the IA32_VMX_CR4_FIXED0 and IA32_VMX_CR4_FIXED1 MSRs.
+      注意： ”这里也是仅需要设置VMXE bit位就行了，其他的不需要也不能在这里设置，一旦设置就会报错，因为那是LOAD VM的时候需要设置的，而VMXON操作不需要，这里浪费了一些时间“。
+   5. Ensure that the IA32_FEATURE_CONTROL MSR (MSR index 3AH) has been properly programmed and that its
+      lock bit is set (Bit 0 = 1). This MSR is generally configured by the BIOS using WRMSR.
+ */
+
+void enter_vmx_env() {
 	vmxon_region_address.address[0] = get_free_page(PAGE_IN_REAL_MEM_MAP);
 
 	if (vmx_support_verify()) {
@@ -161,46 +181,99 @@ void enter_vmx() {
 		unsigned long msr_values[2] = {0,};
 		read_msr(msr_index,msr_values);
 		unsigned long vmcs_revision = msr_values[0];
+		/* vmxon_region仅需要你初始化processor_revision这个field，其它的都不需要你init. */
 		*((unsigned long *)vmxon_region_address.address[0]) = vmcs_revision;
-
-		msr_index = IA32_VMX_CR0_FIXED0;
-		read_msr(msr_index,msr_values);
-		fixed0 = msr_values[0];
-
-		msr_index = IA32_VMX_CR0_FIXED1;
-		read_msr(msr_index,msr_values);
-		fixed1 = msr_values[0];
-		init = fixed0 & fixed1;
-
-		printk("IA32_VMX_CR0,fixed0:fixed1(%u:%u)\n\r", fixed0,fixed1);
-
-		__asm__ ("movl %%edx,%%cr0\n\t"  \
-				 ::"d" (init));
-
-		msr_index = IA32_VMX_CR4_FIXED1;
-		read_msr(msr_index,msr_values);
-		fixed0 = msr_values[0];
-
-		msr_index = IA32_VMX_CR4_FIXED1;
-		read_msr(msr_index,msr_values);
-		fixed1 = msr_values[0];
-		init = fixed0 & fixed1;
-
-		printk("IA32_VMX_CR4,fixed0:fixed1(%u:%u)\n\r", fixed0,fixed1);
 
 		msr_index = IA32_FEATURE_CONTROL;
 		read_msr(msr_index,msr_values);
 		printk("IA32_FEATURE_CONTROL,(%u:%u)\n\r", msr_values[1],msr_values[0]);
 
-		__asm__ ("movl %%edx,%%cr4\n\t"  \
-				 ::"d" (init));
-/*
-		__asm__ ("vmxon %0\n\t"  \
-				 ::"m" (*(&vmxon_region_address)));*/
+		__asm__ ("movl %%cr0,%%edx\n\t"  \
+				 "btsl $0,%%edx\n\t"    /* 开启保护模式 */   \
+				 "btsl $31,%%edx\n\t"   /* 开启分页模式 */   \
+				 "movl %%edx,%%cr0\n\t"  \
+
+				 "movl %%cr4,%%edx\n\t"  \
+				 "btsl $13,%%edx\n\t"   /* 开启VMX feature */   \
+		         "movl %%edx,%%cr4\n\t"  \
+				 "vmxon %0\n\t"         /* 进入VMX Operation ENV, VMX root */  \
+				 ::"m" (*(&vmxon_region_address)));
 	}
 	else {
 		panic("Processor can not support VMX feature.");
 	}
+
+	init_vmcs();
+}
+
+void write_vmcs_field(unsigned long field_encoding, unsigned long field_value) {
+	__asm__ ("vmwrite %%ecx,%%edx\n\t" \
+			 ::"c" (field_value),"d" (field_encoding));
+}
+
+unsigned long read_vmcs_field(unsigned long field_encoding) {
+	unsigned field_value = 0;
+	__asm__ ("vmread %%edx,%%eax\n\t" \
+			 :"=a" (field_value):"d" (field_encoding));
+	return field_value;
+}
+
+void init_vmcs_field(unsigned long capability_msr_index, unsigned long field_encoding) {
+	unsigned long msr_values[2] = {0,};
+	read_msr(capability_msr_index,msr_values);
+	printk("IA32_VMX_TRUE_XXX_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	unsigned long init_value = msr_values[0] & msr_values[1];
+	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
+	unsigned long read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+}
+
+void init_vmcs_ctrl_fields() {
+	if (vmx_support_verify()) {
+		unsigned long msr_index = IA32_VMX_BASIC;
+		unsigned long msr_values[2] = {0,};
+		read_msr(msr_index,msr_values);
+		unsigned long vmcs_revision = msr_values[0];
+		unsigned long vmcs_size = msr_values[1] & (0x1FFF);          /* bit:32~44, 表示vmcs的大小。 */
+		unsigned long vmcs_memory_type = msr_values[1] & (0x3C0000); /* bit:50~53, 表示VMCS占用内存类型：WB,UC,WT */
+		int bit55 = (msr_values[1] & (1<<(55-32)));
+		unsigned long init_value = 0;
+		printk("IA32_VMX_BASIC: %u:%u, bit55: %u\n\r", msr_values[1], msr_values[0], bit55);
+		if (bit55) {
+			init_vmcs_field(IA32_VMX_TRUE_PINBASED_CTLS,IA32_VMX_PINBASED_CTLS_ENCODING);
+			init_vmcs_field(IA32_VMX_TRUE_PROCBASED_CTLS,IA32_VMX_PROCBASED_CTLS_ENCODING);
+		}
+		else {
+
+		}
+	}
+	else {
+		panic("Processor can not support VMX feature.");
+	}
+}
+
+void init_vmcs_host_state() {
+
+}
+
+void init_vmcs_guest_state() {
+
+}
+
+void init_vmcs() {
+	unsigned long vmcs_addr = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);
+	vmcs_region_address.address[0] = vmcs_addr;
+	*((unsigned long*)vmcs_addr) = *((unsigned long *)vmxon_region_address.address[0]);
+	__asm__ ("vmclear %0\n\t"    \
+			 "vmptrld %0\n\t"    \
+			 ::"m" (*(&vmcs_region_address)));
+	init_vmcs_ctrl_fields();
+	init_vmcs_host_state();
+	init_vmcs_guest_state();
+}
+
+void quit_vmx_env() {
+	__asm__ ("vmxoff;" ::);
 }
 
 
@@ -678,7 +751,7 @@ void main(void)		/* This really IS void, no error here. */
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
 	//get_cpu_topology_info();
 	vmx_capability_verify();
-	enter_vmx();
+	enter_vmx_env();
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

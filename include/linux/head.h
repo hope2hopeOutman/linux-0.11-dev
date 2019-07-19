@@ -86,16 +86,23 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define KERNEL_MSR_REMAP_ADDR_START 0x0001   /* granularity 4K,起始地址空间是4K. */
 #define KERNEL_MSR_REMAP_ADDR_SPACE 0x009F   /* granularity 4K,可用于remap APIC base address的地址空间大小，636K=159*4K=0x9F*4K */
 
-#define IA32_VMX_BASIC              0x480
-#define IA32_VMX_PINBASED_CTLS      0x481
-#define IA32_VMX_PROCBASED_CTLS     0x482
-#define IA32_VMX_EXIT_CTLS          0x483
-#define IA32_VMX_ENTRY_CTLS         0x484
-#define IA32_VMX_CR0_FIXED0         0x486
-#define IA32_VMX_CR0_FIXED1         0x487
-#define IA32_VMX_CR4_FIXED0         0x488
-#define IA32_VMX_CR4_FIXED1         0x489
-#define IA32_FEATURE_CONTROL        0x3A
+#define IA32_VMX_BASIC                0x480
+#define IA32_VMX_PINBASED_CTLS        0x481
+#define IA32_VMX_PROCBASED_CTLS       0x482
+#define IA32_VMX_EXIT_CTLS            0x483
+#define IA32_VMX_ENTRY_CTLS           0x484
+#define IA32_VMX_CR0_FIXED0           0x486
+#define IA32_VMX_CR0_FIXED1           0x487
+#define IA32_VMX_CR4_FIXED0           0x488
+#define IA32_VMX_CR4_FIXED1           0x489
+#define IA32_VMX_TRUE_PINBASED_CTLS   0x48D
+#define IA32_VMX_TRUE_PROCBASED_CTLS  0x48E
+#define IA32_VMX_TRUE_EXIT_CTLS       0x48F
+#define IA32_VMX_TRUE_ENTRY_CTLS      0x490
+#define IA32_FEATURE_CONTROL          0x3A
+
+#define IA32_VMX_PINBASED_CTLS_ENCODING     0x4000
+#define IA32_VMX_PROCBASED_CTLS_ENCODING    0x4002
 #endif
 
 #define PAGE_IN_REAL_MEM_MAP 1               /* 表示分配的物理地址来自于内核实地址映射的空间，mem_map开始的一部分是内核实地址映射的 */
