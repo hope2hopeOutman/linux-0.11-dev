@@ -203,7 +203,7 @@ void enter_vmx_env() {
 		panic("Processor can not support VMX feature.");
 	}
 
-	init_vmcs();
+	vm_entry();
 }
 
 void write_vmcs_field(unsigned long field_encoding, unsigned long field_value) {
@@ -228,6 +228,77 @@ void init_vmcs_field(unsigned long capability_msr_index, unsigned long field_enc
 	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 }
 
+void init_vmcs_pinbased_ctls() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+	read_msr(IA32_VMX_PINBASED_CTLS,msr_values);
+	printk("IA32_VMX_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0] & msr_values[1];
+	read_msr(IA32_VMX_TRUE_PINBASED_CTLS,msr_values);
+	printk("IA32_VMX_TRUE_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value |= (msr_values[0] & msr_values[1]); /* Refer to algorithm 3. chapter 31.5.1 */
+	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
+	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+}
+
+void init_vmcs_procbased_ctls() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+	read_msr(IA32_VMX_PROCBASED_CTLS,msr_values);
+	printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0] & msr_values[1];
+	read_msr(IA32_VMX_TRUE_PROCBASED_CTLS,msr_values);
+	printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value |= (msr_values[0] & msr_values[1]);
+	write_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING, init_value);
+	read_value = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	/* todo turn on secondary process-control and virtual-APIC */
+}
+
+/************* Check CR3-count whether exceed the maximum limit. **************/
+void init_vmcs_cr3_target_count() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+	read_msr(IA32_VMX_MISC,msr_values);
+	printk("IA32_VMX_MISC: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = (msr_values[0] & (0x1FF0000)) >> 16;  /* 取16~24位，得到CR3-target count */
+	init_value > 4 ? 4 : init_value;
+	/* if cr3-target count=0, then mov value,cr3 always trigger VM exit. */
+	write_vmcs_field(IA32_VMX_CR3_TARGET_COUNT_ENCODING, init_value);
+	read_value = read_vmcs_field(IA32_VMX_CR3_TARGET_COUNT_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+}
+
+void init_vmcs_exec_ctrl_fields() {
+	init_vmcs_pinbased_ctls();
+	init_vmcs_procbased_ctls();
+	init_vmcs_cr3_target_count();
+}
+
+void init_vmcs_exit_ctrl_fields() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+	read_msr(IA32_VMX_EXIT_CTLS,msr_values);
+	printk("IA32_VMX_EXIT_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0] & msr_values[1];
+	read_msr(IA32_VMX_TRUE_EXIT_CTLS,msr_values);
+	printk("IA32_VMX_TRUE_EXIT_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value |= (msr_values[0] & msr_values[1]);
+	write_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING, init_value);
+	read_value = read_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+}
+
+void init_vmcs_entry_ctrl_fields() {
+
+}
+
 void init_vmcs_ctrl_fields() {
 	if (vmx_support_verify()) {
 		unsigned long msr_index = IA32_VMX_BASIC;
@@ -238,13 +309,16 @@ void init_vmcs_ctrl_fields() {
 		unsigned long vmcs_memory_type = msr_values[1] & (0x3C0000); /* bit:50~53, 表示VMCS占用内存类型：WB,UC,WT */
 		int bit55 = (msr_values[1] & (1<<(55-32)));
 		unsigned long init_value = 0;
+		unsigned long read_value = 0;
 		printk("IA32_VMX_BASIC: %u:%u, bit55: %u\n\r", msr_values[1], msr_values[0], bit55);
 		if (bit55) {
-			init_vmcs_field(IA32_VMX_TRUE_PINBASED_CTLS,IA32_VMX_PINBASED_CTLS_ENCODING);
-			init_vmcs_field(IA32_VMX_TRUE_PROCBASED_CTLS,IA32_VMX_PROCBASED_CTLS_ENCODING);
+			//init_vmcs_field(IA32_VMX_TRUE_PINBASED_CTLS,IA32_VMX_PINBASED_CTLS_ENCODING);
+			//init_vmcs_field(IA32_VMX_TRUE_PROCBASED_CTLS,IA32_VMX_PROCBASED_CTLS_ENCODING);
+			init_vmcs_exec_ctrl_fields();
+			init_vmcs_exit_ctrl_fields();
+			init_vmcs_entry_ctrl_fields();
 		}
 		else {
-
 		}
 	}
 	else {
@@ -260,7 +334,7 @@ void init_vmcs_guest_state() {
 
 }
 
-void init_vmcs() {
+void vm_entry() {
 	unsigned long vmcs_addr = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);
 	vmcs_region_address.address[0] = vmcs_addr;
 	*((unsigned long*)vmcs_addr) = *((unsigned long *)vmxon_region_address.address[0]);
