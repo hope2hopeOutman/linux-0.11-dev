@@ -2,6 +2,7 @@
 #define _HEAD_H
 
 #define EMULATOR_TYPE 0x01   /* 0x00: bochs, 0x01: qemu */
+#define PAGE_SIZE 4096
 
 typedef struct desc_struct {
 	unsigned long a,b;
@@ -119,6 +120,52 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_ENTRY_MSR_LOAD_COUNT_ENCODING  0x4014
 #define IA32_VMX_ENTRY_MSR_LOAD_ADDR_FULL_ENCODING  0x200A
 #define IA32_VMX_ENTRY_MSR_LOAD_ADDR_HIGH_ENCODING  0x200B
+#define IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING  0x4016
+
+/*========== Host area =============*/
+#define HOST_CR0_ENCODING  0x6C00
+#define HOST_CR3_ENCODING  0x6C02
+#define HOST_CR4_ENCODING  0x6C04
+
+#define HOST_ES_ENCODING   0x0C00
+#define HOST_CS_ENCODING   0x0C02
+#define HOST_SS_ENCODING   0x0C04
+#define HOST_DS_ENCODING   0x0C06
+#define HOST_FS_ENCODING   0x0C08
+#define HOST_GS_ENCODING   0x0C0A
+#define HOST_TR_ENCODING   0x0C0C
+
+#define HOST_GDTR_ENCODING   0x6C0C
+#define HOST_IDTR_ENCODING   0x6C0E
+
+#define HOST_RSP_ENCODING    0x6C14
+#define HOST_RIP_ENCODING    0x6C16
+/*========== Host area =============*/
+
+/*========== Guest area ============*/
+#define GUEST_CR0_ENCODING  0x6800
+#define GUEST_CR3_ENCODING  0x6802
+#define GUEST_CR4_ENCODING  0x6804
+
+#define GUEST_ES_ENCODING   0x0800
+#define GUEST_CS_ENCODING   0x0802
+#define GUEST_SS_ENCODING   0x0804
+#define GUEST_DS_ENCODING   0x0806
+#define GUEST_FS_ENCODING   0x0808
+#define GUEST_GS_ENCODING   0x080A
+#define GUEST_LDTR_ENCODING 0x080C
+#define GUEST_TR_ENCODING   0x080E
+
+#define GUEST_GDTR_ENCODING   0x6816
+#define GUEST_IDTR_ENCODING   0x6818
+
+#define GUEST_RSP_ENCODING    0x681C
+#define GUEST_RIP_ENCODING    0x681E
+/*========== Guest area ============*/
+
+#define IA32_DEBUGCTL           0x1D9
+#define IA32_PERF_GLOBAL_CTRL   0x38F
+#define IA32_PAT                0x277
 
 #endif
 

@@ -51,11 +51,15 @@ extern void floppy_init(void);
 extern void mem_init(long start, long end);
 extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
+extern void idle_loop(void);
 extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
 extern unsigned long tty_io_semaphore;
+extern unsigned long gdt;
+extern unsigned long idt;
+extern long* user_stack;
 
 long memory_end = 0;         /* Granularity is 4K */
 long buffer_memory_end = 0;  /* Granularity is 4K */
@@ -74,6 +78,9 @@ struct drive_info { char dummy[32]; } drive_info;
 /* 官方文档规定，VMXON_REGION的地址是64bits，所以这里用来保存vmxon_region的物理地址。 */
 struct vmxon_region_address {unsigned long address[2];} vmxon_region_address;
 struct vmcs_region_address {unsigned long address[2];} vmcs_region_address;
+unsigned long processor_physical_address_width = 0;
+unsigned long vmcs_size = 0;
+unsigned long vmcs_memory_type = 0;
 
 /*
  * This is set up by the setup-routine at boot-time
@@ -169,7 +176,7 @@ void vmx_capability_verify() {
       lock bit is set (Bit 0 = 1). This MSR is generally configured by the BIOS using WRMSR.
  */
 
-void enter_vmx_env() {
+void vmx_env_entry() {
 	vmxon_region_address.address[0] = get_free_page(PAGE_IN_REAL_MEM_MAP);
 
 	if (vmx_support_verify()) {
@@ -183,6 +190,12 @@ void enter_vmx_env() {
 		unsigned long vmcs_revision = msr_values[0];
 		/* vmxon_region仅需要你初始化processor_revision这个field，其它的都不需要你init. */
 		*((unsigned long *)vmxon_region_address.address[0]) = vmcs_revision;
+
+		vmcs_size = msr_values[1] & (0x1FFF);          /* bit:32~44, 表示vmcs的大小。 */
+		vmcs_memory_type = msr_values[1] & (0x3C0000); /* bit:50~53, 表示VMCS占用内存类型：WB,UC,WT */
+		if (!(msr_values[1] & (1<<(48-32)))) {
+			processor_physical_address_width = 0xFFFFFFFC;  /* IA32_VMX_BASIC, bit48； 0:32bit, 1:64bit, 2^32-4 */
+		}
 
 		msr_index = IA32_FEATURE_CONTROL;
 		read_msr(msr_index,msr_values);
@@ -290,13 +303,72 @@ void init_vmcs_exit_ctrl_fields() {
 	read_msr(IA32_VMX_TRUE_EXIT_CTLS,msr_values);
 	printk("IA32_VMX_TRUE_EXIT_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value |= (msr_values[0] & msr_values[1]);
+
+	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
+	read_value &= (1<<6);  /* Pin-Based VM-Execution Controls, bit6: Activate VMX-preemption time */
+	if (!read_value) {
+		init_value &= (~(1<<22));  /* bit22： Save VMX-preemption timer value， if not activate, should set to 0 */
+	}
+
+	unsigned long count = read_vmcs_field(IA32_VMX_EXIT_MSR_STORE_COUNT_ENCODING);
+	unsigned long base_addr = read_vmcs_field(IA32_VMX_EXIT_MSR_STORE_ADDR_FULL_ENCODING);
+	if (count) {
+		if((base_addr+(count*16-1)) > processor_physical_address_width) {
+			panic("IA32_VMX_EXIT_MSR_STORE_ADDR exceed address space what processor support. ");
+		}
+		base_addr &= (0xF);
+		if (base_addr) {
+			panic("The lower 4 bits of IA32_VMX_EXIT_MSR_STORE_ADDR should be 0. ");
+		}
+	}
+
+	count = read_vmcs_field(IA32_VMX_EXIT_MSR_LOAD_COUNT_ENCODING);
+	base_addr = read_vmcs_field(IA32_VMX_EXIT_MSR_LOAD_ADDR_FULL_ENCODING);
+	if (count) {
+		if((base_addr+(count*16-1)) > processor_physical_address_width) {
+			panic("IA32_VMX_EXIT_MSR_LOAD_ADDR exceed address space what processor support. ");
+		}
+		base_addr &= (0xF);
+		if (base_addr) {
+			panic("The lower 4 bits of IA32_VMX_EXIT_MSR_LOAD_ADDR should be 0. ");
+		}
+	}
+
 	write_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING);
 	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 }
 
 void init_vmcs_entry_ctrl_fields() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+	read_msr(IA32_VMX_ENTRY_CTLS,msr_values);
+	printk("IA32_VMX_ENTRY_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0] & msr_values[1];
+	read_msr(IA32_VMX_TRUE_ENTRY_CTLS,msr_values);
+	printk("IA32_VMX_TRUE_ENTRY_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value |= (msr_values[0] & msr_values[1]);
 
+	write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);
+	read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+
+	init_value = read_vmcs_field(IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING);
+	init_value &= (0x7FFFFFFF);   /* bit31 set to 0, Don't inject event when vm entry. */
+	write_vmcs_field(IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING, init_value);
+
+	unsigned long count = read_vmcs_field(IA32_VMX_ENTRY_MSR_LOAD_COUNT_ENCODING);
+	unsigned long base_addr = read_vmcs_field(IA32_VMX_ENTRY_MSR_LOAD_ADDR_FULL_ENCODING);
+	if (count) {
+		if((base_addr+(count*16-1)) > processor_physical_address_width) {
+			panic("IA32_VMX_ENTRY_MSR_LOAD_ADDR exceed address space what processor support. ");
+		}
+		base_addr &= (0xF);
+		if (base_addr) {
+			panic("The lower 4 bits of IA32_VMX_ENTRY_MSR_LOAD_ADDR should be 0. ");
+		}
+	}
 }
 
 void init_vmcs_ctrl_fields() {
@@ -312,8 +384,6 @@ void init_vmcs_ctrl_fields() {
 		unsigned long read_value = 0;
 		printk("IA32_VMX_BASIC: %u:%u, bit55: %u\n\r", msr_values[1], msr_values[0], bit55);
 		if (bit55) {
-			//init_vmcs_field(IA32_VMX_TRUE_PINBASED_CTLS,IA32_VMX_PINBASED_CTLS_ENCODING);
-			//init_vmcs_field(IA32_VMX_TRUE_PROCBASED_CTLS,IA32_VMX_PROCBASED_CTLS_ENCODING);
 			init_vmcs_exec_ctrl_fields();
 			init_vmcs_exit_ctrl_fields();
 			init_vmcs_entry_ctrl_fields();
@@ -326,11 +396,134 @@ void init_vmcs_ctrl_fields() {
 	}
 }
 
-void init_vmcs_host_state() {
+void field_bit_set(unsigned long field_encoding, unsigned long bit_position, unsigned long bit_value) {
+}
 
+void init_vmcs_host_state() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+
+	/* Init host CR0 */
+	read_msr(IA32_VMX_CR0_FIXED0,msr_values);
+	printk("IA32_VMX_CR0_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0];
+	read_msr(IA32_VMX_CR0_FIXED1,msr_values);
+	printk("IA32_VMX_CR0_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value &= msr_values[0];
+	write_vmcs_field(HOST_CR0_ENCODING, init_value);
+	read_value = read_vmcs_field(HOST_CR0_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+
+	/* Init host CR4 */
+	read_msr(IA32_VMX_CR4_FIXED0,msr_values);
+	printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0];
+	read_msr(IA32_VMX_CR4_FIXED1,msr_values);
+	printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value &= msr_values[0];
+	write_vmcs_field(HOST_CR4_ENCODING, init_value);
+	read_value = read_vmcs_field(HOST_CR4_ENCODING);
+	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+
+	/* Init host segment selector */
+	write_vmcs_field(HOST_ES_ENCODING, 0x10);
+	write_vmcs_field(HOST_CS_ENCODING, 0x08);
+	write_vmcs_field(HOST_SS_ENCODING, 0x10);
+	write_vmcs_field(HOST_DS_ENCODING, 0x10);
+	write_vmcs_field(HOST_FS_ENCODING, 0x10);
+	write_vmcs_field(HOST_GS_ENCODING, 0x10);
+	//write_vmcs_field(HOST_TR_ENCODING, 0x10);
+
+	write_vmcs_field(HOST_GDTR_ENCODING, (unsigned long)&gdt);
+	write_vmcs_field(HOST_IDTR_ENCODING, (unsigned long)&idt);
+
+	write_vmcs_field(HOST_RSP_ENCODING, PAGE_SIZE+(unsigned long)&init_task);
+	write_vmcs_field(HOST_RIP_ENCODING, idle_loop);
+
+	/* Check whether support 64-arch */
+	if (processor_physical_address_width == 0xFFFFFFFC) {
+		read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
+		read_value &= (~(1<<9)); /* 如果processor不支持64-arch,那么这里一定要把bit9设置为0. */
+		write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, read_value);
+
+		read_value = read_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING);
+		read_value &= (~(1<<9)); /* 如果processor不支持64-arch,那么这里一定要把bit9设置为0. */
+		write_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING, read_value);
+	}
+	else {
+		panic("Now can not support 64-arch.");
+	}
+}
+
+void run_guest_test_code() {
+	for (;;) {
+		printk("Start to run guest code now\n\r");
+	}
 }
 
 void init_vmcs_guest_state() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+
+	/* Init host CR0 */
+	read_msr(IA32_VMX_CR0_FIXED0,msr_values);
+	printk("IA32_VMX_CR0_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0];
+	read_msr(IA32_VMX_CR0_FIXED1,msr_values);
+	printk("IA32_VMX_CR0_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value &= msr_values[0];
+	write_vmcs_field(GUEST_CR0_ENCODING, init_value);
+	read_value = read_vmcs_field(GUEST_CR0_ENCODING);
+	printk("GUEST_CR0_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+
+	/* Init host CR4 */
+	read_msr(IA32_VMX_CR4_FIXED0,msr_values);
+	printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = msr_values[0];
+	read_msr(IA32_VMX_CR4_FIXED1,msr_values);
+	printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value &= msr_values[0];
+	write_vmcs_field(GUEST_CR4_ENCODING, init_value);
+	read_value = read_vmcs_field(GUEST_CR4_ENCODING);
+	printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+
+	/* Init GUEST segment selector */
+	write_vmcs_field(GUEST_ES_ENCODING, 0x10);
+	write_vmcs_field(GUEST_CS_ENCODING, 0x08);
+	write_vmcs_field(GUEST_SS_ENCODING, 0x10);
+	write_vmcs_field(GUEST_DS_ENCODING, 0x10);
+	write_vmcs_field(GUEST_FS_ENCODING, 0x10);
+	write_vmcs_field(GUEST_GS_ENCODING, 0x10);
+	//write_vmcs_field(GUEST_LDTR_ENCODING, 0x10);
+	//write_vmcs_field(GUEST_TR_ENCODING, 0x10);
+
+	write_vmcs_field(GUEST_GDTR_ENCODING, (unsigned long)&gdt);
+	write_vmcs_field(GUEST_IDTR_ENCODING, (unsigned long)&idt);
+
+	write_vmcs_field(GUEST_RSP_ENCODING, &user_stack[PAGE_SIZE>>2]);
+	write_vmcs_field(GUEST_RIP_ENCODING, run_guest_test_code);
+
+	read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
+	printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+	if (read_value & (1<<2)) { /* Load debug controls whether has been set. */
+		//write_msr(IA32_DEBUGCTL,0,0);
+		init_value = read_value & (~(1<<2));
+		write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load Debug controls. */
+	}
+
+	if (read_value & (1<<13)) {
+		//write_msr(IA32_PERF_GLOBAL_CTRL,0,0);
+		init_value = read_value & (~(1<<13));
+		write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load IA32_PERF_GLOBAL_CTRL controls. */
+	}
+
+	if (read_value & (1<<14)) {
+		//write_msr(IA32_PAT,0,0);
+		init_value = read_value & (~(1<<14));
+		write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load IA32_PAT controls. */
+	}
 
 }
 
@@ -824,8 +1017,8 @@ void main(void)		/* This really IS void, no error here. */
 	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
 	//get_cpu_topology_info();
-	vmx_capability_verify();
-	enter_vmx_env();
+	//vmx_capability_verify();
+	vmx_env_entry();
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
