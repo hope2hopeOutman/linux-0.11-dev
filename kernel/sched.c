@@ -59,11 +59,6 @@ extern void mem_use(void);
 extern int timer_interrupt(void);
 extern int system_call(void);
 
-union task_union {
-	struct task_struct task;
-	char stack[PAGE_SIZE];
-};
-
 union task_union init_task = {INIT_TASK,};
 union task_union ap_default_task = {INIT_TASK,};
 /*

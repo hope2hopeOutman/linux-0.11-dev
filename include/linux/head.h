@@ -166,7 +166,8 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_DEBUGCTL           0x1D9
 #define IA32_PERF_GLOBAL_CTRL   0x38F
 #define IA32_PAT                0x277
-
+#define IA32_EFER               0xC0000080
+#define IA32_BNDCFGS            0xD90
 #endif
 
 #define PAGE_IN_REAL_MEM_MAP 1               /* 表示分配的物理地址来自于内核实地址映射的空间，mem_map开始的一部分是内核实地址映射的 */

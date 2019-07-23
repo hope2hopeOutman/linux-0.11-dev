@@ -56,10 +56,8 @@ extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
-extern unsigned long tty_io_semaphore;
-extern unsigned long gdt;
-extern unsigned long idt;
 extern long* user_stack;
+extern union task_union init_task;
 
 long memory_end = 0;         /* Granularity is 4K */
 long buffer_memory_end = 0;  /* Granularity is 4K */
@@ -506,25 +504,122 @@ void init_vmcs_guest_state() {
 	write_vmcs_field(GUEST_RIP_ENCODING, run_guest_test_code);
 
 	read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
-	printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+	printk("IA32_VMX_ENTRY_CTLS_ENCODING : %08x\n\r", read_value);
+
+	/* Check whether support debug, configured in VM-Entry Controls. */
 	if (read_value & (1<<2)) { /* Load debug controls whether has been set. */
-		//write_msr(IA32_DEBUGCTL,0,0);
-		init_value = read_value & (~(1<<2));
-		write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load Debug controls. */
+		if (0) {
+			/* Reserved bits: 2~5, 16~63, should set to 0. */
+			write_msr(IA32_DEBUGCTL,0xFFC3,0);
+		}
+		else {
+			init_value = read_value & (~(1<<2));
+			write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load Debug controls. */
+		}
 	}
 
+	/* Check whether support performance monitor feature, configured in VM-Entry Controls. */
 	if (read_value & (1<<13)) {
-		//write_msr(IA32_PERF_GLOBAL_CTRL,0,0);
-		init_value = read_value & (~(1<<13));
-		write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load IA32_PERF_GLOBAL_CTRL controls. */
+		unsigned long isSupportPerformanceMonitor = 0;
+		__asm__ ("movl 0x0A,%%eax\n\t"  \
+				 "cpuid\n\t"            \
+				 :"=a" (isSupportPerformanceMonitor):);
+		/*
+		 * bits:0~7  indicates whether support performance monitor feature.
+		 * bits:8~15 indicates the number of performance monitor count.
+		 * */
+		if (isSupportPerformanceMonitor & (0xFF) > 0) {
+			unsigned long performanceMonitorCount = 0;
+			__asm__ ("movl 0x0A,%%eax\n\t"  \
+					 "cpuid\n\t"            \
+					 :"=a" (performanceMonitorCount):);
+			performanceMonitorCount &= (0xFF00);
+			performanceMonitorCount >>= 8;
+			/* Reserved bits: n~31, 35~63, should set to 0.  */
+			unsigned long msr_values[2] = {0,0};
+			read_msr(IA32_PERF_GLOBAL_CTRL, msr_values);
+			msr_values[0] &= ((1<<performanceMonitorCount) - 1);
+			msr_values[1] &= ((1<<(35-32)) - 1);
+
+			write_msr(IA32_PERF_GLOBAL_CTRL,msr_values[0],msr_values[1]);
+		}
+		else {
+			init_value = read_value & (~(1<<13));
+			write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load IA32_PERF_GLOBAL_CTRL controls. */
+		}
 	}
 
+	/* Check whether support PAT feature, configured in VM-Entry Controls. */
 	if (read_value & (1<<14)) {
-		//write_msr(IA32_PAT,0,0);
-		init_value = read_value & (~(1<<14));
-		write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load IA32_PAT controls. */
+		unsigned long isSupportPAT = 0;
+		__asm__ ("movl 0x01,%%eax\n\t"  \
+				 "cpuid\n\t"            \
+				 :"=d" (isSupportPAT):);
+		if (isSupportPAT & (1<<16)) { /* bit16: indicates whether support page attribute table. */
+			/*
+			 * Memory type :  0 (UC), 1 (WC), 4 (WT), 5 (WP), 6 (WB), or 7 (UC-).\
+			 * 0~2, 8~10, 16~18, 24~26, 32~34, 40~42, 48~50, 56~58 should be set one of the above memory type value.
+			 * */
+			write_msr(IA32_PAT,0,0);
+		}
+		else {
+			init_value = read_value & (~(1<<14));
+			write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load IA32_PAT controls. */
+		}
 	}
 
+	/* Check whether support extended feature, configured in VM-Entry Controls. */
+	if (read_value & (1<<15)) {
+		unsigned long isSupportEFER = 0;
+		__asm__ ("movl 0x80000001,%%eax\n\t"  \
+				 "cpuid\n\t"            \
+				 :"=d" (isSupportEFER):);
+		if ((isSupportEFER & (1<<20)) || (isSupportEFER & (1<<29))) { /* bit20/29: indicates whether support extended feature. */
+            /* Reserved bits: 1~7,9, 12~63, should set to 0. */
+			unsigned long msr_values[2] = {0,0};
+			read_msr(IA32_EFER, msr_values);
+			msr_values[0] &= ((~0xFE) & (~(1<<9)));
+			msr_values[1] = 0;
+			write_msr(IA32_PAT,msr_values[0],msr_values[1]);
+
+			/*
+			 * Bit 10 (corresponding to IA32_EFER.LMA) must equal the value of the “IA-32e mode guest” VM-entry control,
+			 * It must also be identical to bit 8 (LME) if bit 31 in the CR0 field (corresponding to CR0.PG) is 1.
+			 * bit9: the value of the “IA-32e mode guest” VM-entry control.
+			 *  */
+			if (read_value & (1<<9)) {
+				msr_values[0] |= ((1<<10) || (1<<8));
+			}
+			else {
+				msr_values[0] &= (~(1<<10) & ~(1<<8));
+			}
+		}
+		else {
+			init_value = read_value & (~(1<<15));
+			write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load Extend Feature controls. */
+		}
+	}
+
+	/* Check whether support IA32_BNDCFGS feature, configured in VM-Entry Controls. */
+	if (read_value & (1<<16)) {
+		unsigned long isSupportMemProtectExtension = 0;
+		__asm__ ("movl 0x07,%%eax\n\t"  \
+				 "movl 0x00,%%ecx\n\t"  /* sub-leaf */ \
+				 "cpuid\n\t"            \
+				 :"=b" (isSupportMemProtectExtension):);
+		/* isSupportMemProtectExtension[bit14]:  MPX. Supports Intel® Memory Protection Extensions if 1. */
+		if (isSupportMemProtectExtension & (1<<14)) {
+			/* Reserved bits: 2~11. */
+			unsigned long msr_values[2] = {0,0};
+			read_msr(IA32_BNDCFGS, msr_values);
+			msr_values[0] &= ~((1<<12)-4);
+			write_msr(IA32_BNDCFGS, msr_values[0], msr_values[1]);
+		}
+		else {
+			init_value = read_value & (~(1<<16));
+			write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);  /* Don't load IA32_BNDCFGS controls. */
+		}
+	}
 }
 
 void vm_entry() {
@@ -535,6 +630,20 @@ void vm_entry() {
 			 "vmptrld %0\n\t"    \
 			 ::"m" (*(&vmcs_region_address)));
 	init_vmcs_ctrl_fields();
+	/*
+	 * 关于Load host/guest state为什么要加载各个段的base_address field，而不是根据段selector从GDTR或LDTR表中，加载各个段的base_address,
+	 * 还是不太明白，为什么要这么做，其实觉得，各个段的base_address field本身都是多余的，因为有了GDTR和LDTR就够了啊。
+	 * 后面实现了就明白了为什么要这样设计了，可能跟No-root环境下，不能进行任务切换有关吧。
+	 * 后面会验证下，vm-entry后，会不会将各个段的base_address，limit和access-right field的值，自动更新到GDT对应的描述符项中。
+	 * 总觉的在NON-root VMX下不能执行任务切换指令，这个限制太不合理了，不知道Intel是怎么想的。
+	 * 现有的条件下，在non-root vmx环境下，要想实现任务切换，我的实现思路如下：
+	 * 1. 首先设置GDT表，将新任务的LDT和TSS描述符更新到GDT表中
+	 * 2. 在内核态执行ljmp tss指令，这样会导致vm-exit操作，这时将error-code（任务切换触发的异常码），更新到vmcs的error-code field
+	 * 3. 在VMM (root vmx)环境下，根据异常码得到任务号，然后根据任务号到GDT中获取新任务的base_address, limit ,access-right信息，然后更新vmcs中
+	 *    相应的的guest state
+	 * 4. 执行vm resume操作，这时进入VM，执行的就是新任务了，从而达到任务切换的目的。
+	 * 5. 在相同的processor上，执行vm resume操作很快，如果将新任务分配到其他processor模拟执行的话，代价就太大了。
+	 *  */
 	init_vmcs_host_state();
 	init_vmcs_guest_state();
 }
