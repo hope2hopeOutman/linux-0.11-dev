@@ -61,6 +61,7 @@ extern int system_call(void);
 
 union task_union init_task = {INIT_TASK,};
 union task_union ap_default_task = {INIT_TASK,};
+union task_union vm_defualt_task = {INIT_TASK,};
 /*
  * 这里一次性分配64个processor，主要原因是这样可以使data_segment_align 4K对齐，
  * 如果设置为4的话就导致data_segment_align不能4K对齐了，导致运行有问题，
