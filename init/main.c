@@ -58,6 +58,7 @@ extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
 extern long* user_stack;
 extern union task_union init_task;
+extern union task_union vm_defualt_task;
 
 long memory_end = 0;         /* Granularity is 4K */
 long buffer_memory_end = 0;  /* Granularity is 4K */
@@ -426,18 +427,40 @@ void init_vmcs_host_state() {
 
 	/* Init host segment selector */
 	write_vmcs_field(HOST_ES_ENCODING, 0x10);
+	read_value = read_vmcs_field(HOST_ES_ENCODING);
+	printk("Read HOST_ES_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_CS_ENCODING, 0x08);
+	read_value = read_vmcs_field(HOST_CS_ENCODING);
+	printk("Read HOST_CS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_SS_ENCODING, 0x10);
+	read_value = read_vmcs_field(HOST_SS_ENCODING);
+	printk("Read HOST_SS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_DS_ENCODING, 0x10);
+	read_value = read_vmcs_field(HOST_DS_ENCODING);
+	printk("Read HOST_DS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_FS_ENCODING, 0x10);
+	read_value = read_vmcs_field(HOST_FS_ENCODING);
+	printk("Read HOST_FS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_GS_ENCODING, 0x10);
-	//write_vmcs_field(HOST_TR_ENCODING, 0x10);
+	read_value = read_vmcs_field(HOST_GS_ENCODING);
+	printk("Read HOST_GS_ENCODING: %u\n\r", read_value);
+    write_vmcs_field(HOST_TR_ENCODING, 0x28);
+	read_value = read_vmcs_field(HOST_TR_ENCODING);
+	printk("Read HOST_TR_ENCODING: %u\n\r", read_value);
 
 	write_vmcs_field(HOST_GDTR_ENCODING, (unsigned long)&gdt);
+	read_value = read_vmcs_field(HOST_GDTR_ENCODING);
+	printk("Read HOST_GDTR_ENCODING: %08x\n\r", read_value);
 	write_vmcs_field(HOST_IDTR_ENCODING, (unsigned long)&idt);
+	read_value = read_vmcs_field(HOST_IDTR_ENCODING);
+	printk("Read HOST_IDTR_ENCODING: %08x\n\r", read_value);
 
 	write_vmcs_field(HOST_RSP_ENCODING, PAGE_SIZE+(unsigned long)&init_task);
+	read_value = read_vmcs_field(HOST_RSP_ENCODING);
+	printk("Read HOST_RSP_ENCODING: %08x\n\r", read_value);
 	write_vmcs_field(HOST_RIP_ENCODING, idle_loop);
+	read_value = read_vmcs_field(HOST_RIP_ENCODING);
+	printk("Read HOST_RIP_ENCODING: %08x\n\r", read_value);
 
 	/* Check whether support 64-arch */
 	if (processor_physical_address_width == 0xFFFFFFFC) {
@@ -495,6 +518,13 @@ void init_vmcs_guest_state() {
 		if (0) {
 			/* Reserved bits: 2~5, 16~63, should set to 0. */
 			write_msr(IA32_DEBUGCTL,0xFFC3,0);
+			/*
+			 * If the “load debug controls” VM-entry control is 1, DR7 is loaded from the DR7 field with the exception that
+             * bit 12 and bits 15:14 are always 0 and bit 10 is always 1. The values of these bits in the DR7 field are ignored.
+             *  */
+			write_vmcs_field(GUEST_DR7_ENCODING, (1<<10));
+			write_vmcs_field(GUEST_IA32_DEBUGCTL_FULL_ENCODING, 0x00);
+			write_vmcs_field(GUEST_IA32_DEBUGCTL_HIGH_ENCODING, 0x00);
 		}
 		else {
 			init_value = read_value & (~(1<<2));
@@ -525,7 +555,9 @@ void init_vmcs_guest_state() {
 			msr_values[0] &= ((1<<performanceMonitorCount) - 1);
 			msr_values[1] &= ((1<<(35-32)) - 1);
 
-			write_msr(IA32_PERF_GLOBAL_CTRL,msr_values[0],msr_values[1]);
+			//write_msr(IA32_PERF_GLOBAL_CTRL,msr_values[0],msr_values[1]);
+			write_vmcs_field(GUEST_IA32_PERF_GLOBAL_CTRL_FULL_ENCODING, msr_values[0]);
+			write_vmcs_field(GUEST_IA32_PERF_GLOBAL_CTRL_HIGH_ENCODING, msr_values[1]);
 		}
 		else {
 			init_value = read_value & (~(1<<13));
@@ -544,7 +576,9 @@ void init_vmcs_guest_state() {
 			 * Memory type :  0 (UC), 1 (WC), 4 (WT), 5 (WP), 6 (WB), or 7 (UC-).\
 			 * 0~2, 8~10, 16~18, 24~26, 32~34, 40~42, 48~50, 56~58 should be set one of the above memory type value.
 			 * */
-			write_msr(IA32_PAT,0,0);
+			//write_msr(IA32_PAT,0,0);
+			write_vmcs_field(GUEST_IA32_PAT_FULL_ENCODING, 0x00);
+			write_vmcs_field(GUEST_IA32_PAT_HIGH_ENCODING, 0x00);
 		}
 		else {
 			init_value = read_value & (~(1<<14));
@@ -564,7 +598,6 @@ void init_vmcs_guest_state() {
 			read_msr(IA32_EFER, msr_values);
 			msr_values[0] &= ((~0xFE) & (~(1<<9)));
 			msr_values[1] = 0;
-			write_msr(IA32_PAT,msr_values[0],msr_values[1]);
 
 			/*
 			 * Bit 10 (corresponding to IA32_EFER.LMA) must equal the value of the “IA-32e mode guest” VM-entry control,
@@ -577,6 +610,10 @@ void init_vmcs_guest_state() {
 			else {
 				msr_values[0] &= (~(1<<10) & ~(1<<8));
 			}
+
+			//write_msr(IA32_PAT,msr_values[0],msr_values[1]);
+			write_vmcs_field(GUEST_IA32_EFER_FULL_ENCODING, msr_values[0]);
+			write_vmcs_field(GUEST_IA32_EFER_HIGH_ENCODING, msr_values[1]);
 		}
 		else {
 			init_value = read_value & (~(1<<15));
@@ -597,7 +634,10 @@ void init_vmcs_guest_state() {
 			unsigned long msr_values[2] = {0,0};
 			read_msr(IA32_BNDCFGS, msr_values);
 			msr_values[0] &= ~((1<<12)-4);
-			write_msr(IA32_BNDCFGS, msr_values[0], msr_values[1]);
+			//write_msr(IA32_BNDCFGS, msr_values[0], msr_values[1]);
+
+			write_vmcs_field(GUEST_IA32_BNDCFGS_FULL_ENCODING, msr_values[0]);
+			write_vmcs_field(GUEST_IA32_BNDCFGS_HIGH_ENCODING, msr_values[1]);
 		}
 		else {
 			init_value = read_value & (~(1<<16));
@@ -702,6 +742,47 @@ void init_vmcs_guest_state() {
 		write_vmcs_field(GUEST_VMCS_LINK_POINTER_HIGH_ENCODING, 0xFFFFFFFF);
 	}
 
+	/*
+	 * Checks on Guest Page-Directory-Pointer-Table Entries, PDPTEs
+	 * When CRO.PE and CR0.PG are set to 1, CR4.PAE = 1, and  “IA-32e mode guest” VM-entry control is 0;
+	 * Should check PDPTEs.
+	 * This don't support IA32e arch.
+	 * */
+	read_value = read_vmcs_field(GUEST_CR0_ENCODING);
+	unsigned long read_value1 = read_vmcs_field(GUEST_CR4_ENCODING);
+	unsigned long read_value2 = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
+	if ((read_value & (1<<31)) && (read_value1 & (1<<5)) && !(read_value2 & (1<<9))) {
+		//todo Check PDPTEs.
+		/*
+		 * First need to check enable EPT control in Secondary process control.
+		 * • If the control is 0, the PDPTEs are loaded from the page-directory-pointer table referenced by the physical
+             address in the value of CR3 being loaded by the VM entry (see Section 26.3.2.1). The values loaded are treated
+             as physical addresses in VMX non-root operation.
+           • If the control is 1, the PDPTEs are loaded from corresponding fields in the guest-state area (see Section
+             24.4.2). The values loaded are treated as guest-physical addresses in VMX non-root operation.
+		 */
+	}
+	else {
+		write_vmcs_field(GUEST_CR3_ENCODING, 0x00);  /* 设值VM entry后，CR3的初始化值。 */
+	}
+
+	/* Load MSR registers from MSR fields */
+	/* Write IA32_SYSENTER CS/ESP/EIP MSR field before load */
+	write_vmcs_field(GUEST_IA32_SYSENTER_CS_ENCODING,  0x00);
+	write_vmcs_field(GUEST_IA32_SYSENTER_ESP_ENCODING, 0xA0000);  /* ESP allocate at Low 1M mem */
+	write_vmcs_field(GUEST_IA32_SYSENTER_EIP_ENCODING, 0x00);
+
+	/* 26.3.2.5 Updating Non-Register State */
+	/*
+	 *  If the “virtual-interrupt delivery” VM-execution control is 1, VM entry loads the values of RVI and SVI from the
+		guest interrupt-status field in the VMCS (see Section 24.4.2). After doing so, the logical processor first causes PPR
+		virtualization (Section 29.1.3) and then evaluates pending virtual interrupts (Section 29.2.1).
+		If a virtual interrupt is recognized, it may be delivered in VMX non-root operation immediately after VM entry
+		(including any specified event injection) completes; see Section 26.6.5. See Section 29.2.2 for details regarding
+		the delivery of virtual interrupts.
+	 * */
+
+	/* 26.4 LOADING MSRS from MSR area defined by msr-count and msr-base-addr fields */
 }
 
 void vm_entry() {
@@ -728,6 +809,10 @@ void vm_entry() {
 	 *  */
 	init_vmcs_host_state();
 	init_vmcs_guest_state();
+
+	/* Enter VM Guest software. */
+	__asm__ ("vmlaunch\n\t" \
+			 ::);
 }
 
 void quit_vmx_env() {

@@ -159,7 +159,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 
 #define GUEST_GDTR_BASE_ENCODING   0x6816
 #define GUEST_IDTR_BASE_ENCODING   0x6818
-
+#define GUEST_DR7_ENCODING    0x681A
 #define GUEST_RSP_ENCODING    0x681C
 #define GUEST_RIP_ENCODING    0x681E
 
@@ -197,10 +197,26 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define GUEST_ACTIVITY_STATE_ENCODING              0x4826
 #define GUEST_VMX_PREEMPTION_TIMER_VALUE_ENCODING  0x482E
 #define GUEST_PENDING_DEBUG_EXCEPTIONS_ENCODING    0x6822
+
+#define GUEST_IA32_SYSENTER_CS_ENCODING            0x482A
+#define GUEST_IA32_SYSENTER_ESP_ENCODING           0x6824
+#define GUEST_IA32_SYSENTER_EIP_ENCODING           0x6826
+
 #define GUEST_VMCS_LINK_POINTER_FULL_ENCODING      0x2800
 #define GUEST_VMCS_LINK_POINTER_HIGH_ENCODING      0x2801
+#define GUEST_IA32_DEBUGCTL_FULL_ENCODING          0x2802
+#define GUEST_IA32_DEBUGCTL_HIGH_ENCODING          0x2803
 
-/*========== Guest area ============*/
+#define GUEST_IA32_PAT_FULL_ENCODING               0x2804
+#define GUEST_IA32_PAT_HIGH_ENCODING               0x2805
+#define GUEST_IA32_EFER_FULL_ENCODING              0x2806
+#define GUEST_IA32_EFER_HIGH_ENCODING              0x2807
+#define GUEST_IA32_PERF_GLOBAL_CTRL_FULL_ENCODING  0x2808
+#define GUEST_IA32_PERF_GLOBAL_CTRL_HIGH_ENCODING  0x2809
+#define GUEST_IA32_BNDCFGS_FULL_ENCODING           0x2812
+#define GUEST_IA32_BNDCFGS_HIGH_ENCODING           0x2813
+
+/*========== Guest area End ============*/
 
 #define IA32_DEBUGCTL           0x1D9
 #define IA32_PERF_GLOBAL_CTRL   0x38F
