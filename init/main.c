@@ -51,7 +51,7 @@ extern void floppy_init(void);
 extern void mem_init(long start, long end);
 extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
-extern void idle_loop(void);
+void host_idle_loop(void);
 extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
@@ -230,6 +230,13 @@ unsigned long read_vmcs_field(unsigned long field_encoding) {
 	return field_value;
 }
 
+void host_idle_loop() {
+	for(;;) {
+		unsigned long vm_exit_reason = read_vmcs_field(IA32_VMX_EXIT_REASON);
+		printk("vm_exit_reason: %08x\n\r", vm_exit_reason);
+	}
+}
+
 void init_vmcs_field(unsigned long capability_msr_index, unsigned long field_encoding) {
 	unsigned long msr_values[2] = {0,};
 	read_msr(capability_msr_index,msr_values);
@@ -395,9 +402,6 @@ void init_vmcs_ctrl_fields() {
 	}
 }
 
-void field_bit_set(unsigned long field_encoding, unsigned long bit_position, unsigned long bit_value) {
-}
-
 void init_vmcs_host_state() {
 	unsigned long msr_values[2] = {0,};
 	unsigned long init_value = 0;
@@ -458,7 +462,7 @@ void init_vmcs_host_state() {
 	write_vmcs_field(HOST_RSP_ENCODING, PAGE_SIZE+(unsigned long)&init_task);
 	read_value = read_vmcs_field(HOST_RSP_ENCODING);
 	printk("Read HOST_RSP_ENCODING: %08x\n\r", read_value);
-	write_vmcs_field(HOST_RIP_ENCODING, idle_loop);
+	write_vmcs_field(HOST_RIP_ENCODING, host_idle_loop);
 	read_value = read_vmcs_field(HOST_RIP_ENCODING);
 	printk("Read HOST_RIP_ENCODING: %08x\n\r", read_value);
 
@@ -483,10 +487,21 @@ void run_guest_test_code() {
 	}
 }
 
+unsigned long support_64arch_check() {
+	unsigned long support_check = 0;
+	__asm__ ("movl $0x80000001,%%eax\n\r"  \
+			 "cpuid\n\r"                  \
+			 :"=d" (support_check):);
+	printk("edx: %08x\n\r", support_check);
+	return support_check & (1<<29);
+}
+
 void init_vmcs_guest_state() {
 	unsigned long msr_values[2] = {0,};
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
+
+	unsigned long suppport_64 = support_64arch_check();
 
 	/* Init Guest CR0 */
 	read_msr(IA32_VMX_CR0_FIXED0,msr_values);
@@ -647,37 +662,55 @@ void init_vmcs_guest_state() {
 
 	/* Init GUEST segment selector */
 	write_vmcs_field(GUEST_ES_ENCODING, 0x10);
+	printk("Read GUEST_ES_ENCODING: %04x\n\r",read_vmcs_field(GUEST_ES_ENCODING));
 	write_vmcs_field(GUEST_CS_ENCODING, 0x08);
+	printk("Read GUEST_CS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_CS_ENCODING));
 	write_vmcs_field(GUEST_SS_ENCODING, 0x10);
+	printk("Read GUEST_SS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_SS_ENCODING));
 	write_vmcs_field(GUEST_DS_ENCODING, 0x10);
+	printk("Read GUEST_DS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_DS_ENCODING));
 	write_vmcs_field(GUEST_FS_ENCODING, 0x10);
+	printk("Read GUEST_FS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_FS_ENCODING));
 	write_vmcs_field(GUEST_GS_ENCODING, 0x10);
+	printk("Read GUEST_GS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_GS_ENCODING));
 	write_vmcs_field(GUEST_LDTR_ENCODING, 0x20);
+	printk("Read GUEST_LDTR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_LDTR_ENCODING));
 	write_vmcs_field(GUEST_TR_ENCODING, 0x28);
+	printk("Read GUEST_TR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_TR_ENCODING));
 
 	/* Init base_addr for Guest segment */
 	write_vmcs_field(GUEST_ES_BASE_ENCODING, 0x00);
+	printk("Read GUEST_ES_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_ES_BASE_ENCODING));
 	write_vmcs_field(GUEST_CS_BASE_ENCODING, 0x00);
+	printk("Read GUEST_CS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_CS_BASE_ENCODING));
 	write_vmcs_field(GUEST_SS_BASE_ENCODING, 0x00);
+	printk("Read GUEST_SS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_SS_BASE_ENCODING));
 	write_vmcs_field(GUEST_DS_BASE_ENCODING, 0x00);
+	printk("Read GUEST_DS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_DS_BASE_ENCODING));
 	write_vmcs_field(GUEST_FS_BASE_ENCODING, 0x00);
+	printk("Read GUEST_FS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_FS_BASE_ENCODING));
 	write_vmcs_field(GUEST_GS_BASE_ENCODING, 0x00);
+	printk("Read GUEST_GS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GS_BASE_ENCODING));
 	write_vmcs_field(GUEST_LDTR_BASE_ENCODING, &vm_defualt_task.task.ldt);
+	printk("Read GUEST_LDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_LDTR_BASE_ENCODING));
 	write_vmcs_field(GUEST_TR_BASE_ENCODING,   &vm_defualt_task.task.tss);
+	printk("Read GUEST_TR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_TR_BASE_ENCODING));
 
 	/* Init the base_addr for Guest GDTR and IDTR registers */
 	unsigned long gdt_base_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	unsigned long idt_base_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	write_vmcs_field(GUEST_GDTR_BASE_ENCODING, gdt_base_addr);
+	printk("Read GUEST_GDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GDTR_BASE_ENCODING));
 	write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt_base_addr);
+	printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
 
 	/* Init limit for Guest segment */
-	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0xFFFF0000);
-	write_vmcs_field(GUEST_CS_LIMIT_ENCODING, 0xFFFF0000);
-	write_vmcs_field(GUEST_SS_LIMIT_ENCODING, 0xFFFF0000);
-	write_vmcs_field(GUEST_DS_LIMIT_ENCODING, 0xFFFF0000);
-	write_vmcs_field(GUEST_FS_LIMIT_ENCODING, 0xFFFF0000);
-	write_vmcs_field(GUEST_GS_LIMIT_ENCODING, 0xFFFF0000);
+	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0xFFEFF000);
+	write_vmcs_field(GUEST_CS_LIMIT_ENCODING, 0xFFEFF000);
+	write_vmcs_field(GUEST_SS_LIMIT_ENCODING, 0xFFEFF000);
+	write_vmcs_field(GUEST_DS_LIMIT_ENCODING, 0xFFEFF000);
+	write_vmcs_field(GUEST_FS_LIMIT_ENCODING, 0xFFEFF000);
+	write_vmcs_field(GUEST_GS_LIMIT_ENCODING, 0xFFEFF000);
 	write_vmcs_field(GUEST_LDTR_LIMIT_ENCODING, 0x1000);
 	write_vmcs_field(GUEST_TR_LIMIT_ENCODING,   0x1000);
 	write_vmcs_field(GUEST_GDTR_LIMIT_ENCODING, 0x1000);
@@ -690,10 +723,10 @@ void init_vmcs_guest_state() {
 	 * DPL(bits5~6).  default set to 0;
 	 * P(bit7): usable, must be 1;
 	 * Reserved(bit8~11): must be 0.
-	 * D/B(bit14): for IA-32 arch, this bit always set to 1.
+	 * D/B(bit14): for IA-32 arch, this bit always set to 1 for data and code segment, For system descriptor, always set to 0.
 	 * G(bit15) : granularity, 1: 4K, 0: byte.
-	 * — If any bit in the limit field in the range 11:0  is 0, G must be 0.
-     * — If any bit in the limit field in the range 31:20 is 1, G must be 1.
+	 * — If any bit in the limit field in the range 11:0  is 0, G must be 0.   Max limit: 0xFFE FF000, 这是针对32bit
+     * — If any bit in the limit field in the range 31:20 is 1, G must be 1.   Max limit: 0xFFF FFFFF  这是针对64bit
 	 * Unusable(bit16): 0: usable, 1 : unusable.
 	 * Reserved(bit17~31): usable flag is 1, must be 0.
 	 *
@@ -705,8 +738,8 @@ void init_vmcs_guest_state() {
 	write_vmcs_field(GUEST_FS_ACCESS_RIGHTS_ENCODING, 0x4093);
 	write_vmcs_field(GUEST_GS_ACCESS_RIGHTS_ENCODING, 0x4093);
 
-	write_vmcs_field(GUEST_TR_ACCESS_RIGHTS_ENCODING,   0x4083);
-	write_vmcs_field(GUEST_LDTR_ACCESS_RIGHTS_ENCODING, 0x4082);
+	write_vmcs_field(GUEST_TR_ACCESS_RIGHTS_ENCODING,   0x8B);
+	write_vmcs_field(GUEST_LDTR_ACCESS_RIGHTS_ENCODING, 0x82);
 
 	write_vmcs_field(GUEST_RSP_ENCODING, &user_stack[PAGE_SIZE>>2]);
 
