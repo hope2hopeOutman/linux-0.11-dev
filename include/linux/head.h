@@ -123,7 +123,9 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_ENTRY_MSR_LOAD_ADDR_HIGH_ENCODING        0x200B
 #define IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING  0x4016
 
-#define IA32_VMX_EXIT_REASON 0x4402
+#define IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING  0x4400
+#define IA32_VMX_EXIT_REASON_ENCODING           0x4402
+#define IA32_VMX_EXIT_QUALIFICATION_ENCODING    0x6400
 
 /*========== Host area =============*/
 #define HOST_CR0_ENCODING  0x6C00
@@ -138,8 +140,8 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define HOST_GS_ENCODING   0x0C0A
 #define HOST_TR_ENCODING   0x0C0C
 
-#define HOST_GDTR_ENCODING   0x6C0C
-#define HOST_IDTR_ENCODING   0x6C0E
+#define HOST_GDTR_BASE_ENCODING   0x6C0C
+#define HOST_IDTR_BASE_ENCODING   0x6C0E
 
 #define HOST_RSP_ENCODING    0x6C14
 #define HOST_RIP_ENCODING    0x6C16

@@ -76,6 +76,7 @@ __asm__ ("movw $104,%1\n\t" \
 	)
 
 #define set_tss_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x89")
+#define set_vm_guest_tss_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x8B")
 #define set_ldt_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x82")
 
  /*

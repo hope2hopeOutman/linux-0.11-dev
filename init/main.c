@@ -232,9 +232,37 @@ unsigned long read_vmcs_field(unsigned long field_encoding) {
 
 void host_idle_loop() {
 	for(;;) {
-		unsigned long vm_exit_reason = read_vmcs_field(IA32_VMX_EXIT_REASON);
-		printk("vm_exit_reason: %08x\n\r", vm_exit_reason);
+		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
+		//unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
+		unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
+		printk("exit_reason: %08x, instruction_error: %08x\n\r", vm_exit_reason, vm_instruction_error);
 	}
+}
+
+/*void guest_nested_idle_loop() {
+	__asm__ ("guest_nested_loop:\n\t"            \
+			 "xorl %%eax,%%eax\n\t"       \
+			 "nop\n\t"                    \
+			 "nop\n\t"                    \
+			 "nop\n\t"                    \
+			 "jmp guest_nested_loop\n\t"         \
+			 ::);
+}*/
+
+void guest_idle_loop() {
+	for(;;) {
+		/*unsigned long vm_instruction_error = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
+		printk("vm_instruction_error: %08x\n\r", vm_instruction_error);*/
+		printk("Finally,come to vm env.\n\r");
+	}
+/*	__asm__ ("guest_loop:\n\t"            \
+			 "xorl %%eax,%%eax\n\t"       \
+			 "nop\n\t"                    \
+			 "pushl $0x4400\n\t"          \
+			 "call read_vmcs_field\n\t"   \
+			 "call guest_nested_idle_loop\n\t"   \
+			 "jmp guest_loop\n\t"         \
+			 ::);*/
 }
 
 void init_vmcs_field(unsigned long capability_msr_index, unsigned long field_encoding) {
@@ -452,11 +480,11 @@ void init_vmcs_host_state() {
 	read_value = read_vmcs_field(HOST_TR_ENCODING);
 	printk("Read HOST_TR_ENCODING: %u\n\r", read_value);
 
-	write_vmcs_field(HOST_GDTR_ENCODING, (unsigned long)&gdt);
-	read_value = read_vmcs_field(HOST_GDTR_ENCODING);
+	write_vmcs_field(HOST_GDTR_BASE_ENCODING, (unsigned long)&gdt);
+	read_value = read_vmcs_field(HOST_GDTR_BASE_ENCODING);
 	printk("Read HOST_GDTR_ENCODING: %08x\n\r", read_value);
-	write_vmcs_field(HOST_IDTR_ENCODING, (unsigned long)&idt);
-	read_value = read_vmcs_field(HOST_IDTR_ENCODING);
+	write_vmcs_field(HOST_IDTR_BASE_ENCODING, (unsigned long)&idt);
+	read_value = read_vmcs_field(HOST_IDTR_BASE_ENCODING);
 	printk("Read HOST_IDTR_ENCODING: %08x\n\r", read_value);
 
 	write_vmcs_field(HOST_RSP_ENCODING, PAGE_SIZE+(unsigned long)&init_task);
@@ -530,9 +558,9 @@ void init_vmcs_guest_state() {
 
 	/* Check whether support debug, configured in VM-Entry Controls. */
 	if (read_value & (1<<2)) { /* Load debug controls whether has been set. */
-		if (0) {
+		if (1) {
 			/* Reserved bits: 2~5, 16~63, should set to 0. */
-			write_msr(IA32_DEBUGCTL,0xFFC3,0);
+			//write_msr(IA32_DEBUGCTL,0xFFC3,0);
 			/*
 			 * If the “load debug controls” VM-entry control is 1, DR7 is loaded from the DR7 field with the exception that
              * bit 12 and bits 15:14 are always 0 and bit 10 is always 1. The values of these bits in the DR7 field are ignored.
@@ -673,10 +701,11 @@ void init_vmcs_guest_state() {
 	printk("Read GUEST_FS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_FS_ENCODING));
 	write_vmcs_field(GUEST_GS_ENCODING, 0x10);
 	printk("Read GUEST_GS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_GS_ENCODING));
-	write_vmcs_field(GUEST_LDTR_ENCODING, 0x20);
-	printk("Read GUEST_LDTR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_LDTR_ENCODING));
-	write_vmcs_field(GUEST_TR_ENCODING, 0x28);
+	write_vmcs_field(GUEST_TR_ENCODING, 0x20);
 	printk("Read GUEST_TR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_TR_ENCODING));
+	write_vmcs_field(GUEST_LDTR_ENCODING, 0x28);
+	printk("Read GUEST_LDTR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_LDTR_ENCODING));
+
 
 	/* Init base_addr for Guest segment */
 	write_vmcs_field(GUEST_ES_BASE_ENCODING, 0x00);
@@ -691,26 +720,43 @@ void init_vmcs_guest_state() {
 	printk("Read GUEST_FS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_FS_BASE_ENCODING));
 	write_vmcs_field(GUEST_GS_BASE_ENCODING, 0x00);
 	printk("Read GUEST_GS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GS_BASE_ENCODING));
-	write_vmcs_field(GUEST_LDTR_BASE_ENCODING, &vm_defualt_task.task.ldt);
+	//write_vmcs_field(GUEST_LDTR_BASE_ENCODING, &vm_defualt_task.task.ldt);
+	unsigned long ldt_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+	write_vmcs_field(GUEST_LDTR_BASE_ENCODING, ldt_addr);
 	printk("Read GUEST_LDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_LDTR_BASE_ENCODING));
-	write_vmcs_field(GUEST_TR_BASE_ENCODING,   &vm_defualt_task.task.tss);
+	//write_vmcs_field(GUEST_TR_BASE_ENCODING, &vm_defualt_task.task.tss);
+	unsigned long tr_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+	write_vmcs_field(GUEST_TR_BASE_ENCODING, tr_addr);
 	printk("Read GUEST_TR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_TR_BASE_ENCODING));
 
 	/* Init the base_addr for Guest GDTR and IDTR registers */
 	unsigned long gdt_base_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	unsigned long idt_base_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+
+	/* Init guest GDT */
+	*((unsigned long *) (gdt_base_addr+8))  = 0x0000FFFF;  /* CS, base(16 bits):limit(16 bits)*/
+	*((unsigned long *) (gdt_base_addr+12)) = 0x00C39B00;  /* CS, base(8 bits):type(16 bits):base(8 bits) */
+
+	*((unsigned long *) (gdt_base_addr+16)) = 0x0000FFFF;  /* DS, base(16 bits):limit(16 bits)*/
+	*((unsigned long *) (gdt_base_addr+20)) = 0x00C39300;  /* DS, base(8 bits):type(16 bits):base(8 bits) */
+
+	set_vm_guest_tss_desc(gdt_base_addr+32, tr_addr);
+	set_ldt_desc(gdt_base_addr+40, ldt_addr);
+	_set_limit((char*)(gdt_base_addr+32), 0x1000);
+	_set_limit((char *)(gdt_base_addr+40), 0x1000);
+
 	write_vmcs_field(GUEST_GDTR_BASE_ENCODING, gdt_base_addr);
 	printk("Read GUEST_GDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GDTR_BASE_ENCODING));
 	write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt_base_addr);
 	printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
 
 	/* Init limit for Guest segment */
-	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0xFFEFF000);
-	write_vmcs_field(GUEST_CS_LIMIT_ENCODING, 0xFFEFF000);
-	write_vmcs_field(GUEST_SS_LIMIT_ENCODING, 0xFFEFF000);
-	write_vmcs_field(GUEST_DS_LIMIT_ENCODING, 0xFFEFF000);
-	write_vmcs_field(GUEST_FS_LIMIT_ENCODING, 0xFFEFF000);
-	write_vmcs_field(GUEST_GS_LIMIT_ENCODING, 0xFFEFF000);
+	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0xFFF3FFFF);
+	write_vmcs_field(GUEST_CS_LIMIT_ENCODING, 0xFFF3FFFF);
+	write_vmcs_field(GUEST_SS_LIMIT_ENCODING, 0xFFF3FFFF);
+	write_vmcs_field(GUEST_DS_LIMIT_ENCODING, 0xFFF3FFFF);
+	write_vmcs_field(GUEST_FS_LIMIT_ENCODING, 0xFFF3FFFF);
+	write_vmcs_field(GUEST_GS_LIMIT_ENCODING, 0xFFF3FFFF);
 	write_vmcs_field(GUEST_LDTR_LIMIT_ENCODING, 0x1000);
 	write_vmcs_field(GUEST_TR_LIMIT_ENCODING,   0x1000);
 	write_vmcs_field(GUEST_GDTR_LIMIT_ENCODING, 0x1000);
@@ -731,17 +777,18 @@ void init_vmcs_guest_state() {
 	 * Reserved(bit17~31): usable flag is 1, must be 0.
 	 *
 	 * */
-	write_vmcs_field(GUEST_ES_ACCESS_RIGHTS_ENCODING, 0x4093);
-	write_vmcs_field(GUEST_CS_ACCESS_RIGHTS_ENCODING, 0x409B);
-	write_vmcs_field(GUEST_SS_ACCESS_RIGHTS_ENCODING, 0x4093);
-	write_vmcs_field(GUEST_DS_ACCESS_RIGHTS_ENCODING, 0x4093);
-	write_vmcs_field(GUEST_FS_ACCESS_RIGHTS_ENCODING, 0x4093);
-	write_vmcs_field(GUEST_GS_ACCESS_RIGHTS_ENCODING, 0x4093);
+	write_vmcs_field(GUEST_ES_ACCESS_RIGHTS_ENCODING, 0xC093);
+	write_vmcs_field(GUEST_CS_ACCESS_RIGHTS_ENCODING, 0xC09B);
+	write_vmcs_field(GUEST_SS_ACCESS_RIGHTS_ENCODING, 0xC093);
+	write_vmcs_field(GUEST_DS_ACCESS_RIGHTS_ENCODING, 0xC093);
+	write_vmcs_field(GUEST_FS_ACCESS_RIGHTS_ENCODING, 0xC093);
+	write_vmcs_field(GUEST_GS_ACCESS_RIGHTS_ENCODING, 0xC093);
 
-	write_vmcs_field(GUEST_TR_ACCESS_RIGHTS_ENCODING,   0x8B);
 	write_vmcs_field(GUEST_LDTR_ACCESS_RIGHTS_ENCODING, 0x82);
+	write_vmcs_field(GUEST_TR_ACCESS_RIGHTS_ENCODING,   0x8B);
 
 	write_vmcs_field(GUEST_RSP_ENCODING, &user_stack[PAGE_SIZE>>2]);
+	write_vmcs_field(GUEST_RIP_ENCODING, guest_idle_loop);
 
 	read_value = read_vmcs_field(IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING);
 	/*
@@ -822,7 +869,7 @@ void vm_entry() {
 	unsigned long vmcs_addr = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);
 	vmcs_region_address.address[0] = vmcs_addr;
 	*((unsigned long*)vmcs_addr) = *((unsigned long *)vmxon_region_address.address[0]);
-	__asm__ ("vmclear %0\n\t"    \
+	__asm__ (/*"vmclear %0\n\t"    \ */
 			 "vmptrld %0\n\t"    \
 			 ::"m" (*(&vmcs_region_address)));
 	init_vmcs_ctrl_fields();
