@@ -240,6 +240,7 @@ void host_idle_loop() {
 }
 
 void guest_idle_loop() {
+	printk("VM-entry success and come to guest env.\n\r");
 	__asm__ ("guest_loop:\n\t"            \
 			 "xorl %%eax,%%eax\n\t"       \
 			 "nop\n\t"                    \

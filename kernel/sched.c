@@ -85,17 +85,21 @@ struct {
 	short b;
 	} stack_start = {&user_stack[PAGE_SIZE>>2] , 0x10};
 
-/* 获取当前processor正在运行的任务 */
+/*
+ * 获取当前processor正在运行的任务
+ */
 unsigned long get_current_apic_id(){
 	register unsigned long apic_id asm("ebx");
+	/* 在Guest VM 环境下，执行cpuid指令会导致vm-exit，所以这里要判断当前的执行环境是否在VM环境。todo feature. */
 	__asm__ ("movl $0x01,%%eax\n\t" \
 			 "cpuid\n\t" \
 			 "shr $24,%%ebx\n\t" \
 			 :"=b" (apic_id):
 			);
-	if (apic_id > 0) {
-		//printk("apic_id = %d\n\r", apic_id);
-	}
+
+	/*if (apic_id > 0) {
+		printk("apic_id = %d\n\r", apic_id);
+	}*/
 	return apic_id;
 }
 
