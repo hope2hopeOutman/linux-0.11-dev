@@ -140,8 +140,15 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define HOST_GS_ENCODING   0x0C0A
 #define HOST_TR_ENCODING   0x0C0C
 
+#define HOST_FS_BASE_ENCODING     0x6C06
+#define HOST_GS_BASE_ENCODING     0x6C08
+#define HOST_TR_BASE_ENCODING     0x6C0A
 #define HOST_GDTR_BASE_ENCODING   0x6C0C
 #define HOST_IDTR_BASE_ENCODING   0x6C0E
+
+#define HOST_IA32_SYSENTER_CS_ENCODING   0x4C00
+#define HOST_IA32_SYSENTER_ESP_ENCODING  0x6C10
+#define HOST_IA32_SYSENTER_EIP_ENCODING  0x6C12
 
 #define HOST_RSP_ENCODING    0x6C14
 #define HOST_RIP_ENCODING    0x6C16

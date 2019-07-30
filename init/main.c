@@ -56,7 +56,7 @@ extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
-extern long* user_stack;
+extern long user_stack[PAGE_SIZE>>2];
 extern union task_union init_task;
 extern union task_union vm_defualt_task;
 
@@ -239,30 +239,12 @@ void host_idle_loop() {
 	}
 }
 
-/*void guest_nested_idle_loop() {
-	__asm__ ("guest_nested_loop:\n\t"            \
-			 "xorl %%eax,%%eax\n\t"       \
-			 "nop\n\t"                    \
-			 "nop\n\t"                    \
-			 "nop\n\t"                    \
-			 "jmp guest_nested_loop\n\t"         \
-			 ::);
-}*/
-
 void guest_idle_loop() {
-	for(;;) {
-		/*unsigned long vm_instruction_error = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
-		printk("vm_instruction_error: %08x\n\r", vm_instruction_error);*/
-		printk("Finally,come to vm env.\n\r");
-	}
-/*	__asm__ ("guest_loop:\n\t"            \
+	__asm__ ("guest_loop:\n\t"            \
 			 "xorl %%eax,%%eax\n\t"       \
 			 "nop\n\t"                    \
-			 "pushl $0x4400\n\t"          \
-			 "call read_vmcs_field\n\t"   \
-			 "call guest_nested_idle_loop\n\t"   \
 			 "jmp guest_loop\n\t"         \
-			 ::);*/
+			 ::);
 }
 
 void init_vmcs_field(unsigned long capability_msr_index, unsigned long field_encoding) {
@@ -430,6 +412,10 @@ void init_vmcs_ctrl_fields() {
 	}
 }
 
+void ia32_sysenter() {
+	printk("Come to sysenter env.\n\r");
+}
+
 void init_vmcs_host_state() {
 	unsigned long msr_values[2] = {0,};
 	unsigned long init_value = 0;
@@ -476,9 +462,17 @@ void init_vmcs_host_state() {
 	write_vmcs_field(HOST_GS_ENCODING, 0x10);
 	read_value = read_vmcs_field(HOST_GS_ENCODING);
 	printk("Read HOST_GS_ENCODING: %u\n\r", read_value);
-    write_vmcs_field(HOST_TR_ENCODING, 0x28);
+    write_vmcs_field(HOST_TR_ENCODING, 0x20);
 	read_value = read_vmcs_field(HOST_TR_ENCODING);
 	printk("Read HOST_TR_ENCODING: %u\n\r", read_value);
+
+	write_vmcs_field(HOST_FS_BASE_ENCODING, 0x00);
+	write_vmcs_field(HOST_GS_BASE_ENCODING, 0x00);
+	write_vmcs_field(HOST_TR_BASE_ENCODING, &(init_task.task.tss));
+
+	write_vmcs_field(HOST_IA32_SYSENTER_CS_ENCODING,  0x08);
+	write_vmcs_field(HOST_IA32_SYSENTER_ESP_ENCODING, 0xA0000);
+	write_vmcs_field(HOST_IA32_SYSENTER_EIP_ENCODING, ia32_sysenter);
 
 	write_vmcs_field(HOST_GDTR_BASE_ENCODING, (unsigned long)&gdt);
 	read_value = read_vmcs_field(HOST_GDTR_BASE_ENCODING);
@@ -506,12 +500,6 @@ void init_vmcs_host_state() {
 	}
 	else {
 		panic("Now can not support 64-arch.");
-	}
-}
-
-void run_guest_test_code() {
-	for (;;) {
-		printk("Start to run guest code now\n\r");
 	}
 }
 
@@ -751,12 +739,12 @@ void init_vmcs_guest_state() {
 	printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
 
 	/* Init limit for Guest segment */
-	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0xFFF3FFFF);
-	write_vmcs_field(GUEST_CS_LIMIT_ENCODING, 0xFFF3FFFF);
-	write_vmcs_field(GUEST_SS_LIMIT_ENCODING, 0xFFF3FFFF);
-	write_vmcs_field(GUEST_DS_LIMIT_ENCODING, 0xFFF3FFFF);
-	write_vmcs_field(GUEST_FS_LIMIT_ENCODING, 0xFFF3FFFF);
-	write_vmcs_field(GUEST_GS_LIMIT_ENCODING, 0xFFF3FFFF);
+	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0x3FFFFFFF);
+	write_vmcs_field(GUEST_CS_LIMIT_ENCODING, 0x3FFFFFFF);
+	write_vmcs_field(GUEST_SS_LIMIT_ENCODING, 0x3FFFFFFF);
+	write_vmcs_field(GUEST_DS_LIMIT_ENCODING, 0x3FFFFFFF);
+	write_vmcs_field(GUEST_FS_LIMIT_ENCODING, 0x3FFFFFFF);
+	write_vmcs_field(GUEST_GS_LIMIT_ENCODING, 0x3FFFFFFF);
 	write_vmcs_field(GUEST_LDTR_LIMIT_ENCODING, 0x1000);
 	write_vmcs_field(GUEST_TR_LIMIT_ENCODING,   0x1000);
 	write_vmcs_field(GUEST_GDTR_LIMIT_ENCODING, 0x1000);
@@ -771,8 +759,8 @@ void init_vmcs_guest_state() {
 	 * Reserved(bit8~11): must be 0.
 	 * D/B(bit14): for IA-32 arch, this bit always set to 1 for data and code segment, For system descriptor, always set to 0.
 	 * G(bit15) : granularity, 1: 4K, 0: byte.
-	 * — If any bit in the limit field in the range 11:0  is 0, G must be 0.   Max limit: 0xFFE FF000, 这是针对32bit
-     * — If any bit in the limit field in the range 31:20 is 1, G must be 1.   Max limit: 0xFFF FFFFF  这是针对64bit
+	 * — If any bit in the limit field in the range 11:0  is 0, G must be 0.   Max limit: 0xFFFFFFFF
+     * — If any bit in the limit field in the range 31:20 is 1, G must be 1.   Max limit: 0xFFFFFFFF
 	 * Unusable(bit16): 0: usable, 1 : unusable.
 	 * Reserved(bit17~31): usable flag is 1, must be 0.
 	 *
@@ -848,9 +836,9 @@ void init_vmcs_guest_state() {
 
 	/* Load MSR registers from MSR fields */
 	/* Write IA32_SYSENTER CS/ESP/EIP MSR field before load */
-	write_vmcs_field(GUEST_IA32_SYSENTER_CS_ENCODING,  0x00);
+	write_vmcs_field(GUEST_IA32_SYSENTER_CS_ENCODING,  0x08);
 	write_vmcs_field(GUEST_IA32_SYSENTER_ESP_ENCODING, 0xA0000);  /* ESP allocate at Low 1M mem */
-	write_vmcs_field(GUEST_IA32_SYSENTER_EIP_ENCODING, 0x00);
+	write_vmcs_field(GUEST_IA32_SYSENTER_EIP_ENCODING, ia32_sysenter);
 
 	/* 26.3.2.5 Updating Non-Register State */
 	/*
@@ -886,13 +874,40 @@ void vm_entry() {
 	 *    相应的的guest state
 	 * 4. 执行vm resume操作，这时进入VM，执行的就是新任务了，从而达到任务切换的目的。
 	 * 5. 在相同的processor上，执行vm resume操作很快，如果将新任务分配到其他processor模拟执行的话，代价就太大了。
+	 *
+	 * 经过验证如下：
+	 * 1. CS，DS等段寄存器的各个field(base,limit,access-right),最后组成的段描述符必须和GDT表中相应的CS或DS描述符一致。
+	 * 2. 如果不一致的话check guest state就会有问题，会做vm-exit处理。
+	 * 3. 之前就是没有configure GDT表中的描述符项，以为VMLAUCH命令会根据base,limit,access-right fields的值以及段选择符，自动更新到GDT表对应的描述符项中;
+	 *    事实证明是我想多了O(∩_∩)O哈哈~，所以每次执行vmlaunch命令会报错并执行vm-exit,
+	 *    并在exit reason field中存储80000021(bit31=1: vmlaunch failure, 0x21: failed on check and load guest state ).
 	 *  */
 	init_vmcs_host_state();
 	init_vmcs_guest_state();
 
-	/* Enter VM Guest software. */
-	__asm__ ("vmlaunch\n\t" \
+	/*
+	 * Enter VM Guest software.
+	 * 注意：vmlaunch这个命令执行的时候如果出错的话，其后续的处理方式有两种。
+	 * 1. 将控制直接转移到这条指令的下一条指令处，继续执行,实在VMM(root)状态下执行的。(check on vm-control and host state)
+	 *    VM Entries”. Failure to pass checks on the VMX controls or on the host-state area passes control to the instruction
+     *    following the VMLAUNCH or VMRESUME instruction.
+	 *
+	 * 2. 被看作是vm_exit退出，这时会保存guest_state, load host_state，执行host_state中定义好的RIP处执行。（check and load guest-state）
+	 *    If these pass but checks on the guest-state area fail, the logical processor loads state from the host-state area of the VMCS,
+	 *    passing control to the instruction referenced by the RIP field in the host-state area.
+	 */
+	__asm__ ("vmlaunch\n\t"              \
+			 "ctl_passthrough_ip:\n\t"   \
+			 "xor %%eax,%%eax\n\t"       \
+			 "nop\n\t"                   \
+			 "nop\n\t"                   \
+			 "nop\n\t"                   \
 			 ::);
+
+	unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
+	//unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
+	unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
+	printk("exit_reason: %08x, instruction_error: %08x\n\r", vm_exit_reason, vm_instruction_error);
 }
 
 void quit_vmx_env() {
