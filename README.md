@@ -165,6 +165,9 @@ Mainly study linux system and try to refact it for practice.
     
     下面终于可以开始VMX了，不过要先把OS迁到qemu，bochs不支持VMX (Nested VM).
     
+    7.1 vm-entry
+    终于初始化完VMCS了，成功运行vmlaunch并进入vm了。
+    
     
            
 				 
