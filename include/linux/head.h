@@ -22,6 +22,7 @@ struct apic_info {
 	 */
 	unsigned long load_per_apic;
 	struct task_struct *current;
+	unsigned long vm_entry_flag;  /* 1: have entered non-root vm env, 0: host env (VMM) */
 };
 
 //extern unsigned long pg_dir[1024];

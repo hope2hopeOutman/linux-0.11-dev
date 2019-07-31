@@ -896,7 +896,19 @@ void vm_entry() {
 	 * 2. 被看作是vm_exit退出，这时会保存guest_state, load host_state，执行host_state中定义好的RIP处执行。（check and load guest-state）
 	 *    If these pass but checks on the guest-state area fail, the logical processor loads state from the host-state area of the VMCS,
 	 *    passing control to the instruction referenced by the RIP field in the host-state area.
+	 *
+	 * 3. 在执行vmlaunch操作之前要将apic_id的值，放置到guest GDT表的第一项中（第一项默认不使用），因为VM环境下不能运行cpuid指令获取apic_id,
+	 *    这样当vmlauch加载guest statue成功并进入vm state后，我们就可以通过访问GDT表的第一项内容获取apic_id了。
+	 *    而且当vm-exit后进入host vmm状态后，会加载host state,这时GDTR存储的是host GDT表基地址，所以这时GDT表的第一项内容是空的，通过此方法
+	 *    不仅可以在VM状态下获取当前processor的apic_id,而且还可以判断当前processor是否处于VM状态， 太秒了O(∩_∩)O哈哈哈~
 	 */
+
+	unsigned long apic_id = get_current_apic_id();
+	unsigned long* guest_gdt_base = (unsigned long* ) read_vmcs_field(GUEST_GDTR_BASE_ENCODING);
+	/* 注意：因为BSP的apic_id=0, 所以要加一个标志位来判定是否处于vm state,这里设置bit31为标示位。 */
+	apic_id |= (1<<31);
+	*guest_gdt_base = apic_id;
+
 	__asm__ ("vmlaunch\n\t"              \
 			 "ctl_passthrough_ip:\n\t"   \
 			 "xor %%eax,%%eax\n\t"       \
@@ -1384,12 +1396,11 @@ void main(void)		/* This really IS void, no error here. */
 	buffer_init(buffer_memory_end);
 	hd_init();
 	floppy_init();
-	//printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
+	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	//init_ap();
 	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
 	//get_cpu_topology_info();
-	//vmx_capability_verify();
 	vmx_env_entry();
 	sti();
 	move_to_user_mode();

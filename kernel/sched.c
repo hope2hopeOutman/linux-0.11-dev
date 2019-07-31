@@ -90,16 +90,25 @@ struct {
  */
 unsigned long get_current_apic_id(){
 	register unsigned long apic_id asm("ebx");
-	/* 在Guest VM 环境下，执行cpuid指令会导致vm-exit，所以这里要判断当前的执行环境是否在VM环境。todo feature. */
-	__asm__ ("movl $0x01,%%eax\n\t" \
-			 "cpuid\n\t" \
-			 "shr $24,%%ebx\n\t" \
-			 :"=b" (apic_id):
+	unsigned char gdt_base[8] = {0,}; /* 16-bit limit stored in low two bytes, and gdt_base stored in high 4bytes. */
+	/*
+	 * 在Guest VM 环境下，执行cpuid指令会导致vm-exit，所以这里要判断当前的执行环境是否在VM环境.
+	 * 实现思路：我们知道在VM环境下，已经为GDT表分配了4K空间，且GDT表的首8字节是不用的，这里利用8个字节存储vm-entry环境下的apic_id.
+	 */
+	__asm__ ("sgdt %1\n\t"              \
+			 "movl %2,%%eax\n\t"        \
+			 "movl 0(%%eax),%%ebx\n\t"  \
+			 "cmpl $0x00,%%ebx\n\t"     \
+			 "jne truncate_flag\n\t"    \
+			 "movl $0x01,%%eax\n\t"     \
+			 "cpuid\n\t"                \
+			 "shr $24,%%ebx\n\t"        \
+			 "jmp output\n\t"           \
+			 "truncate_flag:\n\t"       \
+			 "andl $0xFF,%%ebx\n\t" /* 这里假设最多有255个processor */  \
+			 "output:\n\t"              \
+			 :"=b" (apic_id) :"m" (*gdt_base),"m" (*(char*)(gdt_base+2))
 			);
-
-	/*if (apic_id > 0) {
-		printk("apic_id = %d\n\r", apic_id);
-	}*/
 	return apic_id;
 }
 
