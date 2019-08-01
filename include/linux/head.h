@@ -91,6 +91,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_BASIC                0x480
 #define IA32_VMX_PINBASED_CTLS        0x481
 #define IA32_VMX_PROCBASED_CTLS       0x482
+#define IA32_VMX_PROCBASED_CTLS2      0x48B
 #define IA32_VMX_EXIT_CTLS            0x483
 #define IA32_VMX_ENTRY_CTLS           0x484
 #define IA32_VMX_CR0_FIXED0           0x486
@@ -104,8 +105,22 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_FEATURE_CONTROL          0x3A
 #define IA32_VMX_MISC                 0x485
 
+#define IA32_VMX_POSTED_INTERRUPT_NOTIFICATION_VECTOR_ENCODING   0x0002
+#define IA32_VMX_MSR_BITMAPS_ADDR_FULL_ENCODING                  0x2004
+#define IA32_VMX_MSR_BITMAPS_ADDR_HIGH_ENCODING                  0x2005
+#define IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING                 0x2012
+#define IA32_VMX_VIRTUAL_APIC_ADDR_HIGH_ENCODING                 0x2013
+#define IA32_VMX_APIC_ACCESS_ADDR_FULL_ENCODING                  0x2014
+#define IA32_VMX_APIC_ACCESS_ADDR_HIGH_ENCODING                  0x2015
+#define IA32_VMX_POSTED_INTERRUPT_DESCRIPTOR_ADDR_FULL_ENCODING  0x2016
+#define IA32_VMX_POSTED_INTERRUPT_DESCRIPTOR_ADDR_HIGH_ENCODING  0x2017
+
+#define IA32_VMX_VMCS_LINK_POINTER_FULL_ENCODING    0x2800
+#define IA32_VMX_VMCS_LINK_POINTER_HIGH_ENCODING    0x2801
+
 #define IA32_VMX_PINBASED_CTLS_ENCODING             0x4000
 #define IA32_VMX_PROCBASED_CTLS_ENCODING            0x4002
+#define IA32_VMX_TPR_THRESHOLD_ENCODING             0x401C
 #define IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING  0x401E
 #define IA32_VMX_CR3_TARGET_COUNT_ENCODING          0x400A
 

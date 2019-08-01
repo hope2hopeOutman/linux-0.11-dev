@@ -277,16 +277,91 @@ void init_vmcs_procbased_ctls() {
 	unsigned long msr_values[2] = {0,};
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
+	/* Using algorithm 3 to init. */
 	read_msr(IA32_VMX_PROCBASED_CTLS,msr_values);
 	printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_PROCBASED_CTLS,msr_values);
 	printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value |= (msr_values[0] & msr_values[1]);
+	init_value |= (1<<31);  /* Activate secondary processor controls */
+	init_value |= (1<<21);  /* Enable Use_TPR_shadow */
 	write_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
 	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
-	/* todo turn on secondary process-control and virtual-APIC */
+
+	/* Init secondary process-controls and turn on virtual-APIC */
+	if (init_value & (1<<31)) {
+		unsigned long backup_value = init_value;
+		read_msr(IA32_VMX_PROCBASED_CTLS2,msr_values);
+		printk("IA32_VMX_PROCBASED_CTLS2: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+		init_value = (msr_values[0] & msr_values[1]);
+		/*
+		 * If the “use TPR shadow” VM-execution control is 0, the following VM-execution controls must also be 0:
+         * “virtualize x2APIC mode”, “APIC-register virtualization”, and “virtual-interrupt delivery”.
+         */
+		if (backup_value & (1<<21)) {
+			init_value |= (1<<8);      /* Enable APIC-register virtualization    */
+			init_value |= (1<<9);      /* Enable Virtual-interrupt delivery      */
+		}
+		else {
+			init_value &= (~(1<<4));   /* Disable virtualize x2APIC mode          */
+			init_value &= (~(1<<8));   /* Disable APIC-register virtualization    */
+			init_value &= (~(1<<9));   /* Disable Virtual-interrupt delivery      */
+		}
+
+		/*
+		 * If the “virtual-interrupt delivery” VM-execution control is 1,
+		 * the “external-interrupt exiting” VM-execution control must be 1.
+         */
+		if (init_value & (1<<9)) {
+			read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
+			read_value |= 1;       /* Enable External-interrupt exiting */
+			write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, read_value);
+			read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
+			printk("IA32_VMX_PINBASED_CTLS_ENCODING(%08x)\n\r", read_value);
+		}
+
+		/* If the “process posted interrupts” VM-execution control is 1, the following must be true:1
+			— The “virtual-interrupt delivery” VM-execution control is 1.
+			— The “acknowledge interrupt on exit” VM-exit control is 1.  This check will handle in method (init_vmcs_exit_ctrl_fields)
+			— The posted-interrupt notification vector has a value in the range 0–255 (bits 15:8 are all 0).
+			— Bits 5:0 of the posted-interrupt descriptor address are all 0.
+			— The posted-interrupt descriptor address does not set any bits beyond the processor's physical-address	width.
+		*/
+		read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
+		if (read_value & (1<<7)) {
+			init_value |= (1<<9);      /* Enable Virtual-interrupt delivery      */
+			read_value = read_vmcs_field(IA32_VMX_POSTED_INTERRUPT_NOTIFICATION_VECTOR_ENCODING);
+			if (read_value > 255) {
+				panic("Posted-interrupt notification vector has a value greater than the range 0–255");
+			}
+			read_value = read_vmcs_field(IA32_VMX_POSTED_INTERRUPT_DESCRIPTOR_ADDR_FULL_ENCODING);
+			if (read_value & 0x3F) {
+				panic("Bits 5:0 of the posted-interrupt descriptor address are not all 0.");
+			}
+		}
+
+		init_value |= (1<<0);      /* Enable Virtualize APIC accesses */
+		init_value |= (1<<14);     /* Enable VMCS shadowing           */
+
+		/*
+		 * If the “VMCS shadowing” VM-execution control is 1, the VMREAD-bitmap and VMWRITE-bitmap addresses
+			must each satisfy the following checks:1
+			— Bits 11:0 of the address must be 0.  4K aligned.
+			— The address must not set any bits beyond the processor’s physical-address width.
+	    */
+		if (init_value & (1<<14)) {
+			read_value = read_vmcs_field(IA32_VMX_MSR_BITMAPS_ADDR_FULL_ENCODING);
+			if (read_value & 0x0FFF) {
+				panic("Bits 11:0 of the MSR_bitmaps address must be 0");
+			}
+		}
+
+		write_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING, init_value);
+		read_value = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
+		printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	}
 }
 
 /************* Check CR3-count whether exceed the maximum limit. **************/
@@ -349,6 +424,14 @@ void init_vmcs_exit_ctrl_fields() {
 		if (base_addr) {
 			panic("The lower 4 bits of IA32_VMX_EXIT_MSR_LOAD_ADDR should be 0. ");
 		}
+	}
+
+	/* If the “process posted interrupts” VM-execution control is 1, the following must be true:1
+		— The “acknowledge interrupt on exit” VM-exit control is 1.  This check will handle in method (init_vmcs_exit_ctrl_fields)
+	*/
+	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
+	if (read_value & (1<<7)) {
+		init_value |= (1<<15);   /* Enable Acknowledge interrupt on exit */
 	}
 
 	write_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING, init_value);
@@ -852,6 +935,18 @@ void init_vmcs_guest_state() {
 	 * */
 
 	/* 26.4 LOADING MSRS from MSR area defined by msr-count and msr-base-addr fields */
+
+	/*
+	 * 26.3.1.5 Checks on Guest Non-Register State
+	 * Init VMCS link pointer
+	 */
+	read_value = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
+	if (read_value & (1<<14)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		/* 设置VMVS show 的revision且bit31=1,type=shadow. */
+		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_FULL_ENCODING, *((unsigned long*)vmcs_region_address[0]) | (1<<31));
+		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_HIGH_ENCODING, addr);
+	}
 }
 
 void vm_entry() {
