@@ -296,6 +296,17 @@ void init_vmcs_procbased_ctls() {
 		read_msr(IA32_VMX_PROCBASED_CTLS2,msr_values);
 		printk("IA32_VMX_PROCBASED_CTLS2: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 		init_value = (msr_values[0] & msr_values[1]);
+
+		init_value |= (1<<0);      /* Enable Virtualize APIC accesses */
+		init_value |= (1<<14);     /* Enable VMCS shadowing           */
+
+		/* Virtualize APIC accesses has been enabled. */
+		if (init_value & (1<<0)) {
+			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			write_vmcs_field(IA32_VMX_APIC_ACCESS_ADDR_FULL_ENCODING, addr);
+			write_vmcs_field(IA32_VMX_APIC_ACCESS_ADDR_FULL_ENCODING, 0x00);
+		}
+
 		/*
 		 * If the “use TPR shadow” VM-execution control is 0, the following VM-execution controls must also be 0:
          * “virtualize x2APIC mode”, “APIC-register virtualization”, and “virtual-interrupt delivery”.
@@ -303,6 +314,47 @@ void init_vmcs_procbased_ctls() {
 		if (backup_value & (1<<21)) {
 			init_value |= (1<<8);      /* Enable APIC-register virtualization    */
 			init_value |= (1<<9);      /* Enable Virtual-interrupt delivery      */
+
+			/*
+			 * If the “use TPR shadow” VM-execution control is 1, the virtual-APIC address must satisfy the following checks:
+               — Bits 11:0 of the address must be 0.
+               — The address should not set any bits beyond the processor’s physical-address width.
+			 */
+			if (init_value & (1<<8)) {
+				unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING, addr);
+				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_HIGH_ENCODING, 0x00);
+			}
+			else {
+				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING, 0x00);
+				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_HIGH_ENCODING, 0x00);
+			}
+
+			/*
+			 * If the “use TPR shadow” VM-execution control is 1 and the “virtual-interrupt delivery” VM-execution control is
+               0, bits 31:4 of the TPR threshold VM-execution control field must be 0
+             */
+			if (!(init_value & (1<<9))) {
+				read_value = read_vmcs_field(IA32_VMX_TPR_THRESHOLD_ENCODING);
+				write_vmcs_field(IA32_VMX_TPR_THRESHOLD_ENCODING, read_value & 0x000F);
+			}
+
+			/*
+			 *  The following check is performed if the “use TPR shadow” VM-execution control is 1 and the “virtualize APIC
+			    accesses” and “virtual-interrupt delivery” VM-execution controls are both 0: the value of bits 3:0 of the TPR
+				threshold VM-execution control field should not be greater than the value of bits 7:4 of VTPR (see Section 29.1.1).
+			 */
+			if (!(init_value & (1<<0)) && !(init_value & (1<<9))) {
+				unsigned long tpr_threshold = read_vmcs_field(IA32_VMX_TPR_THRESHOLD_ENCODING);
+				if (init_value & (1<<8)) { /* Enabled apic registers, so have been allocate a page for it. */
+					unsigned long addr = read_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING);
+					unsigned long vtpr_value = *((unsigned long*)addr + 32); /* VTPR offset is 0x80 at APIC-PAGE */
+					if ((tpr_threshold & 0xF) > ((vtpr_value>>4) & 0xF)) {
+						panic("the value of bits 3:0 of the TPR	threshold VM-execution control field should not greater than the value of bits 7:4 of VTPR");
+					}
+				}
+			}
+
 		}
 		else {
 			init_value &= (~(1<<4));   /* Disable virtualize x2APIC mode          */
@@ -342,12 +394,9 @@ void init_vmcs_procbased_ctls() {
 			}
 		}
 
-		init_value |= (1<<0);      /* Enable Virtualize APIC accesses */
-		init_value |= (1<<14);     /* Enable VMCS shadowing           */
-
 		/*
 		 * If the “VMCS shadowing” VM-execution control is 1, the VMREAD-bitmap and VMWRITE-bitmap addresses
-			must each satisfy the following checks:1
+			must each satisfy the following checks:
 			— Bits 11:0 of the address must be 0.  4K aligned.
 			— The address must not set any bits beyond the processor’s physical-address width.
 	    */
@@ -943,9 +992,12 @@ void init_vmcs_guest_state() {
 	read_value = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
 	if (read_value & (1<<14)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-		/* 设置VMVS show 的revision且bit31=1,type=shadow. */
-		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_FULL_ENCODING, *((unsigned long*)vmcs_region_address[0]) | (1<<31));
-		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_HIGH_ENCODING, addr);
+		/* Lowest 32Bits: 设置VMCS show 的revision且bit31=1,type=shadow. */
+		*((unsigned long*)addr) = (*((unsigned long*)vmcs_region_address.address[0]) | (1<<31));
+		/* 低32位：设置VMCS show 的base-addr */
+		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_FULL_ENCODING, addr);
+		/* 高32位：设置VMCS shadow的base addr，默认为0. */
+		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_HIGH_ENCODING, 0x00);
 	}
 }
 
@@ -1000,7 +1052,7 @@ void vm_entry() {
 
 	unsigned long apic_id = get_current_apic_id();
 	unsigned long* guest_gdt_base = (unsigned long* ) read_vmcs_field(GUEST_GDTR_BASE_ENCODING);
-	/* 注意：因为BSP的apic_id=0, 所以要加一个标志位来判定是否处于vm state,这里设置bit31为标示位。 */
+	/* 注意：因为BSP的apic_id=0, 所以要加一个标志位来判定是否处于vm state,这里设置bit31为apic_id的有效标志位。 */
 	apic_id |= (1<<31);
 	*guest_gdt_base = apic_id;
 
