@@ -178,6 +178,21 @@ void vmx_capability_verify() {
 void vmx_env_entry() {
 	vmxon_region_address.address[0] = get_free_page(PAGE_IN_REAL_MEM_MAP);
 
+	/*
+	 * For Intel 64 and IA-32 processors that support x2APIC, a value of 1 reported by CPUID.01H:ECX[21] indicates that
+       the processor supports x2APIC and the extended topology enumeration leaf (CPUID.0BH)
+	 */
+
+	unsigned long x2apic_support = 0;
+	__asm__ ("movl $0x01,%%eax\n\t"  \
+			 "cpuid\n\t"    \
+			 :"=c" (x2apic_support):);
+
+	if (x2apic_support & (1<<21)) {
+		printk("Current processor support x2APIC feature\n\r");
+	}
+
+
 	if (vmx_support_verify()) {
 		unsigned long init = 0;
 		unsigned long fixed0 = 0;
@@ -277,15 +292,25 @@ void init_vmcs_procbased_ctls() {
 	unsigned long msr_values[2] = {0,};
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
+	unsigned long enable_flag = 0;
+
 	/* Using algorithm 3 to init. */
 	read_msr(IA32_VMX_PROCBASED_CTLS,msr_values);
 	printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_PROCBASED_CTLS,msr_values);
 	printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+
 	init_value |= (msr_values[0] & msr_values[1]);
-	init_value |= (1<<31);  /* Activate secondary processor controls */
-	init_value |= (1<<21);  /* Enable Use_TPR_shadow */
+
+	if ((msr_values[0] & (1<<31)) || (msr_values[1] & (1<<31))) {
+		init_value |= (1<<31);  /* Activate secondary processor controls */
+	}
+	if ((msr_values[0] & (1<<21)) || (msr_values[1] & (1<<21))) {
+		init_value |= (1<<21);  /* Enable Use_TPR_shadow */
+	}
+
+
 	write_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
 	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
@@ -297,13 +322,25 @@ void init_vmcs_procbased_ctls() {
 		printk("IA32_VMX_PROCBASED_CTLS2: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 		init_value = (msr_values[0] & msr_values[1]);
 
-		init_value |= (1<<0);      /* Enable Virtualize APIC accesses */
-		init_value |= (1<<14);     /* Enable VMCS shadowing           */
+		if ((msr_values[0] & (1<<0)) || (msr_values[1] & (1<<0))) {
+			init_value |= (1<<0);  /* Enable Virtualize APIC accesses */
+		}
+		if ((msr_values[0] & (1<<14)) || (msr_values[1] & (1<<14))) {
+			init_value |= (1<<14);  /* Enable VMCS shadowing           */
+		}
+
+		/*
+		 * If the “virtualize x2APIC mode” VM-execution control is 1, the “virtualize APIC accesses” VM-execution control
+           must be 0.
+         */
+		if (init_value & (1<<4)) {
+			init_value &= (~(1<<0));
+		}
 
 		/* Virtualize APIC accesses has been enabled. */
 		if (init_value & (1<<0)) {
-			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-			write_vmcs_field(IA32_VMX_APIC_ACCESS_ADDR_FULL_ENCODING, addr);
+			unsigned long apic_access_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			write_vmcs_field(IA32_VMX_APIC_ACCESS_ADDR_FULL_ENCODING, apic_access_addr);
 			write_vmcs_field(IA32_VMX_APIC_ACCESS_ADDR_FULL_ENCODING, 0x00);
 		}
 
@@ -312,23 +349,22 @@ void init_vmcs_procbased_ctls() {
          * “virtualize x2APIC mode”, “APIC-register virtualization”, and “virtual-interrupt delivery”.
          */
 		if (backup_value & (1<<21)) {
-			init_value |= (1<<8);      /* Enable APIC-register virtualization    */
-			init_value |= (1<<9);      /* Enable Virtual-interrupt delivery      */
+			if ((msr_values[0] & (1<<8)) || (msr_values[1] & (1<<8))) {
+				init_value |= (1<<8);   /* Enable APIC-register virtualization    */
+			}
+			if ((msr_values[0] & (1<<9)) || (msr_values[1] & (1<<9))) {
+				init_value |= (1<<9);   /* Enable Virtual-interrupt delivery      */
+			}
 
 			/*
 			 * If the “use TPR shadow” VM-execution control is 1, the virtual-APIC address must satisfy the following checks:
                — Bits 11:0 of the address must be 0.
                — The address should not set any bits beyond the processor’s physical-address width.
+               Allocate a page for apic-page regardless of whether enable-apic-registers has been set to 1.
 			 */
-			if (init_value & (1<<8)) {
-				unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING, addr);
-				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_HIGH_ENCODING, 0x00);
-			}
-			else {
-				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING, 0x00);
-				write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_HIGH_ENCODING, 0x00);
-			}
+			unsigned long apic_page_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING, apic_page_addr);
+			write_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_HIGH_ENCODING, 0x00);
 
 			/*
 			 * If the “use TPR shadow” VM-execution control is 1 and the “virtual-interrupt delivery” VM-execution control is
@@ -345,16 +381,15 @@ void init_vmcs_procbased_ctls() {
 				threshold VM-execution control field should not be greater than the value of bits 7:4 of VTPR (see Section 29.1.1).
 			 */
 			if (!(init_value & (1<<0)) && !(init_value & (1<<9))) {
+				unsigned long addr = read_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING);
 				unsigned long tpr_threshold = read_vmcs_field(IA32_VMX_TPR_THRESHOLD_ENCODING);
-				if (init_value & (1<<8)) { /* Enabled apic registers, so have been allocate a page for it. */
-					unsigned long addr = read_vmcs_field(IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING);
+				if (init_value & (1<<8)) { /* Enable apic registers has been set to 1  */
 					unsigned long vtpr_value = *((unsigned long*)addr + 32); /* VTPR offset is 0x80 at APIC-PAGE */
 					if ((tpr_threshold & 0xF) > ((vtpr_value>>4) & 0xF)) {
 						panic("the value of bits 3:0 of the TPR	threshold VM-execution control field should not greater than the value of bits 7:4 of VTPR");
 					}
 				}
 			}
-
 		}
 		else {
 			init_value &= (~(1<<4));   /* Disable virtualize x2APIC mode          */
