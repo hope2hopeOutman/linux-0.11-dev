@@ -182,14 +182,16 @@ void vmx_env_entry() {
 	 * For Intel 64 and IA-32 processors that support x2APIC, a value of 1 reported by CPUID.01H:ECX[21] indicates that
        the processor supports x2APIC and the extended topology enumeration leaf (CPUID.0BH)
 	 */
-
 	unsigned long x2apic_support = 0;
-	__asm__ ("movl $0x01,%%eax\n\t"  \
-			 "cpuid\n\t"    \
+	__asm__ ("movl $0x01,%%eax\n\t"   \
+			 "cpuid\n\t"              \
 			 :"=c" (x2apic_support):);
 
 	if (x2apic_support & (1<<21)) {
-		printk("Current processor support x2APIC feature\n\r");
+		printk("Current processor support x2APIC feature(%08x)\n\r", x2apic_support);
+	}
+	else {
+		printk("Current processor doesn't support x2APIC feature(%08x)\n\r", x2apic_support);
 	}
 
 
