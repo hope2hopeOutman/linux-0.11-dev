@@ -325,6 +325,11 @@ void init_vmcs_procbased_ctls() {
 		if ((msr_values[0] & (1<<0)) || (msr_values[1] & (1<<0))) {
 			init_value |= (1<<0);  /* Enable Virtualize APIC accesses */
 		}
+
+		if ((msr_values[0] & (1<<1)) || (msr_values[1] & (1<<1))) {
+			init_value |= (1<<1);  /* Enable EPT in non-root env, turn on physical-addr virtualization. */
+		}
+
 		if ((msr_values[0] & (1<<14)) || (msr_values[1] & (1<<14))) {
 			init_value |= (1<<14);  /* Enable VMCS shadowing           */
 		}
@@ -1033,6 +1038,18 @@ void init_vmcs_guest_state() {
 		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_FULL_ENCODING, addr);
 		/* 高32位：设置VMCS shadow的base addr，默认为0. */
 		write_vmcs_field(IA32_VMX_VMCS_LINK_POINTER_HIGH_ENCODING, 0x00);
+	}
+
+	/*
+	 * Check Enable EPT whether has been turn on in SECONDARY_PROCBASED_CTLS
+	 * if Enable-EPT =1, we should init EPT paging structure.
+	 */
+	if (read_value & (1<<1)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		write_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING, addr);
+		write_vmcs_field(IA32_VMX_EPT_POINTER_HIGH_ENCODING, 0x00);
+		printk("EPT_full: %08x, EPT_high: %08x\n\r", read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING),
+				                                     read_vmcs_field(IA32_VMX_EPT_POINTER_HIGH_ENCODING));
 	}
 }
 
