@@ -250,9 +250,9 @@ unsigned long read_vmcs_field(unsigned long field_encoding) {
 void host_idle_loop() {
 	for(;;) {
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
-		//unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
-		unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
-		printk("exit_reason: %08x, instruction_error: %08x\n\r", vm_exit_reason, vm_instruction_error);
+		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
+		//unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
+		printk("exit_reason: %08x, instruction_error: %08x\n\r", vm_exit_reason, vm_exit_qualification);
 	}
 }
 
@@ -332,8 +332,12 @@ void init_vmcs_procbased_ctls() {
 			init_value |= (1<<1);  /* Enable EPT in non-root env, turn on physical-addr virtualization. */
 		}
 
+		if ((msr_values[0] & (1<<5)) || (msr_values[1] & (1<<5))) {
+			init_value |= (1<<5);  /* Enable VPID,flush cached-mapping-lines of vTLB associated with VPID, don't need to flush the whole vTLB. */
+		}
+
 		if ((msr_values[0] & (1<<14)) || (msr_values[1] & (1<<14))) {
-			init_value |= (1<<14);  /* Enable VMCS shadowing           */
+			init_value |= (1<<14);  /* Enable VMCS shadowing */
 		}
 
 		/*
@@ -1043,16 +1047,49 @@ void init_vmcs_guest_state() {
 	}
 
 	/*
-	 * Check Enable EPT whether has been turn on in SECONDARY_PROCBASED_CTLS
+	 * Check Enable EPT whether has been turn on in IA32_VMX_SECONDARY_PROCBASED_CTLS
 	 * if Enable-EPT =1, we should init EPT paging structure.
 	 */
 	if (read_value & (1<<1)) {
-		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-		write_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING, addr);
+		unsigned long ept_pml4_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		write_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING, ept_pml4_addr);
 		write_vmcs_field(IA32_VMX_EPT_POINTER_HIGH_ENCODING, 0x00);
 		printk("EPT_full: %08x, EPT_high: %08x\n\r", read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING),
 				                                     read_vmcs_field(IA32_VMX_EPT_POINTER_HIGH_ENCODING));
+		read_msr(IA32_VMX_EPT_VPID_CAP, msr_values);
+		printk("IA32_VMX_EPT_VPID_CAP(%08x:%08x)\n\r", msr_values[0], msr_values[1]);
+		if (msr_values[0] & (1<<6)) {  /* Bit 6 indicates support for a page-walk length of 4 */
+			/* We can init maximum 4 EPT-PML4 entries, here just init one entry(512G physical space is enough)  */
+			unsigned long ept_pdpt_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pml4_addr) = ept_pdpt_addr + 7;  /* Set bit 0,1,2 */
+
+			/*
+			 * IA32-ARCH just support 4G addressing space, so we should init 4 PDPT-entries for it.
+			 * Note: each EPT paging-structure entry is a 8 bytes field.
+			 */
+			unsigned long ept_pd_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pdpt_addr) = ept_pd_addr + 7;
+
+			ept_pd_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pdpt_addr + 2) = ept_pd_addr + 7;
+
+			ept_pd_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pdpt_addr + 4) = ept_pd_addr + 7;
+
+			ept_pd_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pdpt_addr + 6) = ept_pd_addr + 7;
+		}
 	}
+
+	/*
+	 * Check Enable VPID whether has been turn on in IA32_VMX_SECONDARY_PROCBASED_CTLS
+	 * if Enable-VPID =1, we should set a 16bit value in VPID field.
+	 */
+	if (read_value & (1<<5)) {
+		/* VM entry will check and ensures that this value is never 0x0000 */
+		write_vmcs_field(IA32_VMX_VPID_ENCODING, 0x01);
+	}
+
 }
 
 void vm_entry() {
