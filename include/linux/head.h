@@ -151,6 +151,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING  0x4400
 #define IA32_VMX_EXIT_REASON_ENCODING           0x4402
 #define IA32_VMX_EXIT_QUALIFICATION_ENCODING    0x6400
+#define IA32_VMX_GUEST_LINEAR_ADDR_ENCODING     0x640A
 
 /*========== Host area =============*/
 #define HOST_CR0_ENCODING  0x6C00

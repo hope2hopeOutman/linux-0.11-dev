@@ -242,9 +242,68 @@ void write_vmcs_field(unsigned long field_encoding, unsigned long field_value) {
 
 unsigned long read_vmcs_field(unsigned long field_encoding) {
 	unsigned field_value = 0;
-	__asm__ ("vmread %%edx,%%eax\n\t" \
+	__asm__ ("vmread %%edx,%%eax\n\t"  \
 			 :"=a" (field_value):"d" (field_encoding));
 	return field_value;
+}
+
+void init_page_dir(unsigned long page_addr) {
+	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
+	for (int i=0;i<1024;i++) {
+		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7;
+	}
+}
+
+void init_page_table(unsigned long page_addr, unsigned long guest_phy_addr) {
+	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
+	for (int i=0;i<1024;i++) {
+		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7;
+	}
+}
+
+unsigned long get_phy_addr(unsigned long guest_phy_addr) {
+	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPTP_INDEX_ENCODING);
+	unsigned long ept_pdpt_addr = *((unsigned long*) ept_pml4_addr);  /* PDPT表默认是预先分配好的 */
+	unsigned long ept_pdpt_index = guest_phy_addr>>30;
+	unsigned long ept_pdpt_entry = ept_pdpt_addr + ept_pdpt_index*8;
+	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+	if (!(ept_pd_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pdpt_entry) = addr + 7;
+		ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+	}
+
+	unsigned long ept_pd_index = (guest_phy_addr>>21) & 0x1FF;
+	unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
+	unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+	if (!(ept_pt_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pd_entry) = addr + 7;
+		ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+	}
+
+	unsigned long ept_pt_index = (guest_phy_addr>>12) & 0x1FF;
+	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
+	unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+	if (!(ept_page_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pt_entry) = addr + 7;
+		ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
+		init_pd(ept_page_phy_addr);
+	}
+}
+
+unsigned long get_guest_phy_addr(unsigned long guest_linear_addr) {
+	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
+	unsigned long dir_phy_addr = get_phy_addr(cr3_guest_phy_addr);
+	unsigned long pd_index = guest_linear_addr>>22;
+	unsigned long pd_entry = dir_phy_addr + pd_index*4;
+	unsigned long pt_guest_phy_addr = *((unsigned long*) pd_entry);
+	unsigned long pt_phy_addr = get_phy_addr(pt_guest_phy_addr);
+	unsigned long pt_index = (guest_linear_addr>>12) & 0x3FF;
+	unsigned long page_addr =  *((unsigned long*)(pt_phy_addr + pt_index*4));
+	return page_addr;
 }
 
 void host_idle_loop() {
@@ -252,7 +311,49 @@ void host_idle_loop() {
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
 		//unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
-		printk("exit_reason: %08x, instruction_error: %08x\n\r", vm_exit_reason, vm_exit_qualification);
+		printk("exit_reason: %08x, vm_exit_qualification: %08x\n\r", vm_exit_reason, vm_exit_qualification);
+		unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
+		unsigned long guest_physical_full_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING);
+		unsigned long guest_physical_high_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING);
+		printk("guest_linear_addr: %08x\n\r", guest_linear_addr);
+		printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
+		printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
+
+		/* 判断Guest-CR3对应的物理页是否存在 */
+		unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
+		unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPTP_INDEX_ENCODING);
+		unsigned long ept_pdpt_addr = *((unsigned long*) ept_pml4_addr);  /* PDPT表默认是预先分配好的 */
+		unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
+		unsigned long ept_pdpt_entry = ept_pdpt_addr + ept_pdpt_index*8;
+		unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+		if (!(ept_pd_phy_addr & 0x07)) {
+			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pdpt_entry) = addr + 7;
+			ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+		}
+
+		unsigned long ept_pd_index = (cr3_guest_phy_addr>>21) & 0x1FF;
+		unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
+		unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+		if (!(ept_pt_phy_addr & 0x07)) {
+			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pd_entry) = addr + 7;
+			ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+		}
+
+		unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
+		unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
+		unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+		if (!(ept_page_phy_addr & 0x07)) {
+			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*((unsigned long*)ept_pt_entry) = addr + 7;
+			ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+			/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
+			init_pd(ept_page_phy_addr);
+		}
+
+		/* 判断Guest-linear-addr所在的页表的物理页和自身的物理页是否存在 */
+		unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
 	}
 }
 
@@ -1051,13 +1152,40 @@ void init_vmcs_guest_state() {
 	 * if Enable-EPT =1, we should init EPT paging structure.
 	 */
 	if (read_value & (1<<1)) {
+		read_msr(IA32_VMX_EPT_VPID_CAP, msr_values);
+		printk("IA32_VMX_EPT_VPID_CAP(%08x:%08x)\n\r", msr_values[0], msr_values[1]);
 		unsigned long ept_pml4_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		/*  If the “enable EPT” VM-execution control is 1, the EPTP VM-execution control field
+		    (see Table 24-8 in Section 24.6.11) must satisfy the following checks:4
+				— The EPT memory type (bits 2:0) must be a value supported by the processor as indicated in the
+				  IA32_VMX_EPT_VPID_CAP MSR (see Appendix A.10).
+				— Bits 5:3 (1 less than the EPT page-walk length) must be 3, indicating an EPT page-walk length of 4; see Section 28.2.2.
+				— Bit 6 (enable bit for accessed and dirty flags for EPT) must be 0 if bit 21 of the IA32_VMX_EPT_VPID_CAP
+				  MSR (see Appendix A.10) is read as 0, indicating that the processor does not support accessed and dirty flags for EPT.
+				— Reserved bits 11:7 and 63:N (where N is the processor’s physical-address width) must all be 0.
+		*/
+		if (msr_values[0] & (1<<8)) {  /* Indicate support memory-type uncacheable, value:0 */
+			ept_pml4_addr &= (~0x07);
+		}
+		if (msr_values[0] & (1<<14)) { /* Indicate support memory-type write-back(WB), value:6 */
+			ept_pml4_addr &= (~0x07);
+			ept_pml4_addr |= 0x06;
+		}
+
+		if (msr_values[0] & (1<<6)) {  /* Bit 6 indicates support for a page-walk length of 4 */
+			ept_pml4_addr &= (~0x38);  /* ~0B00111000 */
+			ept_pml4_addr |= 0x18;     /*  0B00011000 */
+		}
+
+		if (msr_values[0] & (1<<21)) { /* If bit 21 is read as 1, accessed and dirty flags for EPT are supported */
+			ept_pml4_addr |= (1<<6);   /* 0B1000000 */
+		}
+
 		write_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING, ept_pml4_addr);
 		write_vmcs_field(IA32_VMX_EPT_POINTER_HIGH_ENCODING, 0x00);
 		printk("EPT_full: %08x, EPT_high: %08x\n\r", read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING),
 				                                     read_vmcs_field(IA32_VMX_EPT_POINTER_HIGH_ENCODING));
-		read_msr(IA32_VMX_EPT_VPID_CAP, msr_values);
-		printk("IA32_VMX_EPT_VPID_CAP(%08x:%08x)\n\r", msr_values[0], msr_values[1]);
+
 		if (msr_values[0] & (1<<6)) {  /* Bit 6 indicates support for a page-walk length of 4 */
 			/* We can init maximum 4 EPT-PML4 entries, here just init one entry(512G physical space is enough)  */
 			unsigned long ept_pdpt_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
@@ -1066,6 +1194,18 @@ void init_vmcs_guest_state() {
 			/*
 			 * IA32-ARCH just support 4G addressing space, so we should init 4 PDPT-entries for it.
 			 * Note: each EPT paging-structure entry is a 8 bytes field.
+			 * 这里其实挺绕的，还是详细解释下吧，关于EPT paging-structure与Guest paging-structure之间是如何映射。
+			 * 1. 只要记住一点，CR3中存储的页目录(Guest-phy-addr)，相对与EPT paging-structure就是一个普通的物理页,这个普通物理页就是存储在EPT Page-Table Entry
+			 *    中的实际物理页地址，当然CR3中存储的是Geust-phy-addr要经过EPT的PDE和PTE转换才能得到这个实际物理页地址，CR3与EPT PDPT-entry不是1:1对应关系，
+			 *    但CR3与EPT的Page-Table Entry是1:1的对应关系，因为它就是EPT paging-structure管理的普通物理页，这点一定要搞清楚。
+			 * 2. Guest-phy-addr在EPT paging-structure中，其实就是linear-addr,EPT paging-structure也就是按照线性地址处理的，不过表项的映射稍微有点不同，
+			 *    我们知道EPT paging-structure entry占8字节所以一张表只能存储512项(9位索引: 遍历表项)，而线性地址是32位(10位索引: 遍历表项)
+			 *    所以48位的Guest-phy-addr会被分为5份(IA32 ARCH的GUEST-phy-addr前面的会补齐16位)：
+			 *       PML4-entry           PDPT-entry           PD-entry             PT-entry            PageIn-offset
+			 *    000000000(9bits)     000000000(9bits)     000000000(9bits)     000000000(9bits)    000000000000(12bits)
+			 *    通过以上partition遍历EPT paging-structure得到实际物理页地址，对于32位系统来说PDPT-entry部分只有低2位有效，所以最大只有4个PDPT-entry能被利用，
+			 *    每个PDPT-entry可以管理1G物理地址空间，所以一共可以管理4G物理地址空间，这就对上了O(∩_∩)O哈哈~。
+			 *    总之： EPT paging-structure 是通过4级分页映射来管理Guest paging-structure.
 			 */
 			unsigned long ept_pd_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pdpt_addr) = ept_pd_addr + 7;
@@ -1089,7 +1229,6 @@ void init_vmcs_guest_state() {
 		/* VM entry will check and ensures that this value is never 0x0000 */
 		write_vmcs_field(IA32_VMX_VPID_ENCODING, 0x01);
 	}
-
 }
 
 void vm_entry() {
