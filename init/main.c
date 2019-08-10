@@ -248,7 +248,7 @@ unsigned long read_vmcs_field(unsigned long field_encoding) {
 }
 
 void init_page_dir(unsigned long page_addr) {
-	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
+	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
 	for (int i=0;i<1024;i++) {
 		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7;
 	}
@@ -257,20 +257,23 @@ void init_page_dir(unsigned long page_addr) {
 void init_page_table(unsigned long page_addr, unsigned long guest_phy_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
 	for (int i=0;i<1024;i++) {
-		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7;
+		*((unsigned long*) page_addr + i) = ((guest_phy_addr - 0x100000)>>12)*0x400000 + 0x1000*i + 7;
 	}
 }
 
 unsigned long get_phy_addr(unsigned long guest_phy_addr) {
-	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPTP_INDEX_ENCODING);
-	unsigned long ept_pdpt_addr = *((unsigned long*) ept_pml4_addr);  /* PDPT表默认是预先分配好的 */
+	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
 	unsigned long ept_pdpt_index = guest_phy_addr>>30;
-	unsigned long ept_pdpt_entry = ept_pdpt_addr + ept_pdpt_index*8;
+	unsigned long ept_pdpt_entry = ept_pdpt_addr & ~0xFFF + ept_pdpt_index*8;
 	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
 	if (!(ept_pd_phy_addr & 0x07)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 		*((unsigned long*)ept_pdpt_entry) = addr + 7;
-		ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+		ept_pd_phy_addr = addr;
+	}
+	else {
+		ept_pd_phy_addr &= ~0xFFF;
 	}
 
 	unsigned long ept_pd_index = (guest_phy_addr>>21) & 0x1FF;
@@ -279,28 +282,46 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	if (!(ept_pt_phy_addr & 0x07)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 		*((unsigned long*)ept_pd_entry) = addr + 7;
-		ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+		ept_pt_phy_addr = addr;
+	}
+	else {
+		ept_pt_phy_addr &= ~0xFFF;
 	}
 
 	unsigned long ept_pt_index = (guest_phy_addr>>12) & 0x1FF;
 	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
 	unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
 	if (!(ept_page_phy_addr & 0x07)) {
-		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-		*((unsigned long*)ept_pt_entry) = addr + 7;
-		ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
-		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
-		init_pd(ept_page_phy_addr);
+		/* 如果Guest-phy-addr在12M地址空间的话，那么就实地址映射到实际内存地址，这样VM就共享host主机的12M内核地址空间了 */
+		if ((guest_phy_addr>>20) < 12) {
+			/* 至此，已经为一个guest-phy-addr分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr.
+			 * 当然也可以共享host的页表，这样就不用再重新分配和映射了 */
+			if ((guest_phy_addr>>20) >= 1 && (guest_phy_addr>>20) < 5) {
+				unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+				*((unsigned long*)ept_pt_entry) = addr + 7;
+				ept_page_phy_addr = addr;
+				init_page_table(ept_page_phy_addr, guest_phy_addr);
+			}
+			else {
+				*((unsigned long*)ept_pt_entry) = guest_phy_addr;  /* 实地址映射 */
+				ept_page_phy_addr = guest_phy_addr;
+				printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
+			}
+		}
 	}
+	return ept_page_phy_addr & ~0xFFF;
 }
 
 unsigned long get_guest_phy_addr(unsigned long guest_linear_addr) {
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	unsigned long dir_phy_addr = get_phy_addr(cr3_guest_phy_addr);
+	printk("dir_phy_addr: %08x\n\r", dir_phy_addr);
 	unsigned long pd_index = guest_linear_addr>>22;
 	unsigned long pd_entry = dir_phy_addr + pd_index*4;
 	unsigned long pt_guest_phy_addr = *((unsigned long*) pd_entry);
+	printk("pt_guest_phy_addr: %08x\n\r", pt_guest_phy_addr);  //0x101007
 	unsigned long pt_phy_addr = get_phy_addr(pt_guest_phy_addr);
+	printk("pt_phy_addr: %08x\n\r", pt_phy_addr);
 	unsigned long pt_index = (guest_linear_addr>>12) & 0x3FF;
 	unsigned long page_addr =  *((unsigned long*)(pt_phy_addr + pt_index*4));
 	return page_addr;
@@ -321,39 +342,57 @@ void host_idle_loop() {
 
 		/* 判断Guest-CR3对应的物理页是否存在 */
 		unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
-		unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPTP_INDEX_ENCODING);
-		unsigned long ept_pdpt_addr = *((unsigned long*) ept_pml4_addr);  /* PDPT表默认是预先分配好的 */
+		printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
+		unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+		printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
+		unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
+		printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
 		unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
-		unsigned long ept_pdpt_entry = ept_pdpt_addr + ept_pdpt_index*8;
+		unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
 		unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+		printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
 		if (!(ept_pd_phy_addr & 0x07)) {
 			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pdpt_entry) = addr + 7;
-			ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+			ept_pd_phy_addr = addr;
+		}
+		else {
+			ept_pd_phy_addr &= ~0xFFF;
 		}
 
 		unsigned long ept_pd_index = (cr3_guest_phy_addr>>21) & 0x1FF;
 		unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
 		unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+		printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
 		if (!(ept_pt_phy_addr & 0x07)) {
 			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pd_entry) = addr + 7;
-			ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+			ept_pt_phy_addr = addr;
+		}
+		else {
+			ept_pt_phy_addr &= ~0xFFF;
 		}
 
 		unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
 		unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
 		unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+		printk("ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
 		if (!(ept_page_phy_addr & 0x07)) {
 			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pt_entry) = addr + 7;
-			ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+			ept_page_phy_addr = addr;
 			/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
-			init_pd(ept_page_phy_addr);
+			init_page_dir(ept_page_phy_addr);
 		}
 
 		/* 判断Guest-linear-addr所在的页表的物理页和自身的物理页是否存在 */
-		unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
+		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
+		printk("guest_phy_addr: %08x\n\r", guest_phy_addr);
+		unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
+		printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
+
+		__asm__ ("vmresume\n\t"  \
+				 ::);
 	}
 }
 
@@ -381,14 +420,14 @@ void init_vmcs_pinbased_ctls() {
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
 	read_msr(IA32_VMX_PINBASED_CTLS,msr_values);
-	printk("IA32_VMX_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_PINBASED_CTLS,msr_values);
-	printk("IA32_VMX_TRUE_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_TRUE_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value |= (msr_values[0] & msr_values[1]); /* Refer to algorithm 3. chapter 31.5.1 */
 	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 }
 
 void init_vmcs_procbased_ctls() {
@@ -399,10 +438,10 @@ void init_vmcs_procbased_ctls() {
 
 	/* Using algorithm 3 to init. */
 	read_msr(IA32_VMX_PROCBASED_CTLS,msr_values);
-	printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_PROCBASED_CTLS,msr_values);
-	printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 
 	init_value |= (msr_values[0] & msr_values[1]);
 
@@ -566,13 +605,13 @@ void init_vmcs_cr3_target_count() {
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
 	read_msr(IA32_VMX_MISC,msr_values);
-	printk("IA32_VMX_MISC: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_MISC: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = (msr_values[0] & (0x1FF0000)) >> 16;  /* 取16~24位，得到CR3-target count */
 	init_value > 4 ? 4 : init_value;
 	/* if cr3-target count=0, then mov value,cr3 always trigger VM exit. */
 	write_vmcs_field(IA32_VMX_CR3_TARGET_COUNT_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_CR3_TARGET_COUNT_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 }
 
 void init_vmcs_exec_ctrl_fields() {
@@ -586,10 +625,10 @@ void init_vmcs_exit_ctrl_fields() {
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
 	read_msr(IA32_VMX_EXIT_CTLS,msr_values);
-	printk("IA32_VMX_EXIT_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_EXIT_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_EXIT_CTLS,msr_values);
-	printk("IA32_VMX_TRUE_EXIT_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_TRUE_EXIT_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value |= (msr_values[0] & msr_values[1]);
 
 	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
@@ -632,7 +671,7 @@ void init_vmcs_exit_ctrl_fields() {
 
 	write_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_EXIT_CTLS_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 }
 
 void init_vmcs_entry_ctrl_fields() {
@@ -640,15 +679,15 @@ void init_vmcs_entry_ctrl_fields() {
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
 	read_msr(IA32_VMX_ENTRY_CTLS,msr_values);
-	printk("IA32_VMX_ENTRY_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_ENTRY_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_ENTRY_CTLS,msr_values);
-	printk("IA32_VMX_TRUE_ENTRY_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_TRUE_ENTRY_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value |= (msr_values[0] & msr_values[1]);
 
 	write_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 
 	init_value = read_vmcs_field(IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING);
 	init_value &= (0x7FFFFFFF);   /* bit31 set to 0, Don't inject event when vm entry. */
@@ -703,48 +742,48 @@ void init_vmcs_host_state() {
 
 	/* Init host CR0 */
 	read_msr(IA32_VMX_CR0_FIXED0,msr_values);
-	printk("IA32_VMX_CR0_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR0_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0];
 	read_msr(IA32_VMX_CR0_FIXED1,msr_values);
-	printk("IA32_VMX_CR0_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR0_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value &= msr_values[0];
 	write_vmcs_field(HOST_CR0_ENCODING, init_value);
 	read_value = read_vmcs_field(HOST_CR0_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 
 	/* Init host CR4 */
 	read_msr(IA32_VMX_CR4_FIXED0,msr_values);
-	printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0];
 	read_msr(IA32_VMX_CR4_FIXED1,msr_values);
-	printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value &= msr_values[0];
 	write_vmcs_field(HOST_CR4_ENCODING, init_value);
 	read_value = read_vmcs_field(HOST_CR4_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 
 	/* Init host segment selector */
 	write_vmcs_field(HOST_ES_ENCODING, 0x10);
 	read_value = read_vmcs_field(HOST_ES_ENCODING);
-	printk("Read HOST_ES_ENCODING: %u\n\r", read_value);
+	//printk("Read HOST_ES_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_CS_ENCODING, 0x08);
 	read_value = read_vmcs_field(HOST_CS_ENCODING);
-	printk("Read HOST_CS_ENCODING: %u\n\r", read_value);
+	//printk("Read HOST_CS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_SS_ENCODING, 0x10);
 	read_value = read_vmcs_field(HOST_SS_ENCODING);
-	printk("Read HOST_SS_ENCODING: %u\n\r", read_value);
+	//printk("Read HOST_SS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_DS_ENCODING, 0x10);
 	read_value = read_vmcs_field(HOST_DS_ENCODING);
-	printk("Read HOST_DS_ENCODING: %u\n\r", read_value);
+	//printk("Read HOST_DS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_FS_ENCODING, 0x10);
 	read_value = read_vmcs_field(HOST_FS_ENCODING);
-	printk("Read HOST_FS_ENCODING: %u\n\r", read_value);
+	//printk("Read HOST_FS_ENCODING: %u\n\r", read_value);
 	write_vmcs_field(HOST_GS_ENCODING, 0x10);
 	read_value = read_vmcs_field(HOST_GS_ENCODING);
-	printk("Read HOST_GS_ENCODING: %u\n\r", read_value);
+	//printk("Read HOST_GS_ENCODING: %u\n\r", read_value);
     write_vmcs_field(HOST_TR_ENCODING, 0x20);
 	read_value = read_vmcs_field(HOST_TR_ENCODING);
-	printk("Read HOST_TR_ENCODING: %u\n\r", read_value);
+	//printk("Read HOST_TR_ENCODING: %u\n\r", read_value);
 
 	write_vmcs_field(HOST_FS_BASE_ENCODING, 0x00);
 	write_vmcs_field(HOST_GS_BASE_ENCODING, 0x00);
@@ -756,17 +795,17 @@ void init_vmcs_host_state() {
 
 	write_vmcs_field(HOST_GDTR_BASE_ENCODING, (unsigned long)&gdt);
 	read_value = read_vmcs_field(HOST_GDTR_BASE_ENCODING);
-	printk("Read HOST_GDTR_ENCODING: %08x\n\r", read_value);
+	//printk("Read HOST_GDTR_ENCODING: %08x\n\r", read_value);
 	write_vmcs_field(HOST_IDTR_BASE_ENCODING, (unsigned long)&idt);
 	read_value = read_vmcs_field(HOST_IDTR_BASE_ENCODING);
-	printk("Read HOST_IDTR_ENCODING: %08x\n\r", read_value);
+	//printk("Read HOST_IDTR_ENCODING: %08x\n\r", read_value);
 
 	write_vmcs_field(HOST_RSP_ENCODING, PAGE_SIZE+(unsigned long)&init_task);
 	read_value = read_vmcs_field(HOST_RSP_ENCODING);
-	printk("Read HOST_RSP_ENCODING: %08x\n\r", read_value);
+	//printk("Read HOST_RSP_ENCODING: %08x\n\r", read_value);
 	write_vmcs_field(HOST_RIP_ENCODING, host_idle_loop);
 	read_value = read_vmcs_field(HOST_RIP_ENCODING);
-	printk("Read HOST_RIP_ENCODING: %08x\n\r", read_value);
+	//printk("Read HOST_RIP_ENCODING: %08x\n\r", read_value);
 
 	/* Check whether support 64-arch */
 	if (processor_physical_address_width == 0xFFFFFFFC) {
@@ -801,28 +840,28 @@ void init_vmcs_guest_state() {
 
 	/* Init Guest CR0 */
 	read_msr(IA32_VMX_CR0_FIXED0,msr_values);
-	printk("IA32_VMX_CR0_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR0_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0];
 	read_msr(IA32_VMX_CR0_FIXED1,msr_values);
-	printk("IA32_VMX_CR0_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR0_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value &= msr_values[0];
 	write_vmcs_field(GUEST_CR0_ENCODING, init_value);
 	read_value = read_vmcs_field(GUEST_CR0_ENCODING);
-	printk("GUEST_CR0_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("GUEST_CR0_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
 
 	/* Init host CR4 */
 	read_msr(IA32_VMX_CR4_FIXED0,msr_values);
-	printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0];
 	read_msr(IA32_VMX_CR4_FIXED1,msr_values);
-	printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value &= msr_values[0];
 	write_vmcs_field(GUEST_CR4_ENCODING, init_value);
 	read_value = read_vmcs_field(GUEST_CR4_ENCODING);
-	printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
 
 	read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
-	printk("IA32_VMX_ENTRY_CTLS_ENCODING : %08x\n\r", read_value);
+	//printk("IA32_VMX_ENTRY_CTLS_ENCODING : %08x\n\r", read_value);
 
 	/* Check whether support debug, configured in VM-Entry Controls. */
 	if (read_value & (1<<2)) { /* Load debug controls whether has been set. */
@@ -958,44 +997,43 @@ void init_vmcs_guest_state() {
 
 	/* Init GUEST segment selector */
 	write_vmcs_field(GUEST_ES_ENCODING, 0x10);
-	printk("Read GUEST_ES_ENCODING: %04x\n\r",read_vmcs_field(GUEST_ES_ENCODING));
+	//printk("Read GUEST_ES_ENCODING: %04x\n\r",read_vmcs_field(GUEST_ES_ENCODING));
 	write_vmcs_field(GUEST_CS_ENCODING, 0x08);
-	printk("Read GUEST_CS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_CS_ENCODING));
+	//printk("Read GUEST_CS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_CS_ENCODING));
 	write_vmcs_field(GUEST_SS_ENCODING, 0x10);
-	printk("Read GUEST_SS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_SS_ENCODING));
+	//printk("Read GUEST_SS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_SS_ENCODING));
 	write_vmcs_field(GUEST_DS_ENCODING, 0x10);
-	printk("Read GUEST_DS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_DS_ENCODING));
+	//printk("Read GUEST_DS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_DS_ENCODING));
 	write_vmcs_field(GUEST_FS_ENCODING, 0x10);
-	printk("Read GUEST_FS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_FS_ENCODING));
+	//printk("Read GUEST_FS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_FS_ENCODING));
 	write_vmcs_field(GUEST_GS_ENCODING, 0x10);
-	printk("Read GUEST_GS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_GS_ENCODING));
+	//printk("Read GUEST_GS_ENCODING: %04x\n\r",read_vmcs_field(GUEST_GS_ENCODING));
 	write_vmcs_field(GUEST_TR_ENCODING, 0x20);
-	printk("Read GUEST_TR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_TR_ENCODING));
+	//printk("Read GUEST_TR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_TR_ENCODING));
 	write_vmcs_field(GUEST_LDTR_ENCODING, 0x28);
-	printk("Read GUEST_LDTR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_LDTR_ENCODING));
+	//printk("Read GUEST_LDTR_ENCODING: %04x\n\r",read_vmcs_field(GUEST_LDTR_ENCODING));
 
 
 	/* Init base_addr for Guest segment */
 	write_vmcs_field(GUEST_ES_BASE_ENCODING, 0x00);
-	printk("Read GUEST_ES_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_ES_BASE_ENCODING));
+	//printk("Read GUEST_ES_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_ES_BASE_ENCODING));
 	write_vmcs_field(GUEST_CS_BASE_ENCODING, 0x00);
-	printk("Read GUEST_CS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_CS_BASE_ENCODING));
+	//printk("Read GUEST_CS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_CS_BASE_ENCODING));
 	write_vmcs_field(GUEST_SS_BASE_ENCODING, 0x00);
-	printk("Read GUEST_SS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_SS_BASE_ENCODING));
+	//printk("Read GUEST_SS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_SS_BASE_ENCODING));
 	write_vmcs_field(GUEST_DS_BASE_ENCODING, 0x00);
-	printk("Read GUEST_DS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_DS_BASE_ENCODING));
+	//printk("Read GUEST_DS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_DS_BASE_ENCODING));
 	write_vmcs_field(GUEST_FS_BASE_ENCODING, 0x00);
-	printk("Read GUEST_FS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_FS_BASE_ENCODING));
+	//printk("Read GUEST_FS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_FS_BASE_ENCODING));
 	write_vmcs_field(GUEST_GS_BASE_ENCODING, 0x00);
-	printk("Read GUEST_GS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GS_BASE_ENCODING));
+	//printk("Read GUEST_GS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GS_BASE_ENCODING));
 	//write_vmcs_field(GUEST_LDTR_BASE_ENCODING, &vm_defualt_task.task.ldt);
 	unsigned long ldt_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	write_vmcs_field(GUEST_LDTR_BASE_ENCODING, ldt_addr);
-	printk("Read GUEST_LDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_LDTR_BASE_ENCODING));
-	//write_vmcs_field(GUEST_TR_BASE_ENCODING, &vm_defualt_task.task.tss);
+	//printk("Read GUEST_LDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_LDTR_BASE_ENCODING));
 	unsigned long tr_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	write_vmcs_field(GUEST_TR_BASE_ENCODING, tr_addr);
-	printk("Read GUEST_TR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_TR_BASE_ENCODING));
+	//printk("Read GUEST_TR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_TR_BASE_ENCODING));
 
 	/* Init the base_addr for Guest GDTR and IDTR registers */
 	unsigned long gdt_base_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
@@ -1014,9 +1052,9 @@ void init_vmcs_guest_state() {
 	_set_limit((char *)(gdt_base_addr+40), 0x1000);
 
 	write_vmcs_field(GUEST_GDTR_BASE_ENCODING, gdt_base_addr);
-	printk("Read GUEST_GDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GDTR_BASE_ENCODING));
+	//printk("Read GUEST_GDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GDTR_BASE_ENCODING));
 	write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt_base_addr);
-	printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
+	//printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
 
 	/* Init limit for Guest segment */
 	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0x3FFFFFFF);
@@ -1189,7 +1227,7 @@ void init_vmcs_guest_state() {
 		if (msr_values[0] & (1<<6)) {  /* Bit 6 indicates support for a page-walk length of 4 */
 			/* We can init maximum 4 EPT-PML4 entries, here just init one entry(512G physical space is enough)  */
 			unsigned long ept_pdpt_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-			*((unsigned long*)ept_pml4_addr) = ept_pdpt_addr + 7;  /* Set bit 0,1,2 */
+			*((unsigned long*)(ept_pml4_addr & ~0xFFF)) = ept_pdpt_addr + 7;  /* Set bit 0,1,2 */
 
 			/*
 			 * IA32-ARCH just support 4G addressing space, so we should init 4 PDPT-entries for it.
