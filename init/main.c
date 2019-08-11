@@ -59,6 +59,7 @@ extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
 extern long user_stack[PAGE_SIZE>>2];
 extern union task_union init_task;
 extern union task_union vm_defualt_task;
+extern unsigned long tty_io_semaphore;
 
 long memory_end = 0;         /* Granularity is 4K */
 long buffer_memory_end = 0;  /* Granularity is 4K */
@@ -293,7 +294,7 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
 	if (!(ept_page_phy_addr & 0x07)) {
 		/* 如果Guest-phy-addr在12M地址空间的话，那么就实地址映射到实际内存地址，这样VM就共享host主机的12M内核地址空间了 */
-		if ((guest_phy_addr>>20) < 12) {
+		if ((guest_phy_addr>>20) < 1024) {
 			/* 至此，已经为一个guest-phy-addr分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr.
 			 * 当然也可以共享host的页表，这样就不用再重新分配和映射了 */
 			if ((guest_phy_addr>>20) >= 1 && (guest_phy_addr>>20) < 5) {
@@ -305,7 +306,7 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 			else {
 				*((unsigned long*)ept_pt_entry) = guest_phy_addr;  /* 实地址映射 */
 				ept_page_phy_addr = guest_phy_addr;
-				printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
+				//printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
 			}
 		}
 	}
@@ -315,20 +316,21 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 unsigned long get_guest_phy_addr(unsigned long guest_linear_addr) {
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	unsigned long dir_phy_addr = get_phy_addr(cr3_guest_phy_addr);
-	printk("dir_phy_addr: %08x\n\r", dir_phy_addr);
+	//printk("dir_phy_addr: %08x\n\r", dir_phy_addr);
 	unsigned long pd_index = guest_linear_addr>>22;
 	unsigned long pd_entry = dir_phy_addr + pd_index*4;
 	unsigned long pt_guest_phy_addr = *((unsigned long*) pd_entry);
-	printk("pt_guest_phy_addr: %08x\n\r", pt_guest_phy_addr);  //0x101007
+	//printk("pt_guest_phy_addr: %08x\n\r", pt_guest_phy_addr);  //0x101007
 	unsigned long pt_phy_addr = get_phy_addr(pt_guest_phy_addr);
-	printk("pt_phy_addr: %08x\n\r", pt_phy_addr);
+	//printk("pt_phy_addr: %08x\n\r", pt_phy_addr);
 	unsigned long pt_index = (guest_linear_addr>>12) & 0x3FF;
-	unsigned long page_addr =  *((unsigned long*)(pt_phy_addr + pt_index*4));
-	return page_addr;
+	unsigned long guest_phy_addr =  *((unsigned long*)(pt_phy_addr + pt_index*4));
+	return guest_phy_addr;
 }
 
 void host_idle_loop() {
 	for(;;) {
+		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
 		//unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
@@ -336,21 +338,22 @@ void host_idle_loop() {
 		unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
 		unsigned long guest_physical_full_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING);
 		unsigned long guest_physical_high_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING);
-		printk("guest_linear_addr: %08x\n\r", guest_linear_addr);
-		printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
+		unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
+		unsigned long guest_esp = read_vmcs_field(GUEST_RSP_ENCODING);
+		printk("guest_linear_addr: %08x,guest_eip: %08x, guest_esp: %08x\n\r", guest_linear_addr, guest_eip, guest_esp);
 		printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
 
 		/* 判断Guest-CR3对应的物理页是否存在 */
 		unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
-		printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
+		//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
 		unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-		printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
+		//printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
 		unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
-		printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
+		//printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
 		unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
 		unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
 		unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
-		printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
+		//printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
 		if (!(ept_pd_phy_addr & 0x07)) {
 			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pdpt_entry) = addr + 7;
@@ -363,7 +366,7 @@ void host_idle_loop() {
 		unsigned long ept_pd_index = (cr3_guest_phy_addr>>21) & 0x1FF;
 		unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
 		unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
-		printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
+		//printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
 		if (!(ept_pt_phy_addr & 0x07)) {
 			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pd_entry) = addr + 7;
@@ -376,7 +379,7 @@ void host_idle_loop() {
 		unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
 		unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
 		unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
-		printk("ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
+		//printk("ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
 		if (!(ept_page_phy_addr & 0x07)) {
 			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pt_entry) = addr + 7;
@@ -387,12 +390,12 @@ void host_idle_loop() {
 
 		/* 判断Guest-linear-addr所在的页表的物理页和自身的物理页是否存在 */
 		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
-		printk("guest_phy_addr: %08x\n\r", guest_phy_addr);
+		printk("guest_linear_addr: %08x,guest_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr);
 		unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
 		printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
 
-		__asm__ ("vmresume\n\t"  \
-				 ::);
+		__asm__ ("vmresume\n\t"   \
+				 ::"a" (guest_linear_addr));
 	}
 }
 
