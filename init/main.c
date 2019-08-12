@@ -52,6 +52,7 @@ extern void mem_init(long start, long end);
 extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
 void host_idle_loop(void);
+extern void vm_exit_handler(void);
 extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
@@ -329,7 +330,6 @@ unsigned long get_guest_phy_addr(unsigned long guest_linear_addr) {
 }
 
 void host_idle_loop() {
-	for(;;) {
 		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
@@ -340,8 +340,8 @@ void host_idle_loop() {
 		unsigned long guest_physical_high_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING);
 		unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
 		unsigned long guest_esp = read_vmcs_field(GUEST_RSP_ENCODING);
-		printk("guest_linear_addr: %08x,guest_eip: %08x, guest_esp: %08x\n\r", guest_linear_addr, guest_eip, guest_esp);
-		printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
+		printk("guest_linear_addr: %08x,guest_physical_addr: %08x, guest_eip: %08x\n\r", guest_linear_addr,guest_physical_full_addr, guest_eip);
+		//printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
 
 		/* 判断Guest-CR3对应的物理页是否存在 */
 		unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
@@ -390,13 +390,15 @@ void host_idle_loop() {
 
 		/* 判断Guest-linear-addr所在的页表的物理页和自身的物理页是否存在 */
 		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
-		printk("guest_linear_addr: %08x,guest_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr);
+		//printk("guest_linear_addr: %08x,guest_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr);
 		unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
-		printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
-
-		__asm__ ("vmresume\n\t"   \
-				 ::"a" (guest_linear_addr));
-	}
+		//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
+		printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
+		unsigned long eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+		unsigned long ept_desc[32] = {eptp_addr,0,};
+		unsigned long inv_type = 1;
+		__asm__ ("invept %1,%%eax\n\t" \
+				::"a" (inv_type),"m" (*(char*)ept_desc));
 }
 
 void guest_idle_loop() {
@@ -806,7 +808,7 @@ void init_vmcs_host_state() {
 	write_vmcs_field(HOST_RSP_ENCODING, PAGE_SIZE+(unsigned long)&init_task);
 	read_value = read_vmcs_field(HOST_RSP_ENCODING);
 	//printk("Read HOST_RSP_ENCODING: %08x\n\r", read_value);
-	write_vmcs_field(HOST_RIP_ENCODING, host_idle_loop);
+	write_vmcs_field(HOST_RIP_ENCODING, vm_exit_handler);
 	read_value = read_vmcs_field(HOST_RIP_ENCODING);
 	//printk("Read HOST_RIP_ENCODING: %08x\n\r", read_value);
 
@@ -1272,6 +1274,66 @@ void init_vmcs_guest_state() {
 	}
 }
 
+/* 初始化内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了，0x0000~0x40000(Granularity 4K) */
+void init_guest_kernel_space() {
+	/* 判断Guest-CR3对应的物理页是否存在 */
+	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
+	//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
+	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+	//printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
+	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
+	//printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
+	unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
+	unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
+	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+	//printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
+	if (!(ept_pd_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pdpt_entry) = addr + 7;
+		ept_pd_phy_addr = addr;
+	}
+	else {
+		ept_pd_phy_addr &= ~0xFFF;
+	}
+
+	unsigned long ept_pd_index = (cr3_guest_phy_addr>>21) & 0x1FF;
+	unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
+	unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+	//printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
+	if (!(ept_pt_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pd_entry) = addr + 7;
+		ept_pt_phy_addr = addr;
+	}
+	else {
+		ept_pt_phy_addr &= ~0xFFF;
+	}
+
+	unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
+	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
+	unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+	//printk("ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
+	if (!(ept_page_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pt_entry) = addr + 7;
+		ept_page_phy_addr = addr;
+		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
+		init_page_dir(ept_page_phy_addr);
+	}
+
+	for (unsigned long i = 0x00; i< 0x100;i++) {
+		unsigned long guest_linear_addr = i*0x1000;
+		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
+		unsigned long phy_addr = get_phy_addr(guest_phy_addr);
+	}
+
+	for (unsigned long i = 0x500; i< 0x2000;i++) {
+		unsigned long guest_linear_addr = i*0x1000;
+		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
+		unsigned long phy_addr = get_phy_addr(guest_phy_addr);
+	}
+}
+
 void vm_entry() {
 	unsigned long vmcs_addr = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);
 	vmcs_region_address.address[0] = vmcs_addr;
@@ -1326,6 +1388,9 @@ void vm_entry() {
 	/* 注意：因为BSP的apic_id=0, 所以要加一个标志位来判定是否处于vm state,这里设置bit31为apic_id的有效标志位。 */
 	apic_id |= (1<<31);
 	*guest_gdt_base = apic_id;
+
+	/* 初始化内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了，0x0000~0x40000(Granularity 4K) */
+	init_guest_kernel_space();
 
 	__asm__ ("vmlaunch\n\t"              \
 			 "ctl_passthrough_ip:\n\t"   \

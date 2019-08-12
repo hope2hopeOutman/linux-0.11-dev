@@ -92,7 +92,7 @@ KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 
 .text
-.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
+.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size,vm_exit_handler
 .globl startup_32,sync_semaphore,idle_loop,ap_default_loop,task_exit_clear,globle_var_test_start,globle_var_test_end,init_pgt
 startup_32:
 	movl $0x10,%eax
@@ -656,6 +656,22 @@ ap_default_loop:
     hlt
     xorl %eax,%eax
     jmp ap_default_loop
+
+vm_exit_handler:
+    pushl %edi
+    pushl %esi
+    pushl %edx
+    pushl %ecx
+    pushl %ebx
+    pushl %eax
+    call host_idle_loop
+    popl %eax
+    popl %ebx
+    popl %ecx
+    popl %edx
+    popl %esi
+    popl %edi
+    vmresume
 
 
 
