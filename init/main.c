@@ -51,7 +51,6 @@ extern void floppy_init(void);
 extern void mem_init(long start, long end);
 extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
-void host_idle_loop(void);
 extern void vm_exit_handler(void);
 extern long startup_time;
 extern long params_table_addr;
@@ -296,16 +295,20 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	if (!(ept_page_phy_addr & 0x07)) {
 		/* 如果Guest-phy-addr在12M地址空间的话，那么就实地址映射到实际内存地址，这样VM就共享host主机的12M内核地址空间了 */
 		if ((guest_phy_addr>>20) < 1024) {
-			/* 至此，已经为一个guest-phy-addr分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr.
-			 * 当然也可以共享host的页表，这样就不用再重新分配和映射了 */
 			if ((guest_phy_addr>>20) >= 1 && (guest_phy_addr>>20) < 5) {
+				/*
+				 * 因为在Guest环境中，对其内核空间也是实地址映射的，这里将GPT(Guest-page-table)也是分配在GPA(Guest-physical-addr)的1M~5M地址空间的，
+				 * 用于映射Guest的4G物理地址空间，因此如果得到的GPA在这个区间的话，说明它是GPT，所以要进行初始化使其实地址映射内核空间。
+				 * 当然也可以共享host相同位置(1M~5M)的页表，这样就不用再重新分配和映射了，但是这样有个问题，会引起page的RWX和Access位的混乱,想想看是不是这样，
+				 * 因此，这里为Guest的GDP和GPT在PAGE_IN_REAL_MEM_MAP空间单独分配page用于管理Guest的地址空间。
+				 */
 				unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 				*((unsigned long*)ept_pt_entry) = addr + 7;
 				ept_page_phy_addr = addr;
 				init_page_table(ept_page_phy_addr, guest_phy_addr);
 			}
 			else {
-				*((unsigned long*)ept_pt_entry) = guest_phy_addr;  /* 实地址映射 */
+				*((unsigned long*)ept_pt_entry) = guest_phy_addr;  /* 实地址映射到host相同的page */
 				ept_page_phy_addr = guest_phy_addr;
 				//printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
 			}
@@ -329,80 +332,101 @@ unsigned long get_guest_phy_addr(unsigned long guest_linear_addr) {
 	return guest_phy_addr;
 }
 
-void host_idle_loop() {
-		unlock_op(&tty_io_semaphore);
+void do_vm_page_fault() {
+	unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
+	unsigned long guest_physical_full_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING);
+	unsigned long guest_physical_high_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING);
+	unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
+	unsigned long guest_esp = read_vmcs_field(GUEST_RSP_ENCODING);
+	printk("guest_linear_addr: %08x,guest_physical_addr: %08x, guest_eip: %08x\n\r", guest_linear_addr,guest_physical_full_addr, guest_eip);
+	//printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
+	/* Start: 判断Guest-CR3对应的物理页是否存在 */
+	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
+	//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
+	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+	//printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
+	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
+	//printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
+	unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
+	unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
+	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+	//printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
+	if (!(ept_pd_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pdpt_entry) = addr + 7;
+		ept_pd_phy_addr = addr;
+	}
+	else {
+		ept_pd_phy_addr &= ~0xFFF;
+	}
+
+	unsigned long ept_pd_index = (cr3_guest_phy_addr>>21) & 0x1FF;
+	unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
+	unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+	//printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
+	if (!(ept_pt_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pd_entry) = addr + 7;
+		ept_pt_phy_addr = addr;
+	}
+	else {
+		ept_pt_phy_addr &= ~0xFFF;
+	}
+
+	unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
+	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
+	unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
+	//printk("ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
+	if (!(ept_page_phy_addr & 0x07)) {
+		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+		*((unsigned long*)ept_pt_entry) = addr + 7;
+		ept_page_phy_addr = addr;
+		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
+		init_page_dir(ept_page_phy_addr);
+	}
+	/* End: 判断Guest-CR3对应的物理页是否存在 */
+
+	/* 判断Guest-linear-addr所在的页表的物理页是否存在 */
+	unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
+	//printk("guest_linear_addr: %08x,guest_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr);
+	/* 判断Guest-linear-addr自身的物理页是否存在 */
+	unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
+	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
+	printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
+
+	/* 刷新Guest TLB */
+	unsigned long eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+	unsigned long ept_desc[32] = {eptp_addr,0,};
+	unsigned long inv_type = 1;  /* Single-Context */
+	__asm__ ("invept %1,%%eax\n\t" \
+			::"a" (inv_type),"m" (*(char*)ept_desc));
+}
+
+void vm_exit_diagonose() {
+		//unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
 		//unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
 		printk("exit_reason: %08x, vm_exit_qualification: %08x\n\r", vm_exit_reason, vm_exit_qualification);
-		unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
-		unsigned long guest_physical_full_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING);
-		unsigned long guest_physical_high_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING);
-		unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
-		unsigned long guest_esp = read_vmcs_field(GUEST_RSP_ENCODING);
-		printk("guest_linear_addr: %08x,guest_physical_addr: %08x, guest_eip: %08x\n\r", guest_linear_addr,guest_physical_full_addr, guest_eip);
-		//printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
-
-		/* 判断Guest-CR3对应的物理页是否存在 */
-		unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
-		//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
-		unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-		//printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
-		unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
-		//printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
-		unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
-		unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
-		unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
-		//printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
-		if (!(ept_pd_phy_addr & 0x07)) {
-			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-			*((unsigned long*)ept_pdpt_entry) = addr + 7;
-			ept_pd_phy_addr = addr;
+		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
+		}
+		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
+		}
+		else if (vm_exit_reason == VM_EXIT_REASON_VMWRITE) {
+		}
+		else if (vm_exit_reason == VM_EXIT_REASON_EPT_VIOLATION) {
+			do_vm_page_fault();
+		}
+		else if (vm_exit_reason == VM_EXIT_REASON_EPT_MISCONFIGURATION) {
 		}
 		else {
-			ept_pd_phy_addr &= ~0xFFF;
+			panic("Can't handle this kind of exit error");
 		}
-
-		unsigned long ept_pd_index = (cr3_guest_phy_addr>>21) & 0x1FF;
-		unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
-		unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
-		//printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
-		if (!(ept_pt_phy_addr & 0x07)) {
-			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-			*((unsigned long*)ept_pd_entry) = addr + 7;
-			ept_pt_phy_addr = addr;
-		}
-		else {
-			ept_pt_phy_addr &= ~0xFFF;
-		}
-
-		unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
-		unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
-		unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
-		//printk("ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
-		if (!(ept_page_phy_addr & 0x07)) {
-			unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-			*((unsigned long*)ept_pt_entry) = addr + 7;
-			ept_page_phy_addr = addr;
-			/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
-			init_page_dir(ept_page_phy_addr);
-		}
-
-		/* 判断Guest-linear-addr所在的页表的物理页和自身的物理页是否存在 */
-		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
-		//printk("guest_linear_addr: %08x,guest_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr);
-		unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
-		//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
-		printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
-		unsigned long eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-		unsigned long ept_desc[32] = {eptp_addr,0,};
-		unsigned long inv_type = 1;
-		__asm__ ("invept %1,%%eax\n\t" \
-				::"a" (inv_type),"m" (*(char*)ept_desc));
 }
 
 void guest_idle_loop() {
-	printk("VM-entry success and come to guest env.\n\r");
+	printk("VM-entry success based on EPT and VPID(Mem-Virtualization)\n\r");
+	printk("Welcome to guest environment.\n\r");
 	__asm__ ("guest_loop:\n\t"            \
 			 "xorl %%eax,%%eax\n\t"       \
 			 "nop\n\t"                    \
@@ -1274,9 +1298,9 @@ void init_vmcs_guest_state() {
 	}
 }
 
-/* 初始化内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了，0x0000~0x40000(Granularity 4K) */
+/* 初始化内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了 */
 void init_guest_kernel_space() {
-	/* 判断Guest-CR3对应的物理页是否存在 */
+	/* =============== 判断Guest-CR3对应的物理页是否存在,如果不存在分配一个Page并初始化 ===============*/
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
@@ -1320,14 +1344,42 @@ void init_guest_kernel_space() {
 		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
 		init_page_dir(ept_page_phy_addr);
 	}
+	/* ============================================= Init Guest-CR3 End =============================================*/
 
-	for (unsigned long i = 0x00; i< 0x100;i++) {
-		unsigned long guest_linear_addr = i*0x1000;
-		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
-		unsigned long phy_addr = get_phy_addr(guest_phy_addr);
-	}
-
-	for (unsigned long i = 0x500; i< 0x2000;i++) {
+	/*
+	 * 初始化VM的内核空间，使其实地址映射到host kernel的44M空间(data+code+permanent_real_addr_map_space).
+	 * 这里着重讲下为什么permanent_real_addr_map_space这一地址空间为什么必须要大于: (8M+16K+4K(PML4)+4K(EPDPT))+(4M+4K) = 12M+28K
+	 * 我们知道Guest的地址空间有EPT表映射，EPT表包括：EPML4表,EPDPT表,EDP表和EPT表，这也就决定了EPT的四级映射结构。
+	 * 首先EPT中的各类表的表项都占用8个字节。
+	 * 1. EPML表占用一页4K，并只有4个有效Entry	  (管理4*512G地址空间)
+	 * 2. EPDPT表中存储了512个EDP表             (管理512G地址空间)
+	 * 3. EDP表中存储了512个EPT表               (管理1G地址空间)
+	 * 4. EPT表中存储了512个Page                (管理2M地址空间)
+	 * 由此可推出： 每个EPT表可以映射2M的地址空间，从而每个EDP表可以管理1G的地址空间。
+	 * 因此对于拥有4G地址空间的Guest，需要4个EDP表才能完整的映射4G地址空间，对应的EPT表需要2K个。
+	 * 从而可得出： EPT-paging-structure总共需要占用： 4*4K + 2K*4K + 4K(EPML4表) + 4K(EPDPT表) = 8M+6*4K
+	 *          Guest-paging-structure总共需要占用： 4K(Guest DP) + 1K*4K(PT) = 4M + 4K
+	 *          最终至多占用： 8M+4M+6*4K+4K = 12M+7*4k
+	 * 这也是为什么要把permanent_real_addr_map_space(PAGE_IN_REAL_MEM_MAP)调整为32M，而不是之前默认的NR_TASKS*2*4K=512K。
+	 *
+	 * 这里还要注意，如果guest_linear_addr的地址空间不包括1M～5M(用于存放guest PTs)，这样的话只需要很小的空间就行了，想想为什么？
+	 * 如果你能自己想明白这个问题，那么你就完全理解了EPT的映射机制了。
+	 * 解释下吧：因为这里1M～5M用于存储guest PTs(1K个页表用于映射Guest整个4G地址空间)，所以这1K个页表要是都分配的话要占用4M空间,
+	 * 所以在get_phy_addr方法中是按需分配整个空间的页表的，不在这个空间的guest_linear_addr是不分配page的，而是直接实地址映射到host page.
+	 * 而guest_linear_addr一旦落在1M~5M这个空间，在PAGE_IN_REAL_MEM_MAP空间中会实际分配一个page给它并初始化为PT表。
+	 * 这样一来所用的空间一定是>4M，所以NR_TASKS*2*4K=512K的空间就不够用了。
+	 *
+	 * 例如：guest_linear_addr < 1M 或 5M <= guest_linear_addr <= 44M
+	 * 1M 占用 EDP的一个目录项，要分配一个EPT表，占用guest DP一个目录项，要分配一个GPT页表，这就占用了2个page了.
+	 * 5~44M 占用10个GPT页表((44-5+1)/4 = 10*4M)管理这40M空间要分配10个page,而这个10个page是有EPT管理的，因此要占用((44-5+1)/2 = 20*2M) 20个EPT表，这就占用30个page了
+	 * 这些guest_linear_addr本身是普通的page，不是Guest DP 或 GUEST PT,所以是直接映射到host相同的page上的，因此不分配page.
+	 * 所以总共才需要32个page, 128K的空间。
+	 *
+	 * 基于EPT虚拟化GPA(Guest-phy-addr)本身就挺复杂的，逻辑上相对与普通paging就拔高一个维度，
+	 * 我这里又将其映射到host的kernel，使其能共享host的kernel地址空间，又进一步复杂化，尼玛搞死人啊O(∩_∩)O哈哈~，
+	 * 后面会基于本OS，制作一个Guest-OS image将其加载到VM中运行，这样就不用共享host kernel了，不会这么复杂了。
+	 */
+	for (unsigned long i = 0x00; i< 0x2C00;i++) {  /* i (Granularity: 4K), 44M内核空间 */
 		unsigned long guest_linear_addr = i*0x1000;
 		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
 		unsigned long phy_addr = get_phy_addr(guest_phy_addr);
@@ -1389,7 +1441,10 @@ void vm_entry() {
 	apic_id |= (1<<31);
 	*guest_gdt_base = apic_id;
 
-	/* 初始化内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了，0x0000~0x40000(Granularity 4K) */
+	/*
+	 * 初始化Guest内核空间，使其共享host的44M(12M(kernel)+32M(Real-map space))内核空间，
+	 * 后面制作一个GuestOS image，这样就不用共享host内核了.
+	 */
 	init_guest_kernel_space();
 
 	__asm__ ("vmlaunch\n\t"              \
@@ -1840,11 +1895,7 @@ void main(void)		/* This really IS void, no error here. */
 	 * 这里目前最大只能支持64M内存，因为每个进程的寻址空进就是64M，所以如果内存大于64M话，因为是共享同一个目录表的，所以会造成内核与普通进程寻址空间冲突。
 	 * 下面会改为每个进程都有自己的目录表，这样都有4G的寻址空间而不会冲突。
 	 */
-	/*if (memory_end > 64*1024*1024) {
-		memory_end = 64*1024*1024;
-	}*/
-
-	if (memory_end == 0x100000 || (((memory_end-1)*0x1000)+0xFFF) >= 16*1024*1024) {
+	if (memory_end == 0x100000 || (((memory_end-1)*0x1000)+0xFFF) >= 64*1024*1024) {
 		unsigned long code_szie = (code_end-OS_BASE_ADDR);
 		if (code_szie < 0x100000) {
 		    //buffer_memory_end = (OS_BASE_ADDR + 4*1024*1024) / 0x1000; //因为内核最终加载到以5M为基地址的内存处，所以这里要调整。
@@ -1856,8 +1907,10 @@ void main(void)		/* This really IS void, no error here. */
 		}
 	}
 	else {
-		/* 内存必须>=16M */
-		return;
+		/*
+		 * 内存必须>=64M, 因为在内核空间分配了一个永久实地址映射空间，大小为32M，加上内核占用的12M空间，一共要44M内存空间，所以这里定义内存最小为64M.
+		 */
+		panic("Real physical memory size must be greater than 64M.");
 	}
 
 	main_memory_start = buffer_memory_end;

@@ -295,4 +295,11 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define AP_DEFAULT_TASK_NR    0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 #define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
 
+#define VM_EXIT_REASON_EXTERNAL_INTERRUPT     1   /* External interrupt */
+#define VM_EXIT_REASON_VMREAD                 23  /* VMREAD  vmcs-shadow not support */
+#define VM_EXIT_REASON_VMWRITE                25  /* VMWRITE vmcs-shadow not support */
+#define VM_EXIT_REASON_EPT_VIOLATION          48  /* EPT violation        */
+#define VM_EXIT_REASON_EPT_MISCONFIGURATION   49  /* EPT misconfiguration */
+
+
 #endif

@@ -657,6 +657,15 @@ ap_default_loop:
     xorl %eax,%eax
     jmp ap_default_loop
 
+/*
+   这里详细解释下为什么要保存Guest的通用寄存器值,而且为什么要在这里保存而不是在C函数中通过嵌入式汇编保存.
+   1. 如果基于寄存器进行寻址的话, 一定要备份Guest通用寄存器的值
+      例如 movl Ox4(%%eax),%%ecx
+      通过上面方式寻址时出现page-fault错误的话，那么当处理完page-fault后执行vmresume,eax寄存器的值很可能会改变的，这时得到的就不是想要的值了
+      程序会出错，例如lock_op就会遇到这样的问题，在处理完page-fault后,这个问题太难排查了，压根就没往这方面想.
+   2. 如果在C函数的开头嵌入这些备份汇编，GCC优化后就不是你想要的顺序了,备份会有问题.
+      所以在汇编文件里加入备份代码最保险了.
+*/
 vm_exit_handler:
     pushl %edi
     pushl %esi
@@ -664,7 +673,7 @@ vm_exit_handler:
     pushl %ecx
     pushl %ebx
     pushl %eax
-    call host_idle_loop
+    call vm_exit_diagonose
     popl %eax
     popl %ebx
     popl %ecx
