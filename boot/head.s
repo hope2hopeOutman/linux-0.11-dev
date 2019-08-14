@@ -673,7 +673,7 @@ vm_exit_handler:
     pushl %ecx
     pushl %ebx
     pushl %eax
-    call vm_exit_diagonose
+    call vm_exit_diagnose
     popl %eax
     popl %ebx
     popl %ecx
