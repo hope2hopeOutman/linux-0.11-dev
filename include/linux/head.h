@@ -301,5 +301,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define VM_EXIT_REASON_EPT_VIOLATION          48  /* EPT violation        */
 #define VM_EXIT_REASON_EPT_MISCONFIGURATION   49  /* EPT misconfiguration */
 
+#define GDT_IDENTITY_NO  0
+#define IDT_IDENTITY_NO  1
 
 #endif

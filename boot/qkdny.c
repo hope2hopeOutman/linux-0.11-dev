@@ -80,6 +80,12 @@ void set_hd_intr_gate() {
 	outb(inb_p(0xA1)&0xbf, 0xA1);
 }
 
+void set_hd_intr_gate_in_vm(struct desc_struct * guest_idt_p) {
+	set_intr_gate_in_vm(guest_idt_p, 0x2E, &hd_read_interrupt);
+	outb_p(inb_p(0x21)&0xfb, 0x21);
+	outb(inb_p(0xA1)&0xbf, 0xA1);
+}
+
 int do_win_result(void) {
 	int i = inb_p(HD_STATUS);
 
@@ -162,11 +168,11 @@ void do_hd_read_request(void) {
 	HdParamsT hd_params;
 
 	hd_params.cyl   = *(unsigned short *) (0  + 0x90080);
-	hd_params.head  =  *(unsigned char *) (2  + 0x90080);
+	hd_params.head  = *( unsigned char *) (2  + 0x90080);
 	hd_params.wpcom = *(unsigned short *) (5  + 0x90080);
-	hd_params.ctl   =  *(unsigned char *) (8  + 0x90080);
+	hd_params.ctl   = *( unsigned char *) (8  + 0x90080);
 	hd_params.lzone = *(unsigned short *) (12 + 0x90080);
-	hd_params.sect  =  *(unsigned char *) (14 + 0x90080);
+	hd_params.sect  = *( unsigned char *) (14 + 0x90080);
 
 	unsigned int block, dev = 0;
 	unsigned int sec, head, cyl, sread;
@@ -225,4 +231,69 @@ void do_hd_read_request(void) {
 void set_seg_limit(void* addr, unsigned long limit){
    limit -=1;              /* limit的粒度G设置为1(4k) */
    set_limit(addr, limit);
+}
+
+/* Just for test HD I/O in VM whether can work well */
+void do_hd_read_request_in_vm(void) {
+	HdParamsT hd_params;
+
+	hd_params.cyl   = *(unsigned short *) (0  + 0x90080);
+	hd_params.head  = *(unsigned  char *) (2  + 0x90080);
+	hd_params.wpcom = *(unsigned short *) (5  + 0x90080);
+	hd_params.ctl   = *(unsigned  char *) (8  + 0x90080);
+	hd_params.lzone = *(unsigned short *) (12 + 0x90080);
+	hd_params.sect  = *(unsigned  char *) (14 + 0x90080);
+
+	unsigned int block, dev = 0;
+	unsigned int sec, head, cyl, sread;
+	unsigned int nsect;
+	unsigned int totalNeedSects = 8; /* 读取硬盘1M地址处开始的4K OS code. */
+	block = 0x100000 / 512;          /* 1M，因为现代硬盘的引导区已经扩展到1M了(不是以前的1个扇区了)，所以OS代码是放在1M硬盘空间的开始处的. */
+
+	do_reset_hd(dev, &hd_params); /* reset hd. */
+	do_hd_read_out(dev, hd_params.sect, 0, 0, 0, WIN_RESTORE, &hd_params); /* recalibrate HD. */
+
+	__asm__("divl %4":"=a" (block),"=d" (sec):"0" (block),"1" (0),
+			"r" (hd_params.sect));
+	__asm__("divl %4":"=a" (cyl),"=d" (head):"0" (block),"1" (0),
+			"r" (hd_params.head));
+
+	sread = sec++;
+	while (totalNeedSects) {
+		if ((hd_params.sect - sread) <= totalNeedSects) {
+			nsect = hd_params.sect - sread;
+		} else {
+			nsect = totalNeedSects;
+		}
+
+		do_hd_read_out(dev, nsect, sec, head, cyl, WIN_READ, &hd_params);
+
+		totalNeedSects -= nsect;
+		sread += nsect;
+		if (sread == hd_params.sect) {
+			sread = 0;
+			sec = 1;
+			if (head == (hd_params.head - 1)) {
+				++cyl;
+				head = 0;
+			} else {
+				++head;
+			}
+		}
+	}
+
+	/*
+	 *  This code segment is very important, it can make sure the final left sectors(<63 sectors) can be loaded successfully before
+	 *  executing CLI command in head.s, This fault spent me three days, i want to cry hahahaha, this event let me have a deep understand is that
+	 *  the sync not only by high level app, but also should be concern in kernel. the correct logic sometimes can not make you have the right result,
+	 *  in kernel the nop[1...n] command is very important sometimes, sync anytime anywhere.
+	 */
+	if (!totalNeedSects) {
+		int retries = 10000;
+		repeat:
+		if (!do_controller_ready(retries)) {
+			retries = 10000;
+			goto repeat;
+		};
+	}
 }

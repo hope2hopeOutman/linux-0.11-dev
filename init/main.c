@@ -499,11 +499,11 @@ void time_init(void)
 	struct tm time;
 
 	do {
-		time.tm_sec = CMOS_READ(0);
-		time.tm_min = CMOS_READ(2);
+		time.tm_sec  = CMOS_READ(0);
+		time.tm_min  = CMOS_READ(2);
 		time.tm_hour = CMOS_READ(4);
 		time.tm_mday = CMOS_READ(7);
-		time.tm_mon = CMOS_READ(8);
+		time.tm_mon  = CMOS_READ(8);
 		time.tm_year = CMOS_READ(9);
 	} while (time.tm_sec != CMOS_READ(0));
 	BCD_TO_BIN(time.tm_sec);

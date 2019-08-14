@@ -93,7 +93,7 @@ unsigned long get_current_apic_id(){
 	unsigned char gdt_base[8] = {0,}; /* 16-bit limit stored in low two bytes, and gdt_base stored in high 4bytes. */
 	/*
 	 * 在Guest VM 环境下，执行cpuid指令会导致vm-exit，所以这里要判断当前的执行环境是否在VM环境.
-	 * 实现思路：我们知道在VM环境下，已经为GDT表分配了4K空间，且GDT表的首8字节是不用的，这里利用8个字节存储vm-entry环境下的apic_id.
+	 * 实现思路：我们知道在VM环境下，已经为GDT表分配了4K空间，且GDT表的首8字节是不用的，这里利用这8个字节存储vm-entry环境下的apic_id.
 	 */
 	__asm__ ("sgdt %1\n\t"              \
 			 "movl %2,%%eax\n\t"        \

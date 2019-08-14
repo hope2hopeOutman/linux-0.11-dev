@@ -7,6 +7,9 @@
  */
 
 #include <linux/head.h>
+#include <asm/system.h>
+
+extern unsigned long tty_io_semaphore;
 
 void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
@@ -163,21 +166,43 @@ void do_vm_page_fault() {
 }
 
 void vm_exit_diagnose() {
-		//unlock_op(&tty_io_semaphore);
+		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
-		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
-		//unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
-		printk("exit_reason: %08x, vm_exit_qualification: %08x\n\r", vm_exit_reason, vm_exit_qualification);
 		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
+			//cli();
+		}
+		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
+		printk("exit_reason: %08x\n\r", vm_exit_reason);
+		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
+			__asm__ ("exit_external_intr_loop:\n\t"      \
+					 "xorl %%eax,%%eax\n\t"              \
+					 "nop\n\t"                           \
+					 "jmp exit_external_intr_loop\n\t"   \
+					 ::);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
+			__asm__ ("exit_vmread_loop:\n\t"    \
+					 "xorl %%eax,%%eax\n\t"     \
+					 "nop\n\t"                  \
+					 "jmp exit_vmread_loop\n\t" \
+					 ::);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMWRITE) {
+			__asm__ ("exit_vmwrite_loop:\n\t"       \
+					 "xorl %%eax,%%eax\n\t"         \
+					 "nop\n\t"                      \
+					 "jmp exit_vmwrite_loop\n\t"    \
+					 ::);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_EPT_VIOLATION) {
 			do_vm_page_fault();
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_EPT_MISCONFIGURATION) {
+			__asm__ ("exit_ept_misconfig_loop:\n\t"      \
+					 "xorl %%eax,%%eax\n\t"              \
+					 "nop\n\t"                           \
+					 "jmp exit_ept_misconfig_loop\n\t"   \
+					 ::);
 		}
 		else {
 			panic("Can't handle this kind of exit error");

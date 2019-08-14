@@ -14,12 +14,17 @@
 #include <linux/head.h>
 #include <linux/sched.h>
 #include <asm/system.h>
+#include <linux/common.h>
+
+void ia32_sysenter();
+unsigned long support_64arch_check();
 
 extern long user_stack[PAGE_SIZE>>2];
 extern union task_union init_task;
 extern void vm_exit_handler(void);
 extern union task_union vm_defualt_task;
-extern unsigned long tty_io_semaphore;
+extern unsigned long tty_io_semaphore, load_os_addr;
+extern desc_table idt;
 
 /* 官方文档规定，VMXON_REGION的地址是64bits，所以这里用来保存vmxon_region的物理地址。 */
 struct vmxon_region_address {unsigned long address[2];} vmxon_region_address;
@@ -164,11 +169,22 @@ unsigned long read_vmcs_field(unsigned long field_encoding) {
 	return field_value;
 }
 
-
-
 void guest_idle_loop() {
 	printk("VM-entry success based on EPT and VPID(Mem-Virtualization)\n\r");
 	printk("Welcome to guest environment.\n\r");
+
+	load_os_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+	printk("load_os_addr: %08x\n\r", load_os_addr);
+
+	unsigned long idt_addr = get_gdt_idt_addr(IDT_IDENTITY_NO);
+	printk("idt_addr: %08x\n\r", idt_addr);
+	struct desc_struct * guest_idt_p = (struct desc_struct *) idt_addr;
+	set_hd_intr_gate_in_vm(guest_idt_p);
+
+	sti();
+	do_hd_read_request_in_vm();
+	cli();
+
 	__asm__ ("guest_loop:\n\t"            \
 			 "xorl %%eax,%%eax\n\t"       \
 			 "nop\n\t"                    \
@@ -196,6 +212,16 @@ void init_vmcs_pinbased_ctls() {
 	read_msr(IA32_VMX_TRUE_PINBASED_CTLS,msr_values);
 	printk("IA32_VMX_TRUE_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value |= (msr_values[0] & msr_values[1]); /* Refer to algorithm 3. chapter 31.5.1 */
+
+	/*
+	 *  If this control is 1, external interrupts cause VM exits. Otherwise, they are delivered normally
+		through the guest interrupt-descriptor table (IDT). If this control is 1, the value of RFLAGS.IF
+		does not affect interrupt blocking.
+	 */
+	if ((msr_values[0] & (1<<0)) || (msr_values[1] & (1<<0))) {
+		init_value |= (1<<0);  /* External-interrupt exiting. */
+	}
+
 	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
 	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
@@ -502,10 +528,6 @@ void init_vmcs_ctrl_fields() {
 	}
 }
 
-void ia32_sysenter() {
-	printk("Come to sysenter env.\n\r");
-}
-
 void init_vmcs_host_state() {
 	unsigned long msr_values[2] = {0,};
 	unsigned long init_value = 0;
@@ -591,15 +613,6 @@ void init_vmcs_host_state() {
 	else {
 		panic("Now can not support 64-arch.");
 	}
-}
-
-unsigned long support_64arch_check() {
-	unsigned long support_check = 0;
-	__asm__ ("movl $0x80000001,%%eax\n\r"  \
-			 "cpuid\n\r"                  \
-			 :"=d" (support_check):);
-	printk("edx: %08x\n\r", support_check);
-	return support_check & (1<<29);
 }
 
 void init_vmcs_guest_state() {
@@ -825,7 +838,8 @@ void init_vmcs_guest_state() {
 	write_vmcs_field(GUEST_GDTR_BASE_ENCODING, gdt_base_addr);
 	//printk("Read GUEST_GDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GDTR_BASE_ENCODING));
 	write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt_base_addr);
-	//printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
+	//write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt);
+	printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
 
 	/* Init limit for Guest segment */
 	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0x3FFFFFFF);
@@ -1112,11 +1126,23 @@ void vm_entry() {
 			 ::);
 
 	unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
-	//unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
 	unsigned long vm_instruction_error  = read_vmcs_field(IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING);
 	printk("exit_reason: %08x, instruction_error: %08x\n\r", vm_exit_reason, vm_instruction_error);
 }
 
 void quit_vmx_env() {
 	__asm__ ("vmxoff;" ::);
+}
+
+void ia32_sysenter() {
+	printk("Come to sysenter env.\n\r");
+}
+
+unsigned long support_64arch_check() {
+	unsigned long support_check = 0;
+	__asm__ ("movl $0x80000001,%%eax\n\r"  \
+			 "cpuid\n\r"                  \
+			 :"=d" (support_check):);
+	printk("edx: %08x\n\r", support_check);
+	return support_check & (1<<29);
 }
