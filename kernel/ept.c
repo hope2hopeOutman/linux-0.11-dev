@@ -169,9 +169,27 @@ void vm_exit_diagnose() {
 		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
 		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
-			//cli();
+			cli();
 		}
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
+		/*
+		 *  当开启 "External-interrupt exiting" Pin-Based VM-Execution Controls, 当HD-Read-INTR到来时会触发中断，
+		 *  使得VM-EXIT，然后执行到该处，即使如上我们CLI关闭了external中断，但是在执行下面的printk函数时，当其在显示和调整显示
+		 *  位置的过程中还是会执行STI指令开启中断(con_write中的set_origin和set_cursor)，这时当前的打印还没有unlock_op自己占用的锁，
+		 *  这时相同的中断又来了，但是IDT已经是host IDT了，会执行system_call.s中的hd_interrupt方法，它里面也会执行printk，
+		 *  这时就会发生死锁，这也是为什么打印完exit_reason后，程序就停在那不动了，进入不了exit_external_intr_loop循环.
+		 *
+		 *  假设HOST OS就是不允许GUEST OS直接访问硬件IO(开启 "External-interrupt exiting")，那么就不得不通过这种VM-EXIT方式来处理外界的IO中断了。
+		 *  实现思路如下:
+		 *             1. 首先要开辟一个共享区域用于VMM和VM之间的消息传递.
+		 *                例如不同类型的中断对应共享区不同的offset，这样VMM就可以根据exit_reason到相应的共享区offset取到对应的context信息，
+		 *                帮助VM在VMM环境下完成相应的中断操作.
+		 *             2. 假设VM环境下发生读取硬盘的操作，这时要先把读取的块数、起始位置和存放位置这些参数存储在共享区，随后VM再执行硬盘IO操作，
+		 *                当第一个HD-read-INTR到来时，会触发VM-EXIT进入VMM.
+		 *             3. VMM通过这些参将读取的blocks存储到VM指定的位置，最后执行VMresume就OK了.
+		 *  这种实现肯定效率上有损失的，所以APIC-virtualization要是硬件能支持，那持效率就高多了，这也是为什么只有Intel的企业级芯片才支持这个feature.
+		 *  本系统通过开关的形式支持这两种外部I/O的访问方式: (1) VM直接访问外部I/O, (2) VM通过VM-EXIT访问外部I/O.
+		 */
 		printk("exit_reason: %08x\n\r", vm_exit_reason);
 		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
 			__asm__ ("exit_external_intr_loop:\n\t"      \
