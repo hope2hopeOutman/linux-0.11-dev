@@ -17,7 +17,7 @@ int main(int argc, char ** argv) {
     fread(buffer, 1, 4096, fpr);
     fwrite(buffer, 1, 4096, fpw);
 
-    fseek(fpw, 0x100000, SEEK_SET); // 1M = 1024*1024 = 1048576 = 0x100000
+    fseek(fpw, 0x100000, SEEK_SET);  /* 硬盘第一分区，从0x00处开始存储host OS的code，引导区占用1M，所以从1M开始 */
 
     for (int i =0; i< 128; i++)
     {
@@ -25,6 +25,15 @@ int main(int argc, char ** argv) {
     	fwrite(buffer, 1, 4096, fpw);
     }
 
+    FILE* fpr_guest_os = fopen("GuestOS", "r");
+    fseek(fpw, 0x500000, SEEK_SET);  /* 硬盘第一分区，从4M开始存储GuestOS的code，也是从硬盘的5M开始. */
+    for (int i =0; i< 128; i++)
+    {
+    	fread(buffer, 1, 4096, fpr_guest_os);
+    	fwrite(buffer, 1, 4096, fpw);
+    }
+
     fclose(fpr);
+    fclose(fpr_guest_os);
     fclose(fpw);
 }

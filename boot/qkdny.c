@@ -18,6 +18,8 @@
 #define OS_PRELOAD_SIZE 0x8000  /* 被预加载的OS-CODE大小，这部分代码用于加载剩余的OS-CODE，OS-CODE完全加载后再初始化内核。 */
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
+unsigned long load_guest_os_flag = 0;
+unsigned long load_guest_os_addr = 0;
 #define OS_PARAMS_ADDR(total_mem_4k_size) \
 					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\
 					  ((total_mem_4k_size-OS_INIT_PARAMS_LIMIT)<<12)\
@@ -159,8 +161,14 @@ void do_read_intr() {
 	if (do_win_result()) {
 		return;
 	}
-	port_read(HD_DATA, load_os_addr, 256);
-	load_os_addr += 512;
+	if (!load_guest_os_flag) {
+		port_read(HD_DATA, load_os_addr, 256);
+		load_os_addr += 512;
+	}
+	else {
+		port_read(HD_DATA, load_guest_os_addr, 256);
+		load_guest_os_addr += 512;
+	}
 }
 
 /* 这块是加载剩余OS-CODE的方法，具体如何访问硬盘参见bootsect.s，那里有我详细的注释。 */
@@ -234,7 +242,7 @@ void set_seg_limit(void* addr, unsigned long limit){
 }
 
 /* Just for test HD I/O in VM whether can work well */
-void do_hd_read_request_in_vm(void) {
+void do_hd_read_request_in_vm(unsigned long start_addr, unsigned long sectors) {
 	HdParamsT hd_params;
 
 	hd_params.cyl   = *(unsigned short *) (0  + 0x90080);
@@ -247,8 +255,8 @@ void do_hd_read_request_in_vm(void) {
 	unsigned int block, dev = 0;
 	unsigned int sec, head, cyl, sread;
 	unsigned int nsect;
-	unsigned int totalNeedSects = 8; /* 读取硬盘1M地址处开始的4K OS code. */
-	block = 0x100000 / 512;          /* 1M，因为现代硬盘的引导区已经扩展到1M了(不是以前的1个扇区了)，所以OS代码是放在1M硬盘空间的开始处的. */
+	unsigned int totalNeedSects = sectors; /* 读取硬盘1M地址处开始的4K OS code. */
+	block = start_addr / 512;              /* 1M，因为现代硬盘的引导区已经扩展到1M了(不是以前的1个扇区了)，所以OS代码是放在1M硬盘空间的开始处的. */
 
 	do_reset_hd(dev, &hd_params); /* reset hd. */
 	do_hd_read_out(dev, hd_params.sect, 0, 0, 0, WIN_RESTORE, &hd_params); /* recalibrate HD. */

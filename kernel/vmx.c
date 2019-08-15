@@ -182,7 +182,7 @@ void guest_idle_loop() {
 	set_hd_intr_gate_in_vm(guest_idt_p);
 
 	sti();
-	do_hd_read_request_in_vm();
+	do_hd_read_request_in_vm(0x100000,8);
 	cli();
 
 	__asm__ ("guest_loop:\n\t"            \

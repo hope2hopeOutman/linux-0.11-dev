@@ -71,8 +71,17 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 				init_page_table(ept_page_phy_addr, guest_phy_addr);
 			}
 			else {
-				*((unsigned long*)ept_pt_entry) = guest_phy_addr;  /* 实地址映射到host相同的page */
-				ept_page_phy_addr = guest_phy_addr;
+				if ((guest_phy_addr>>20) < 1) {  /* 共享host 4K~1M的内核空间 */
+					*((unsigned long*)ept_pt_entry) = guest_phy_addr;  /* 实地址映射到host相同的page */
+					ept_page_phy_addr = guest_phy_addr;
+				}
+				else {
+					/* 这里是GuestOS的code了，所以要page by page分配并从硬盘读取相应页数据复制到该空间 */
+					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+					*((unsigned long*)ept_pt_entry) = addr + 7;
+					ept_page_phy_addr = addr;
+				}
+
 				//printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
 			}
 		}
@@ -227,7 +236,11 @@ void vm_exit_diagnose() {
 		}
 }
 
-/* 初始化内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了 */
+/*
+ * 1.0版本： 初始化Guest内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了
+ * 2.0版本： 初始化Guest内核空间，仅共享host的4K~1M的内核空间(因为有些系统信息例如硬盘参数等还存储在4K~1M地址空间，所以GuestOS共享该空间就可以直接用了),
+ *          5M开始处就是GuestOS的代码了，1M~5M之间是Guest内核态的页表空间,0~4K是guest内核态的目录表空间，这个空间不能共享host的目录表。
+ */
 void init_guest_kernel_space() {
 	/* =============== 判断Guest-CR3对应的物理页是否存在,如果不存在分配一个Page并初始化 ===============*/
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
