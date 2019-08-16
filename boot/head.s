@@ -680,7 +680,7 @@ vm_exit_handler:
     popl %edx
     popl %esi
     popl %edi
- //   vmresume
+    vmresume
 
 
 

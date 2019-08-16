@@ -18,7 +18,7 @@
 #define OS_PRELOAD_SIZE 0x8000  /* 被预加载的OS-CODE大小，这部分代码用于加载剩余的OS-CODE，OS-CODE完全加载后再初始化内核。 */
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
-unsigned long load_guest_os_flag = 0;
+unsigned long load_guest_os_flag = 0; /* This flag indicate do_read_intr loading data whether are GuestOS code */
 unsigned long load_guest_os_addr = 0;
 #define OS_PARAMS_ADDR(total_mem_4k_size) \
 					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\

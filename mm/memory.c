@@ -247,7 +247,7 @@ unsigned long compare_addr = KERNEL_LINEAR_ADDR_SPACE;
 unsigned long paging_num = PAGING_PAGES;  /* Granularity: 4K */
 unsigned long paging_end = mem_map+(PAGING_PAGES-1);
 unsigned long paging_start = LOW_MEM;     /* Granularity: Byte */
-unsigned long permanent_real_addr_mapping_space = 0x2000;   /* Granularity 4K (32M permanent real-address mapping space) */
+unsigned long permanent_real_addr_mapping_space = 0x8000;   /* Granularity 4K (128M permanent real-address mapping space) */
 
 if (memory_end > KERNEL_LINEAR_ADDR_SPACE)  /* 判断实际的物理内存是否>512M,只有>512M才会在内核空间开辟保留空间用于映射>(512M-64M)的物理内存。 */
 {

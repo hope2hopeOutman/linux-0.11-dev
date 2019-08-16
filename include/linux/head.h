@@ -304,4 +304,9 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define GDT_IDENTITY_NO  0
 #define IDT_IDENTITY_NO  1
 
+#define GUEST_OS_IDT_BASE_ADDR               0x502000
+#define GUEST_OS_GDT_BASE_ADDR               0x503000
+#define GUEST_OS_TR_BASE_ADDR                0x504000
+#define GUEST_OS_LDT_BASE_ADDR               0x505000
+
 #endif

@@ -8,8 +8,11 @@
 
 #include <linux/head.h>
 #include <asm/system.h>
+#include <linux/sched.h>
 
 extern unsigned long tty_io_semaphore;
+extern unsigned long load_guest_os_flag; /* This flag indicate do_read_intr loading data whether are GuestOS code */
+extern unsigned long load_guest_os_addr;
 
 void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
@@ -76,12 +79,21 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 					ept_page_phy_addr = guest_phy_addr;
 				}
 				else {
-					/* 这里是GuestOS的code了，所以要page by page分配并从硬盘读取相应页数据复制到该空间 */
+
 					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 					*((unsigned long*)ept_pt_entry) = addr + 7;
 					ept_page_phy_addr = addr;
+					/*
+					 * 这里是GuestOS的code了，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
+					 * 因为内核的代码还不超过1M所以就只加载1M的内核代码.
+					 * GuestOS的code是从硬盘的5M地址处开始存储的，所以这里用guest_phy_addr作为参数每次读取一页.
+					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
+					 */
+					if ((guest_phy_addr>>20) >=5 && (guest_phy_addr>>20) < 6) {
+						load_guest_os_addr = addr;
+						do_hd_read_request_in_vm(guest_phy_addr & ~0xFFF, 8);
+					}
 				}
-
 				//printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
 			}
 		}
@@ -177,10 +189,11 @@ void do_vm_page_fault() {
 void vm_exit_diagnose() {
 		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
-		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
+		/*if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
 			cli();
-		}
+		}*/
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
+		unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
 		/*
 		 *  当开启 "External-interrupt exiting" Pin-Based VM-Execution Controls, 当HD-Read-INTR到来时会触发中断，
 		 *  使得VM-EXIT，然后执行到该处，即使如上我们CLI关闭了external中断，但是在执行下面的printk函数时，当其在显示和调整显示
@@ -199,7 +212,7 @@ void vm_exit_diagnose() {
 		 *  这种实现肯定效率上有损失的，所以APIC-virtualization要是硬件能支持，那持效率就高多了，这也是为什么只有Intel的企业级芯片才支持这个feature.
 		 *  本系统通过开关的形式支持这两种外部I/O的访问方式: (1) VM直接访问外部I/O, (2) VM通过VM-EXIT访问外部I/O.
 		 */
-		printk("exit_reason: %08x\n\r", vm_exit_reason);
+		printk("exit_reason: %08x, vm_exit_qualification: %08x, guest_eip: %08x\n\r", vm_exit_reason, vm_exit_qualification, guest_eip);
 		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
 			__asm__ ("exit_external_intr_loop:\n\t"      \
 					 "xorl %%eax,%%eax\n\t"              \
@@ -321,10 +334,31 @@ void init_guest_kernel_space() {
 	 * 我这里又将其映射到host的kernel，使其能共享host的kernel地址空间，又进一步复杂化，尼玛搞死人啊O(∩_∩)O哈哈~，
 	 * 后面会基于本OS，制作一个Guest-OS image将其加载到VM中运行，这样就不用共享host kernel了，不会这么复杂了。
 	 */
-	for (unsigned long i = 0x00; i< 0x2C00;i++) {  /* i (Granularity: 4K), 44M内核空间 */
+	load_guest_os_flag = 1;
+	set_hd_intr_gate();
+	for (unsigned long i = 0x00; i< 0x2000;i++) {  /* i (Granularity: 4K), 32M内核空间 */
 		unsigned long guest_linear_addr = i*0x1000;
 		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
 		unsigned long phy_addr = get_phy_addr(guest_phy_addr);
 	}
+}
+
+void init_guest_gdt() {
+	/* Init guest GDT */
+	unsigned long guest_phy_gdt_addr = read_vmcs_field(GUEST_GDTR_BASE_ENCODING);
+	unsigned long guest_phy_ldt_addr = read_vmcs_field(GUEST_LDTR_BASE_ENCODING);
+	unsigned long guest_phy_tr_addr  = read_vmcs_field(GUEST_TR_BASE_ENCODING);
+
+	unsigned long gdt_base_addr = get_phy_addr(guest_phy_gdt_addr);
+	*((unsigned long *) (gdt_base_addr+8))  = 0x0000FFFF;  /* CS, base(16 bits):limit(16 bits)*/
+	*((unsigned long *) (gdt_base_addr+12)) = 0x00C39B00;  /* CS, base(8 bits):type(16 bits):base(8 bits) */
+
+	*((unsigned long *) (gdt_base_addr+16)) = 0x0000FFFF;  /* DS, base(16 bits):limit(16 bits)*/
+	*((unsigned long *) (gdt_base_addr+20)) = 0x00C39300;  /* DS, base(8 bits):type(16 bits):base(8 bits) */
+
+	set_vm_guest_tss_desc(gdt_base_addr+32, guest_phy_tr_addr);
+	set_ldt_desc(gdt_base_addr+40, guest_phy_ldt_addr);
+	_set_limit((char*)(gdt_base_addr+32), 0x1000);
+	_set_limit((char *)(gdt_base_addr+40), 0x1000);
 }
 

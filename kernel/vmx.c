@@ -32,6 +32,7 @@ struct vmcs_region_address {unsigned long address[2];} vmcs_region_address;
 unsigned long processor_physical_address_width = 0;
 unsigned long vmcs_size = 0;
 unsigned long vmcs_memory_type = 0;
+unsigned long guest_start_addr = 0x500000;
 
 void read_msr(unsigned long index,unsigned long* msr_values) {
 	__asm__ ("xorl %%eax,%%eax\n\t"  \
@@ -811,33 +812,25 @@ void init_vmcs_guest_state() {
 	//printk("Read GUEST_FS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_FS_BASE_ENCODING));
 	write_vmcs_field(GUEST_GS_BASE_ENCODING, 0x00);
 	//printk("Read GUEST_GS_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GS_BASE_ENCODING));
-	//write_vmcs_field(GUEST_LDTR_BASE_ENCODING, &vm_defualt_task.task.ldt);
-	unsigned long ldt_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-	write_vmcs_field(GUEST_LDTR_BASE_ENCODING, ldt_addr);
+
+
+	/* 这里一定要注意: 一旦开启了enable EPT,对VM的内存进行虚拟化
+	 * 那么GUEST_GDT/IDT/LDT/TR_BASE_ADDR这些vmcs field里存储的是guest-phy-addr,
+	 * 在VMM环境下要想初始化他们，必须要先进行映射.
+	 * 例如init_guest_gdt方法.
+	 * 这些表在GuestOS的head.s中已经分配好了物理地址了，如果要调整要修改head.s中相应的起始地址.
+	 */
+	unsigned long guest_phy_ldt_addr = GUEST_OS_LDT_BASE_ADDR;
+	write_vmcs_field(GUEST_LDTR_BASE_ENCODING, guest_phy_ldt_addr);
 	//printk("Read GUEST_LDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_LDTR_BASE_ENCODING));
-	unsigned long tr_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-	write_vmcs_field(GUEST_TR_BASE_ENCODING, tr_addr);
+	unsigned long guest_phy_tr_addr = GUEST_OS_TR_BASE_ADDR;
+	write_vmcs_field(GUEST_TR_BASE_ENCODING, guest_phy_tr_addr);
 	//printk("Read GUEST_TR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_TR_BASE_ENCODING));
-
-	/* Init the base_addr for Guest GDTR and IDTR registers */
-	unsigned long gdt_base_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-	unsigned long idt_base_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-
-	/* Init guest GDT */
-	*((unsigned long *) (gdt_base_addr+8))  = 0x0000FFFF;  /* CS, base(16 bits):limit(16 bits)*/
-	*((unsigned long *) (gdt_base_addr+12)) = 0x00C39B00;  /* CS, base(8 bits):type(16 bits):base(8 bits) */
-
-	*((unsigned long *) (gdt_base_addr+16)) = 0x0000FFFF;  /* DS, base(16 bits):limit(16 bits)*/
-	*((unsigned long *) (gdt_base_addr+20)) = 0x00C39300;  /* DS, base(8 bits):type(16 bits):base(8 bits) */
-
-	set_vm_guest_tss_desc(gdt_base_addr+32, tr_addr);
-	set_ldt_desc(gdt_base_addr+40, ldt_addr);
-	_set_limit((char*)(gdt_base_addr+32), 0x1000);
-	_set_limit((char *)(gdt_base_addr+40), 0x1000);
-
-	write_vmcs_field(GUEST_GDTR_BASE_ENCODING, gdt_base_addr);
+	unsigned long guest_phy_gdt_addr = GUEST_OS_GDT_BASE_ADDR;
+	write_vmcs_field(GUEST_GDTR_BASE_ENCODING, guest_phy_gdt_addr);
 	//printk("Read GUEST_GDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_GDTR_BASE_ENCODING));
-	write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt_base_addr);
+	unsigned long guest_phy_idt_addr = GUEST_OS_IDT_BASE_ADDR;
+	write_vmcs_field(GUEST_IDTR_BASE_ENCODING, guest_phy_idt_addr);
 	//write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt);
 	printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
 
@@ -879,7 +872,7 @@ void init_vmcs_guest_state() {
 	write_vmcs_field(GUEST_TR_ACCESS_RIGHTS_ENCODING,   0x8B);
 
 	write_vmcs_field(GUEST_RSP_ENCODING, &user_stack[PAGE_SIZE>>2]);
-	write_vmcs_field(GUEST_RIP_ENCODING, guest_idle_loop);
+	write_vmcs_field(GUEST_RIP_ENCODING, guest_start_addr);
 
 	read_value = read_vmcs_field(IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING);
 	/*
@@ -1116,6 +1109,9 @@ void vm_entry() {
 	 * 后面制作一个GuestOS image，这样就不用共享host内核了.
 	 */
 	init_guest_kernel_space();
+
+	/*  */
+    init_guest_gdt();
 
 	__asm__ ("vmlaunch\n\t"              \
 			 "ctl_passthrough_ip:\n\t"   \
