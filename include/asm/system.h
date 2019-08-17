@@ -46,6 +46,9 @@ __asm__("movw %%dx,%%ax\n\t" \
 #define set_intr_gate(n,addr) \
 	_set_gate(&idt[n],14,0,addr)
 
+#define set_intr_gate_in_vm(guest_idt_p,n,addr) \
+	_set_gate(guest_idt_p+n,14,0,addr)
+
 #define set_trap_gate(n,addr) \
 	_set_gate(&idt[n],15,0,addr)
 
@@ -76,6 +79,7 @@ __asm__ ("movw $104,%1\n\t" \
 	)
 
 #define set_tss_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x89")
+#define set_vm_guest_tss_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x8B")
 #define set_ldt_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x82")
 
  /*

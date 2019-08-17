@@ -59,13 +59,9 @@ extern void mem_use(void);
 extern int timer_interrupt(void);
 extern int system_call(void);
 
-union task_union {
-	struct task_struct task;
-	char stack[PAGE_SIZE];
-};
-
 union task_union init_task = {INIT_TASK,};
 union task_union ap_default_task = {INIT_TASK,};
+union task_union vm_defualt_task = {INIT_TASK,};
 /*
  * 这里一次性分配64个processor，主要原因是这样可以使data_segment_align 4K对齐，
  * 如果设置为4的话就导致data_segment_align不能4K对齐了，导致运行有问题，
@@ -89,17 +85,30 @@ struct {
 	short b;
 	} stack_start = {&user_stack[PAGE_SIZE>>2] , 0x10};
 
-/* 获取当前processor正在运行的任务 */
+/*
+ * 获取当前processor正在运行的任务
+ */
 unsigned long get_current_apic_id(){
 	register unsigned long apic_id asm("ebx");
-	__asm__ ("movl $0x01,%%eax\n\t" \
-			 "cpuid\n\t" \
-			 "shr $24,%%ebx\n\t" \
-			 :"=b" (apic_id):
+	unsigned char gdt_base[8] = {0,}; /* 16-bit limit stored in low two bytes, and gdt_base stored in high 4bytes. */
+	/*
+	 * 在Guest VM 环境下，执行cpuid指令会导致vm-exit，所以这里要判断当前的执行环境是否在VM环境.
+	 * 实现思路：我们知道在VM环境下，已经为GDT表分配了4K空间，且GDT表的首8字节是不用的，这里利用这8个字节存储vm-entry环境下的apic_id.
+	 */
+	__asm__ ("sgdt %1\n\t"              \
+			 "movl %2,%%eax\n\t"        \
+			 "movl 0(%%eax),%%ebx\n\t"  \
+			 "cmpl $0x00,%%ebx\n\t"     \
+			 "jne truncate_flag\n\t"    \
+			 "movl $0x01,%%eax\n\t"     \
+			 "cpuid\n\t"                \
+			 "shr $24,%%ebx\n\t"        \
+			 "jmp output\n\t"           \
+			 "truncate_flag:\n\t"       \
+			 "andl $0xFF,%%ebx\n\t" /* 这里假设最多有255个processor */  \
+			 "output:\n\t"              \
+			 :"=b" (apic_id) :"m" (*gdt_base),"m" (*(char*)(gdt_base+2))
 			);
-	if (apic_id > 0) {
-		//printk("apic_id = %d\n\r", apic_id);
-	}
 	return apic_id;
 }
 

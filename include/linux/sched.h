@@ -156,6 +156,11 @@ struct task_struct {
 /*sched_on_ap=0，表示没有AP运行该task，可以被调度到AP上运行*/ 0 \
 }
 
+union task_union {
+	struct task_struct task;
+	char stack[PAGE_SIZE];
+};
+
 extern struct task_struct *task[NR_TASKS];
 extern struct task_struct *last_task_used_math;
 extern struct task_struct *current;

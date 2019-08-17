@@ -55,7 +55,7 @@ extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
-extern unsigned long tty_io_semaphore;
+
 
 long memory_end = 0;         /* Granularity is 4K */
 long buffer_memory_end = 0;  /* Granularity is 4K */
@@ -67,8 +67,6 @@ long HIGH_MEMORY  = 0;       /* Granularity is byte */
 unsigned long bsp_apic_default_location = BSP_APIC_REGS_DEFAULT_LOCATION;
 unsigned long bsp_apic_regs_relocation  = BSP_APIC_REGS_RELOCATION;
 unsigned long bsp_apic_icr_relocation   = BSP_APIC_ICR_RELOCATION;
-
-
 
 struct drive_info { char dummy[32]; } drive_info;
 
@@ -103,10 +101,12 @@ __asm__("push %%edi; cld ; rep ; movsl; pop %%edi"::"S" (from),"D" (to),"c" (cou
 }*/
 
 
+
+
 void get_cpu_topology_info() {
 	int eax_value=0, ebx_value = 0 ,edx_value = 0, ecx_value = 0;
 #if 1
-    __asm__("movl $0x06,%%eax;"  \
+    __asm__("movl $0x01,%%eax;"  \
     		"cpuid;" \
     		:"=a" (eax_value),"=b" (ebx_value),"=c" (ecx_value), "=d" (edx_value) :);
 #else
@@ -499,11 +499,11 @@ void time_init(void)
 	struct tm time;
 
 	do {
-		time.tm_sec = CMOS_READ(0);
-		time.tm_min = CMOS_READ(2);
+		time.tm_sec  = CMOS_READ(0);
+		time.tm_min  = CMOS_READ(2);
 		time.tm_hour = CMOS_READ(4);
 		time.tm_mday = CMOS_READ(7);
-		time.tm_mon = CMOS_READ(8);
+		time.tm_mon  = CMOS_READ(8);
 		time.tm_year = CMOS_READ(9);
 	} while (time.tm_sec != CMOS_READ(0));
 	BCD_TO_BIN(time.tm_sec);
@@ -532,11 +532,7 @@ void main(void)		/* This really IS void, no error here. */
 	 * 这里目前最大只能支持64M内存，因为每个进程的寻址空进就是64M，所以如果内存大于64M话，因为是共享同一个目录表的，所以会造成内核与普通进程寻址空间冲突。
 	 * 下面会改为每个进程都有自己的目录表，这样都有4G的寻址空间而不会冲突。
 	 */
-	/*if (memory_end > 64*1024*1024) {
-		memory_end = 64*1024*1024;
-	}*/
-
-	if (memory_end == 0x100000 || (((memory_end-1)*0x1000)+0xFFF) >= 16*1024*1024) {
+	if (memory_end == 0x100000 || (((memory_end-1)*0x1000)+0xFFF) >= 64*1024*1024) {
 		unsigned long code_szie = (code_end-OS_BASE_ADDR);
 		if (code_szie < 0x100000) {
 		    //buffer_memory_end = (OS_BASE_ADDR + 4*1024*1024) / 0x1000; //因为内核最终加载到以5M为基地址的内存处，所以这里要调整。
@@ -548,8 +544,10 @@ void main(void)		/* This really IS void, no error here. */
 		}
 	}
 	else {
-		/* 内存必须>=16M */
-		return;
+		/*
+		 * 内存必须>=64M, 因为在内核空间分配了一个永久实地址映射空间，大小为32M，加上内核占用的12M空间，一共要44M内存空间，所以这里定义内存最小为64M.
+		 */
+		panic("Real physical memory size must be greater than 64M.");
 	}
 
 	main_memory_start = buffer_memory_end;
@@ -569,13 +567,15 @@ void main(void)		/* This really IS void, no error here. */
 	time_init();
 	sched_init();
 	buffer_init(buffer_memory_end);
-	hd_init();
+	//hd_init();
 	floppy_init();
-	//printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
-	init_ap();
+	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
+	//init_ap();
 	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
-	get_cpu_topology_info();
+	//get_cpu_topology_info();
+	vmx_env_entry();
+	hd_init();
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

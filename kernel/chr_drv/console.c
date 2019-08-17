@@ -597,7 +597,6 @@ void con_write(struct tty_struct * tty)
 		}
 	}
 	set_cursor();
-	//unlock_op(&tty_io_semaphore);
 }
 
 /*

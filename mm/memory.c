@@ -244,21 +244,27 @@ lock_op(&page_lock_semaphore);
 
 register unsigned long __res asm("ax");
 unsigned long compare_addr = KERNEL_LINEAR_ADDR_SPACE;
-unsigned long paging_num = PAGING_PAGES;
+unsigned long paging_num = PAGING_PAGES;  /* Granularity: 4K */
 unsigned long paging_end = mem_map+(PAGING_PAGES-1);
-unsigned long paging_start = LOW_MEM;
+unsigned long paging_start = LOW_MEM;     /* Granularity: Byte */
+unsigned long permanent_real_addr_mapping_space = 0x8000;   /* Granularity 4K (128M permanent real-address mapping space) */
 
 if (memory_end > KERNEL_LINEAR_ADDR_SPACE)  /* 判断实际的物理内存是否>512M,只有>512M才会在内核空间开辟保留空间用于映射>(512M-64M)的物理内存。 */
 {
 	if (real_space) { /* 这里将会在分页内存区的开始8M(这个值由最大进程数确定)空间，寻找空闲页，用于存储task_struct和目录表 */
-		paging_num = NR_TASKS*2;               /* Granularity is 4K. */
+		//paging_num = NR_TASKS*2;               /* Granularity is 4K. 64*2*4K = 512K实地址映射空间有点小了 */
+		paging_num = permanent_real_addr_mapping_space;
 		/* 从main_memory_start开始的paging_num个物理页专用于存储进程的task_struc和dir的，这部分物理页是肯定在内核的实地址寻址空间的 */
 		paging_end = mem_map + (paging_num -1);
 	}
 	else {
 		/* 如果分配的物理页不是用于task_struct和dir, 那么要从内存的最高物理页开始查找，查找的总的物理页数不包括task_struc和dir专用的物理页。 */
+		/*
 		paging_num = (PAGING_PAGES-NR_TASKS*2);
 		paging_start += ((NR_TASKS*2)<<12);
+		*/
+		paging_num = (PAGING_PAGES-permanent_real_addr_mapping_space);
+		paging_start += (permanent_real_addr_mapping_space<<12);
 	}
 	/* 当分配的物理页大于(512-64)M的时候，就得remap了，才能对该物理页进行初始化操作。 */
 	compare_addr = KERNEL_LINEAR_ADDR_SPACE-KERNEL_REMAP_ADDR_SPACE;

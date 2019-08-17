@@ -92,7 +92,7 @@ KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 
 .text
-.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
+.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size,vm_exit_handler
 .globl startup_32,sync_semaphore,idle_loop,ap_default_loop,task_exit_clear,globle_var_test_start,globle_var_test_end,init_pgt
 startup_32:
 	movl $0x10,%eax
@@ -656,6 +656,31 @@ ap_default_loop:
     hlt
     xorl %eax,%eax
     jmp ap_default_loop
+
+/*
+   这里详细解释下为什么要保存Guest的通用寄存器值,而且为什么要在这里保存而不是在C函数中通过嵌入式汇编保存.
+   1. 如果基于寄存器进行寻址的话, 一定要备份Guest通用寄存器的值
+      例如 movl Ox4(%%eax),%%ecx
+      通过上面方式寻址时出现page-fault错误的话，那么当处理完page-fault后执行vmresume,eax寄存器的值很可能会改变的，这时得到的就不是想要的值了
+      程序会出错，例如lock_op就会遇到这样的问题，在处理完page-fault后,这个问题太难排查了，压根就没往这方面想.
+   2. 如果在C函数的开头嵌入这些备份汇编，GCC优化后就不是你想要的顺序了,备份会有问题.
+      所以在汇编文件里加入备份代码最保险了.
+*/
+vm_exit_handler:
+    pushl %edi
+    pushl %esi
+    pushl %edx
+    pushl %ecx
+    pushl %ebx
+    pushl %eax
+    call vm_exit_diagnose
+    popl %eax
+    popl %ebx
+    popl %ecx
+    popl %edx
+    popl %esi
+    popl %edi
+    vmresume
 
 
 
