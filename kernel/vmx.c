@@ -32,7 +32,7 @@ struct vmcs_region_address {unsigned long address[2];} vmcs_region_address;
 unsigned long processor_physical_address_width = 0;
 unsigned long vmcs_size = 0;
 unsigned long vmcs_memory_type = 0;
-unsigned long guest_start_addr = 0x500000;
+unsigned long guest_start_addr = 0xC00000;
 
 void read_msr(unsigned long index,unsigned long* msr_values) {
 	__asm__ ("xorl %%eax,%%eax\n\t"  \

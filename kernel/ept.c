@@ -75,23 +75,43 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 			}
 			else {
 				if ((guest_phy_addr>>20) < 1) {  /* 共享host 4K~1M的内核空间 */
-					*((unsigned long*)ept_pt_entry) = guest_phy_addr;  /* 实地址映射到host相同的page */
+					*((unsigned long*)ept_pt_entry) = (guest_phy_addr & ~0xFFF) + 7;  /* 实地址映射到host相同的page */
 					ept_page_phy_addr = guest_phy_addr;
 				}
-				else {
-
+				else if ((guest_phy_addr>>20)>= 16) {
 					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 					*((unsigned long*)ept_pt_entry) = addr + 7;
 					ept_page_phy_addr = addr;
+				}
+				else {
+					*((unsigned long*)ept_pt_entry) = (guest_phy_addr & ~0xFFF) + 7;  /* 实地址映射到host相同的page */
+					ept_page_phy_addr = guest_phy_addr;
 					/*
 					 * 这里是GuestOS的code了，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
 					 * 因为内核的代码还不超过1M所以就只加载1M的内核代码.
 					 * GuestOS的code是从硬盘的5M地址处开始存储的，所以这里用guest_phy_addr作为参数每次读取一页.
 					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
 					 */
-					if ((guest_phy_addr>>20) >=5 && (guest_phy_addr>>20) < 6) {
+					/*if ((guest_phy_addr>>20) >=5 && (guest_phy_addr>>20) < 6) {
+						if ((guest_phy_addr & ~0xFFF) == 0x500000) {
+							printk("OS_start_addr: %08x\n\r", addr);
+						}
 						load_guest_os_addr = addr;
 						do_hd_read_request_in_vm(guest_phy_addr & ~0xFFF, 8);
+					}*/
+
+					/*
+					 * 这里是GuestOS的code了，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
+					 * 因为内核的代码还不超过1M所以就只加载1M的内核代码.
+					 * GuestOS的code是从硬盘的5M地址处开始存储的，所以这里用guest_phy_addr作为参数每次读取一页.
+					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
+					 */
+					if ((guest_phy_addr>>20) >= 12 && (guest_phy_addr>>20) < 13) {
+						if ((guest_phy_addr & ~0xFFF) == 0x500000) {
+							printk("OS_start_addr: %08x\n\r", guest_phy_addr);
+						}
+						load_guest_os_addr = guest_phy_addr & ~0xFFF;
+						do_hd_read_request_in_vm((guest_phy_addr & ~0xFFF)-0x700000, 8);
 					}
 				}
 				//printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
@@ -359,6 +379,6 @@ void init_guest_gdt() {
 	set_vm_guest_tss_desc(gdt_base_addr+32, guest_phy_tr_addr);
 	set_ldt_desc(gdt_base_addr+40, guest_phy_ldt_addr);
 	_set_limit((char*)(gdt_base_addr+32), 0x1000);
-	_set_limit((char *)(gdt_base_addr+40), 0x1000);
+	_set_limit((char*)(gdt_base_addr+40), 0x1000);
 }
 

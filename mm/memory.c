@@ -271,46 +271,46 @@ if (memory_end > KERNEL_LINEAR_ADDR_SPACE)  /* 判断实际的物理内存是否
 }
 
 __asm__("std ; repne ; scasb\n\t"
-	"jne 2f\n\t"
-	"movb $1,1(%%edi)\n\t"
-	"sall $12,%%ecx\n\t"          /* 这里自己动手挖了个大坑，差点把自己埋了，当paging_num = (PAGING_PAGES-NR_TASKS*2)时，计算地址的时候要加上NR_TASKS*2，mama */
-	"addl %2,%%ecx\n\t"
-	"shl $12,%%ebx\n\t"
-    "cmp %%ebx,%%ecx\n\t"          /* 根据内存的实际大小和要访问的物理地址页，决定是否需要remap该物理地址才能初始化它 */
-    "jl 1f\n\t"
-	"pushl %%ecx\n\t"              /* 可用的物理页地址且>(512M-64M),ecx中存储的新分配物理页地址的granularity是byte */
-	"call remap_linear_addr\n\t"   /* 将该物理页地址与内核的后128M(1G线性地址空间)某个线性地址页绑定  */
-	"popl %%ecx\n\t"               /* 弹出要被remap的>(1G-128)的物理地址 */
-	"pushl %%ecx\n\t"              /* 将被重映射的>(512-64)M的物理地址存储栈中，后面的函数返回值会用到 */
-	"pushl %%eax\n\t"              /* 将被remap的线性地址入栈,调用remap_linear_addr后的返回值放在eax中，为后面调用recov_swap_linear做准备 */
-	//"movl $0x0,%%ecx\n\t"        /* 这里不能用目录地址0了，应该根据current->tss.cr3设置，从而让TLB失效。这里也是个巨坑，其实在remap_linear_addr中已经刷新过了，这里再设置成dir=0就有问题了。 */
-	//"movl %%ecx,%%cr3\n\t"       /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
-	"movl %%eax,%%edx\n\t"         /* 将内核地址空间后128M的被重映射的线性地址，放入edx */
-	"xorl %%eax,%%eax\n\t"         /* 将eax清零，后面的rep stosl指令要用eax中的值初始化这个物理页,这又是自己挖的坑啊想哭 */
-	"movl $1024,%%ecx\n\t"
-	"leal 4092(%%edx),%%edi\n\t"   /* 将该线性地址对应的实际物理地址(>(1G-128M))初始化为0 */
-	"rep ; stosl\n\t"
-	"call recov_swap_linear\n\t"   /* 释放该被remap的线性地址，这样该线性地址就可以被映射到其他>1G-128M的物理地址了 */
-	"popl %%eax\n\t"               /* 这时弹出是被选定的用于remap的线性地址 */
-	"popl %%eax\n\t"               /* 这时弹出的是被remp的物理地址>512M-64M */
-	"jmp 2f\n\t"
-	"1:\n\t"
-	"movl %%ecx,%%edx\n\t"         /* 这时ecx存储是的内核实地址映射的物理地址 */
-	"movl $1024,%%ecx\n\t"
-	"leal 4092(%%edx),%%edi\n\t"   /* 将该物理地址页初始化为0 */
-	"rep ; stosl\n\t"
-	"movl %%edx,%%eax\n\t"         /* 将该物理地址页放入eax，作为返回值。 */
-	"2:\n\t"
-	"cld\n\t"
-	"lea page_lock_semaphore,%%ebx\n\t"
-	"pushl %%eax\n\t"              /* eax作为get_free_page函数的返回值,这里必须要备份一下,因为下面unlock_op函数调用会重置eax,作为返回值,即使该函数是void类型 */
-	"pushl %%ebx\n\t"
-	"call unlock_op\n\t"
-	"popl %%ebx\n\t"
-	"popl %%eax\n\t"
-	:"=a" (__res)
-	:"0" (0),"r" (paging_start),"c" (paging_num),
-	"D" (paging_end), "b" (compare_addr));
+		"jne 2f\n\t"
+		"movb $1,1(%%edi)\n\t"
+		"sall $12,%%ecx\n\t"          /* 这里自己动手挖了个大坑，差点把自己埋了，当paging_num = (PAGING_PAGES-NR_TASKS*2)时，计算地址的时候要加上NR_TASKS*2，mama */
+		"addl %2,%%ecx\n\t"
+		"shl $12,%%ebx\n\t"
+		"cmp %%ebx,%%ecx\n\t"          /* 根据内存的实际大小和要访问的物理地址页，决定是否需要remap该物理地址才能初始化它 */
+		"jl 1f\n\t"
+		"pushl %%ecx\n\t"              /* 可用的物理页地址且>(512M-64M),ecx中存储的新分配物理页地址的granularity是byte */
+		"call remap_linear_addr\n\t"   /* 将该物理页地址与内核的后128M(1G线性地址空间)某个线性地址页绑定  */
+		"popl %%ecx\n\t"               /* 弹出要被remap的>(1G-128)的物理地址 */
+		"pushl %%ecx\n\t"              /* 将被重映射的>(512-64)M的物理地址存储栈中，后面的函数返回值会用到 */
+		"pushl %%eax\n\t"              /* 将被remap的线性地址入栈,调用remap_linear_addr后的返回值放在eax中，为后面调用recov_swap_linear做准备 */
+		//"movl $0x0,%%ecx\n\t"        /* 这里不能用目录地址0了，应该根据current->tss.cr3设置，从而让TLB失效。这里也是个巨坑，其实在remap_linear_addr中已经刷新过了，这里再设置成dir=0就有问题了。 */
+		//"movl %%ecx,%%cr3\n\t"       /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
+		"movl %%eax,%%edx\n\t"         /* 将内核地址空间后128M的被重映射的线性地址，放入edx */
+		"xorl %%eax,%%eax\n\t"         /* 将eax清零，后面的rep stosl指令要用eax中的值初始化这个物理页,这又是自己挖的坑啊想哭 */
+		"movl $1024,%%ecx\n\t"
+		"leal 4092(%%edx),%%edi\n\t"   /* 将该线性地址对应的实际物理地址(>(1G-128M))初始化为0 */
+		"rep ; stosl\n\t"
+		"call recov_swap_linear\n\t"   /* 释放该被remap的线性地址，这样该线性地址就可以被映射到其他>1G-128M的物理地址了 */
+		"popl %%eax\n\t"               /* 这时弹出是被选定的用于remap的线性地址 */
+		"popl %%eax\n\t"               /* 这时弹出的是被remp的物理地址>512M-64M */
+		"jmp 2f\n\t"
+		"1:\n\t"
+		"movl %%ecx,%%edx\n\t"         /* 这时ecx存储是的内核实地址映射的物理地址 */
+		"movl $1024,%%ecx\n\t"
+		"leal 4092(%%edx),%%edi\n\t"   /* 将该物理地址页初始化为0 */
+		"rep ; stosl\n\t"
+		"movl %%edx,%%eax\n\t"         /* 将该物理地址页放入eax，作为返回值。 */
+		"2:\n\t"
+		"cld\n\t"
+		"lea page_lock_semaphore,%%ebx\n\t"
+		"pushl %%eax\n\t"              /* eax作为get_free_page函数的返回值,这里必须要备份一下,因为下面unlock_op函数调用会重置eax,作为返回值,即使该函数是void类型 */
+		"pushl %%ebx\n\t"
+		"call unlock_op\n\t"
+		"popl %%ebx\n\t"
+		"popl %%eax\n\t"
+		:"=a" (__res)
+		:"0" (0),"r" (paging_start),"c" (paging_num),
+		"D" (paging_end), "b" (compare_addr));
 
 /* 要在返回之前释放同步锁
  * 在此处调用该解锁方法,GCC编译的时候有问题,会遗漏一些操作,对于这种嵌入式混合汇编,觉的GCC在处理上下文依赖关系上,还是不完善.

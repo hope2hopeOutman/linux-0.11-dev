@@ -551,6 +551,10 @@ void main(void)		/* This really IS void, no error here. */
 	}
 
 	main_memory_start = buffer_memory_end;
+	/*
+	 * 12M~16M这4M地址空间用来保存GuestOS代码，并且通过EPT表实地址映射这个区间,这么做主要是为了好调试GuestOS的代码.
+	 */
+	main_memory_start += 0x400; /* todo removed after GuestOS debug. */
 	PAGING_PAGES = memory_end - main_memory_start;
 	LOW_MEM      = main_memory_start*0x1000;
 	HIGH_MEMORY  = (memory_end-1)*0x1000+0xFFF;
