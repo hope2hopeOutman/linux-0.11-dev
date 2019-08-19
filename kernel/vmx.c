@@ -18,6 +18,7 @@
 
 void ia32_sysenter();
 unsigned long support_64arch_check();
+void save_apic_id_for_vm();
 
 extern long user_stack[PAGE_SIZE>>2];
 extern union task_union init_task;
@@ -220,7 +221,7 @@ void init_vmcs_pinbased_ctls() {
 		does not affect interrupt blocking.
 	 */
 	if ((msr_values[0] & (1<<0)) || (msr_values[1] & (1<<0))) {
-		init_value |= (1<<0);  /* External-interrupt exiting. */
+		//init_value |= (1<<0);  /* External-interrupt exiting. */
 	}
 
 	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
@@ -236,18 +237,23 @@ void init_vmcs_procbased_ctls() {
 
 	/* Using algorithm 3 to init. */
 	read_msr(IA32_VMX_PROCBASED_CTLS,msr_values);
-	//printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_PROCBASED_CTLS,msr_values);
-	//printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 
 	init_value |= (msr_values[0] & msr_values[1]);
 
 	if ((msr_values[0] & (1<<31)) || (msr_values[1] & (1<<31))) {
 		init_value |= (1<<31);  /* Activate secondary processor controls */
 	}
+
 	if ((msr_values[0] & (1<<21)) || (msr_values[1] & (1<<21))) {
 		init_value |= (1<<21);  /* Enable Use_TPR_shadow */
+	}
+
+	if ((msr_values[0] & (1<<25)) || (msr_values[1] & (1<<25))) {
+		init_value |= (1<<25);  /* Enable Use I/O bitmaps */
 	}
 
 
@@ -1098,20 +1104,20 @@ void vm_entry() {
 	 *    不仅可以在VM状态下获取当前processor的apic_id,而且还可以判断当前processor是否处于VM状态， 太秒了O(∩_∩)O哈哈哈~
 	 */
 
-	unsigned long apic_id = get_current_apic_id();
-	unsigned long* guest_gdt_base = (unsigned long* ) read_vmcs_field(GUEST_GDTR_BASE_ENCODING);
-	/* 注意：因为BSP的apic_id=0, 所以要加一个标志位来判定是否处于vm state,这里设置bit31为apic_id的有效标志位。 */
-	apic_id |= (1<<31);
-	*guest_gdt_base = apic_id;
-
 	/*
 	 * 初始化Guest内核空间，使其共享host的44M(12M(kernel)+32M(Real-map space))内核空间，
 	 * 后面制作一个GuestOS image，这样就不用共享host内核了.
 	 */
 	init_guest_kernel_space();
 
-	/*  */
+	/* 必须要在init_guest_kernel_space函数后才能初始化guest-gdt,想想看为什么(EPT开启了) */
     init_guest_gdt();
+
+    /* 该方法也得在init_guest_kernel_space后调用 */
+    save_apic_id_for_vm();
+
+    /* 设置I/O bitmap指定的bit位，让其对应的I/O端口一旦发生读写就引发VM-EXIT. */
+    set_io_bitmap();
 
 	__asm__ ("vmlaunch\n\t"              \
 			 "ctl_passthrough_ip:\n\t"   \
@@ -1141,4 +1147,16 @@ unsigned long support_64arch_check() {
 			 :"=d" (support_check):);
 	printk("edx: %08x\n\r", support_check);
 	return support_check & (1<<29);
+}
+
+void save_apic_id_for_vm() {
+	unsigned long apic_id = get_current_apic_id();
+	unsigned long* guest_gdt_base = (unsigned long* ) read_vmcs_field(GUEST_GDTR_BASE_ENCODING);
+	/*
+	 * 注意：因为BSP的apic_id=0, 所以要加一个标志位来判定是否处于vm state,这里设置bit31为apic_id的有效标志位。
+	 * 因为已经开启了EPT功能，所以这里的guest_gdt_base存储的是guest-phy-addr,不能直接赋值.
+	 */
+	apic_id |= (1<<31);
+	/* 因为guest-GDT表在guest内核空间，所以是实地址物理映射,guest-phy-addr=phy-addr，所以这里可以直接赋值. */
+	*guest_gdt_base = apic_id;
 }

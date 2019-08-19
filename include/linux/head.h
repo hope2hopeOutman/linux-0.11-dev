@@ -109,6 +109,12 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_VPID_ENCODING                                   0x0000
 #define IA32_VMX_POSTED_INTERRUPT_NOTIFICATION_VECTOR_ENCODING   0x0002
 #define IA32_VMX_EPTP_INDEX_ENCODING                             0x0004
+
+#define IA32_VMX_IO_BITMAP_A_FULL_ENCODING                       0x2000
+#define IA32_VMX_IO_BITMAP_A_HIGH_ENCODING                       0x2001
+#define IA32_VMX_IO_BITMAP_B_FULL_ENCODING                       0x2002
+#define IA32_VMX_IO_BITMAP_B_HIGH_ENCODING                       0x2003
+
 #define IA32_VMX_MSR_BITMAPS_ADDR_FULL_ENCODING                  0x2004
 #define IA32_VMX_MSR_BITMAPS_ADDR_HIGH_ENCODING                  0x2005
 #define IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING                 0x2012
@@ -304,9 +310,12 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define GDT_IDENTITY_NO  0
 #define IDT_IDENTITY_NO  1
 
-#define GUEST_OS_IDT_BASE_ADDR               0x502000
-#define GUEST_OS_GDT_BASE_ADDR               0x503000
-#define GUEST_OS_TR_BASE_ADDR                0x504000
-#define GUEST_OS_LDT_BASE_ADDR               0x505000
+/* 这块的定义一定要和Makefile里的-Ttext起始地址一致，这点一定要注意 */
+#define GUEST_OS_IDT_BASE_ADDR               0xC02000
+#define GUEST_OS_GDT_BASE_ADDR               0xC03000
+#define GUEST_OS_TR_BASE_ADDR                0xC04000
+#define GUEST_OS_LDT_BASE_ADDR               0xC05000
+#define GUEST_OS_IO_BITMAP_A_BASE_ADDR       0xC06000
+#define GUEST_OS_IO_BITMAP_B_BASE_ADDR       0xC07000
 
 #endif

@@ -382,3 +382,10 @@ void init_guest_gdt() {
 	_set_limit((char*)(gdt_base_addr+40), 0x1000);
 }
 
+void set_io_bitmap(unsigned long bitmap) {
+	unsigned long guest_phy_io_bitmap_a_addr = read_vmcs_field(IA32_VMX_IO_BITMAP_A_FULL_ENCODING);
+	unsigned long io_bitmap_a_base_addr = get_phy_addr(guest_phy_io_bitmap_a_addr);
+	/* print函数触发VM-EXIT. */
+	*((unsigned long *) io_bitmap_a_base_addr) |= ((1<<14) | (1<<15));
+}
+
