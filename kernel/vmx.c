@@ -244,6 +244,15 @@ void init_vmcs_procbased_ctls() {
 
 	init_value |= (msr_values[0] & msr_values[1]);
 
+	if (!(msr_values[0] & (1<<15)) || !(msr_values[1] & (1<<15))) {
+		init_value &= ~(1<<15);  /* Disbale CR3-load exiting */
+		write_vmcs_field(IA32_VMX_CR3_TARGET_COUNT_ENCODING, IA32_VMX_CR3_TARGET_COUNT);
+	}
+
+	if (!(msr_values[0] & (1<<16)) || !(msr_values[1] & (1<<16))) {
+		init_value &= ~(1<<16);  /* Disable CR3-store exiting */
+	}
+
 	if ((msr_values[0] & (1<<31)) || (msr_values[1] & (1<<31))) {
 		init_value |= (1<<31);  /* Activate secondary processor controls */
 	}

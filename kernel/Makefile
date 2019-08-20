@@ -27,7 +27,7 @@ CPP	=gcc -E -nostdinc -I../include
 
 OBJS  = sched.o system_call.o traps.o asm.o fork.o \
 	panic.o printk.o vsprintf.o sys.o exit.o \
-	signal.o mktime.o vmx.o ept.o common.o
+	signal.o mktime.o vmx.o ept.o common.o apic.o
 
 kernel.o: $(OBJS)
 	$(LD) $(LDFLAGS) -r -o kernel.o $(OBJS)
