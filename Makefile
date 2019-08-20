@@ -10,7 +10,7 @@ DISASM  =objdump
 AS	=as --32
 LD	=ld
 #LDFLAGS	=-s -x -M -m elf_i386  -Ttext 0x500000 -e startup_32
-LDFLAGS	=-M -m elf_i386  -Ttext 0x500000 --section-start .exception_ranges=0x516000 -Tbss 0x580000 -e startup_32
+LDFLAGS	=-M -m elf_i386  -Ttext 0x500000 --section-start .exception_ranges=0x517000 -Tbss 0x580000 -e startup_32
 #LDFLAGS	=-M -m elf_i386  -Ttext 0x500000 -Tbss 0x580000 -e startup_32
 CC	=gcc $(RAMDISK)
 CFLAGS	=-g -fno-stack-protector -m32 -O -Wall -fstrength-reduce -fomit-frame-pointer -fno-asynchronous-unwind-tables

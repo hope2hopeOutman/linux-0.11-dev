@@ -254,6 +254,8 @@ void init_vmcs_procbased_ctls() {
 
 	if ((msr_values[0] & (1<<25)) || (msr_values[1] & (1<<25))) {
 		init_value |= (1<<25);  /* Enable Use I/O bitmaps */
+		write_vmcs_field(IA32_VMX_IO_BITMAP_A_FULL_ADDR_ENCODING, GUEST_OS_IO_BITMAP_A_BASE_ADDR);
+		write_vmcs_field(IA32_VMX_IO_BITMAP_B_FULL_ADDR_ENCODING, GUEST_OS_IO_BITMAP_B_BASE_ADDR);
 	}
 
 

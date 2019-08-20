@@ -45,6 +45,23 @@ int printk(const char *fmt, ...)
 	return i;
 }
 
+int guest_printk(char* guest_buf, unsigned long print_size)
+{
+	lock_op(&tty_io_semaphore);
+	__asm__("push %%fs\n\t"
+			"push %%ds\n\t"
+			"pop %%fs\n\t"
+			"pushl %0\n\t"
+			"pushl %%edx\n\t"
+			"pushl $0\n\t"
+			"call tty_write\n\t"
+			"addl $8,%%esp\n\t"
+			"popl %0\n\t"
+			"pop %%fs"
+			::"r" (print_size),"d"(guest_buf));
+	return print_size;
+}
+
 char* cpy_str_to_kernel(char * dest,const char *src)
 {
 __asm__(

@@ -13,6 +13,8 @@
 extern unsigned long tty_io_semaphore;
 extern unsigned long load_guest_os_flag; /* This flag indicate do_read_intr loading data whether are GuestOS code */
 extern unsigned long load_guest_os_addr;
+extern unsigned short	video_port_reg;		/* Video register select port	*/
+extern unsigned short	video_port_val;		/* Video register value port	*/
 
 void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
@@ -136,6 +138,15 @@ unsigned long get_guest_phy_addr(unsigned long guest_linear_addr) {
 	return guest_phy_addr;
 }
 
+unsigned long get_spec_phy_addr(unsigned long guest_linear_offset) {
+	unsigned long guest_cs          = read_vmcs_field(GUEST_CS_ENCODING);
+	unsigned long guest_linear_addr = (guest_cs & ~0xFFF) + guest_linear_offset;
+	unsigned long guest_phy_addr    = get_guest_phy_addr(guest_linear_addr);
+	unsigned long  phy_addr_base    = get_phy_addr(guest_phy_addr);
+	printk("guest_linear_offset:%08x,guest_phy_addr:%08x,phy_addr_base:%08x\n\r", guest_linear_offset, guest_phy_addr, phy_addr_base);
+	return phy_addr_base + (guest_linear_addr & 0xFFF);                  /* 返回变量具体的实际物理地址. */
+}
+
 void do_vm_page_fault() {
 	unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
 	unsigned long guest_physical_full_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING);
@@ -209,9 +220,6 @@ void do_vm_page_fault() {
 void vm_exit_diagnose() {
 		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
-		/*if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
-			cli();
-		}*/
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
 		unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
 		/*
@@ -253,6 +261,22 @@ void vm_exit_diagnose() {
 					 "nop\n\t"                      \
 					 "jmp exit_vmwrite_loop\n\t"    \
 					 ::);
+		}
+		else if (vm_exit_reason == VM_EXIT_REASON_IO_INSTRUCTION) {
+			exit_reason_io_vedio_struct* exit_reason_io_vedio = (exit_reason_io_vedio_struct*) VM_EXIT_SLEF_DEFINED_INFO_ADDR;
+			if (exit_reason_io_vedio->exit_reason_no != VM_EXIT_REASON_IO_INSTRUCTION) {
+				panic("Incorrect exit_reason_no\n\r");
+			}
+			unsigned long spec_phy_addr = get_spec_phy_addr((unsigned long)exit_reason_io_vedio->print_buf);
+			printk("spec_phy_addr: %08x\n\r", spec_phy_addr);
+			guest_printk((unsigned char*)spec_phy_addr, exit_reason_io_vedio->print_size);
+			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
+			unsigned long vm_exit_instruction_info = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_INFO_ENCODING);
+			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
+			printk("inst_len: %08x, inst_info: %08x, exit_guest_rip: %08x\n\r", vm_exit_instruction_len
+					                                                          , vm_exit_instruction_info
+																			  , vm_exit_guest_rip);
+			write_vmcs_field(GUEST_RIP_ENCODING, vm_exit_guest_rip + vm_exit_instruction_len);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_EPT_VIOLATION) {
 			do_vm_page_fault();
@@ -383,9 +407,16 @@ void init_guest_gdt() {
 }
 
 void set_io_bitmap(unsigned long bitmap) {
-	unsigned long guest_phy_io_bitmap_a_addr = read_vmcs_field(IA32_VMX_IO_BITMAP_A_FULL_ENCODING);
+	unsigned long guest_phy_io_bitmap_a_addr = read_vmcs_field(IA32_VMX_IO_BITMAP_A_FULL_ADDR_ENCODING);
 	unsigned long io_bitmap_a_base_addr = get_phy_addr(guest_phy_io_bitmap_a_addr);
+	printk("video_port_reg: %08x, video_port_val: %08x\n\r", video_port_reg, video_port_val);
 	/* print函数触发VM-EXIT. */
-	*((unsigned long *) io_bitmap_a_base_addr) |= ((1<<14) | (1<<15));
+	unsigned long byte_offset = video_port_reg / 8;
+	unsigned long bit_offset  = video_port_reg % 8;
+	*(((unsigned char *) io_bitmap_a_base_addr) + byte_offset) |= (1<<bit_offset);
+
+	byte_offset = video_port_val / 8;
+	bit_offset  = video_port_val % 8;
+	*(((unsigned char *) io_bitmap_a_base_addr) + byte_offset) |= (1<<bit_offset);
 }
 

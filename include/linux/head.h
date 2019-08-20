@@ -8,6 +8,12 @@ typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
 
+typedef struct exit_reason_io_vedio_struct {
+	unsigned long  exit_reason_no;
+	unsigned long  print_size;
+	char*          print_buf;
+} exit_reason_io_vedio_struct;
+
 struct apic_info {
 	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
 	unsigned long apic_id;
@@ -110,10 +116,10 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_POSTED_INTERRUPT_NOTIFICATION_VECTOR_ENCODING   0x0002
 #define IA32_VMX_EPTP_INDEX_ENCODING                             0x0004
 
-#define IA32_VMX_IO_BITMAP_A_FULL_ENCODING                       0x2000
-#define IA32_VMX_IO_BITMAP_A_HIGH_ENCODING                       0x2001
-#define IA32_VMX_IO_BITMAP_B_FULL_ENCODING                       0x2002
-#define IA32_VMX_IO_BITMAP_B_HIGH_ENCODING                       0x2003
+#define IA32_VMX_IO_BITMAP_A_FULL_ADDR_ENCODING                  0x2000
+#define IA32_VMX_IO_BITMAP_A_HIGH_ADDR_ENCODING                  0x2001
+#define IA32_VMX_IO_BITMAP_B_FULL_ADDR_ENCODING                  0x2002
+#define IA32_VMX_IO_BITMAP_B_HIGH_ADDR_ENCODING                  0x2003
 
 #define IA32_VMX_MSR_BITMAPS_ADDR_FULL_ENCODING                  0x2004
 #define IA32_VMX_MSR_BITMAPS_ADDR_HIGH_ENCODING                  0x2005
@@ -304,8 +310,9 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define VM_EXIT_REASON_EXTERNAL_INTERRUPT     1   /* External interrupt */
 #define VM_EXIT_REASON_VMREAD                 23  /* VMREAD  vmcs-shadow not support */
 #define VM_EXIT_REASON_VMWRITE                25  /* VMWRITE vmcs-shadow not support */
-#define VM_EXIT_REASON_EPT_VIOLATION          48  /* EPT violation        */
-#define VM_EXIT_REASON_EPT_MISCONFIGURATION   49  /* EPT misconfiguration */
+#define VM_EXIT_REASON_IO_INSTRUCTION         30  /* Use I/O bitmap        */
+#define VM_EXIT_REASON_EPT_VIOLATION          48  /* EPT violation         */
+#define VM_EXIT_REASON_EPT_MISCONFIGURATION   49  /* EPT misconfiguration  */
 
 #define GDT_IDENTITY_NO  0
 #define IDT_IDENTITY_NO  1
@@ -317,5 +324,12 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define GUEST_OS_LDT_BASE_ADDR               0xC05000
 #define GUEST_OS_IO_BITMAP_A_BASE_ADDR       0xC06000
 #define GUEST_OS_IO_BITMAP_B_BASE_ADDR       0xC07000
+
+
+/*
+ * 4K~640K 低地址空间利用与分配，该段地址空间被host和所有VM共享，用于它们之间的通信,从高地址开始以4K为单位,由高到低分配的.
+ * 注意: 用于映射APIC-base-addr的地址空间是从这个空间的低地址由低到高分配的，这里要注意overlap,后面会优化一下.
+ */
+#define VM_EXIT_SLEF_DEFINED_INFO_ADDR        0x9F000
 
 #endif

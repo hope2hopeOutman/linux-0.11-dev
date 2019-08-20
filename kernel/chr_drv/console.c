@@ -64,8 +64,8 @@ static unsigned long	video_num_lines;	/* Number of test lines		*/
 static unsigned char	video_page;		/* Initial video page		*/
 static unsigned long	video_mem_start;	/* Start of video RAM		*/
 static unsigned long	video_mem_end;		/* End of video RAM (sort of)	*/
-static unsigned short	video_port_reg;		/* Video register select port	*/
-static unsigned short	video_port_val;		/* Video register value port	*/
+unsigned short	video_port_reg;		/* Video register select port	*/
+unsigned short	video_port_val;		/* Video register value port	*/
 static unsigned short	video_erase_char;	/* Char+attrib to erase with	*/
 
 static unsigned long	origin;		/* Used for EGA/VGA fast scroll	*/
