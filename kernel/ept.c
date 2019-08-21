@@ -61,49 +61,56 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
 	unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
 	if (!(ept_page_phy_addr & 0x07)) {
-		/* 如果Guest-phy-addr在12M地址空间的话，那么就实地址映射到实际内存地址，这样VM就共享host主机的12M内核地址空间了 */
-		if ((guest_phy_addr>>20) < 1024) {
+		/*
+		 * 1. Host-kernel-code的实地址空间是12M,Guest-phy-addr的前12M地址空间就实地址映射到这12M实际内存地址，这样VM就共享host主机的12M内核地址空间了，
+		 *    这样就可以在这个12M，尤其是4K～640K的内存空间开辟共享页，供Host与VM通信，也就是所谓的IPC.
+		 * 2. 因为GuestOS也有2G的物理内存(虚拟的)，所以EPT就要映射这2G的虚拟内存.
+		 */
+		if ((guest_phy_addr>>20) < 2048) {
 			if ((guest_phy_addr>>20) >= 1 && (guest_phy_addr>>20) < 5) {
 				/*
-				 * 因为在Guest环境中，对其内核空间也是实地址映射的，这里将GPT(Guest-page-table)也是分配在GPA(Guest-physical-addr)的1M~5M地址空间的，
-				 * 用于映射Guest的4G物理地址空间，因此如果得到的GPA在这个区间的话，说明它是GPT，所以要进行初始化使其实地址映射内核空间。
-				 * 当然也可以共享host相同位置(1M~5M)的页表，这样就不用再重新分配和映射了，但是这样有个问题，会引起page的RWX和Access位的混乱,想想看是不是这样，
-				 * 因此，这里为Guest的GDP和GPT在PAGE_IN_REAL_MEM_MAP空间单独分配page用于管理Guest的地址空间。
+				 * 1. 因为在Guest环境中，对其内核空间也是实地址映射的，这里将GPT(Guest-page-table)也是分配在GPA(Guest-physical-addr)的1M~5M地址空间的，
+				 *    用于映射Guest的4G物理地址空间，因此如果得到的GPA在这个区间的话，说明它是GPT，所以要进行初始化使其实地址映射内核空间。
+				 * 2. 当然也可以共享host相同位置(1M~5M)的页表，这样就不用再重新分配和映射了，但是这样有个问题，会引起page的RWX和Access位的混乱,
+				 *    想想看是不是这样，因此，这里为Guest的GDP和GPT在PAGE_IN_REAL_MEM_MAP空间单独分配page用于管理Guest的地址空间。
+				 * 3. 因此1M~5M用于存储映射GuestOS的4G linear-addr-space的所有页表,所以不能共享Host的页表。
+				 * 4. 当Guest-phy-space > 1G的时候，内核只能实地址映射1G的guest-phy-addr，> 1G的guest-addr-space要用保留的内核线性地址空间remap，
+				 *    所以这里只初始化1G的guest-phy-addr-space.
 				 */
-				unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-				*((unsigned long*)ept_pt_entry) = addr + 7;
-				ept_page_phy_addr = addr;
-				init_page_table(ept_page_phy_addr, guest_phy_addr);
+				if ((guest_phy_addr>>20) == 1) {
+					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+					*((unsigned long*)ept_pt_entry) = addr + 7;
+					ept_page_phy_addr = addr;
+					init_page_table(ept_page_phy_addr, guest_phy_addr);
+				}
 			}
 			else {
-				if ((guest_phy_addr>>20) < 1) {  /* 共享host 4K~1M的内核空间 */
-					*((unsigned long*)ept_pt_entry) = (guest_phy_addr & ~0xFFF) + 7;  /* 实地址映射到host相同的page */
-					ept_page_phy_addr = guest_phy_addr;
-				}
-				else if ((guest_phy_addr>>20)>= 16) {
+			    if ((guest_phy_addr>>20)>= 16) {
+					/* 这部分的guest-phy-addr到phy-addr的映射就是通过get_free_page分配了，而不是实地址映射了 */
 					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 					*((unsigned long*)ept_pt_entry) = addr + 7;
 					ept_page_phy_addr = addr;
 				}
+				/*
+				 * 1. 共享host 4K~1M的内核空间,尤其是4K～640K用于Host与Guest之间的通信.
+				 * 2. 0~4K空间是Host的目录表，这里不能共享，因为在初始化EPT-paging-structure的时候就已经为GuestOS
+				 *    分配了实际物理page(通过get_free_page方式)，GuestOS的目录表是已经映射过了，所以代码不会执行到这里.
+				 */
+			    else if ((guest_phy_addr>>20) < 1) {/* 这个分支可以合并到下面的else分支里，这里保留是为了让自己别忘了上面注释. */
+					*((unsigned long*)ept_pt_entry) = (guest_phy_addr & ~0xFFF) + 7;  /* 实地址映射到host相同的page */
+					ept_page_phy_addr = guest_phy_addr;
+				}
 				else {
+					/*
+					 * 1. GuestOS-Code是存放在12M～16M这4M之间的，其中还包括磁盘的高速缓冲区,
+					 *    这部分空间Host没有利用，是专用于实地址映射GuestOS的内核Code和高速缓冲区的,
+					 *    因此这部分guest-phy-addr到phy-addr的映射也是实地址映射.
+					 * 2. 5M~12M是用于存储Host-Code和host的磁盘高速缓冲区，这里也是实地址映射了，共享这部分Host代码了
+					 */
 					*((unsigned long*)ept_pt_entry) = (guest_phy_addr & ~0xFFF) + 7;  /* 实地址映射到host相同的page */
 					ept_page_phy_addr = guest_phy_addr;
 					/*
-					 * 这里是GuestOS的code了，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
-					 * 因为内核的代码还不超过1M所以就只加载1M的内核代码.
-					 * GuestOS的code是从硬盘的5M地址处开始存储的，所以这里用guest_phy_addr作为参数每次读取一页.
-					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
-					 */
-					/*if ((guest_phy_addr>>20) >=5 && (guest_phy_addr>>20) < 6) {
-						if ((guest_phy_addr & ~0xFFF) == 0x500000) {
-							printk("OS_start_addr: %08x\n\r", addr);
-						}
-						load_guest_os_addr = addr;
-						do_hd_read_request_in_vm(guest_phy_addr & ~0xFFF, 8);
-					}*/
-
-					/*
-					 * 这里是GuestOS的code了，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
+					 * 12M~13M是用于存储GuestOS-Code，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
 					 * 因为内核的代码还不超过1M所以就只加载1M的内核代码.
 					 * GuestOS的code是从硬盘的5M地址处开始存储的，所以这里用guest_phy_addr作为参数每次读取一页.
 					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
@@ -380,7 +387,18 @@ void init_guest_kernel_space() {
 	 */
 	load_guest_os_flag = 1;
 	set_hd_intr_gate();
-	for (unsigned long i = 0x00; i< 0x2000;i++) {  /* i (Granularity: 4K), 32M内核空间 */
+	/*
+	 * GuestOS的内核空间的Guest-linear-addr到Guest-physical-addr的映射有两种情况：
+	 * 1. guest-phy-space<=1G
+	 *    因为内核的linear-addr-space是1G,所以实地址映射整个Guest-phy-space
+	 * 2. guest-phy-space> 1G
+	 *    内核1G的linear-addr-space要预留128M的linear-space用于映射guest-phy-addr>1G的内存
+	 *
+	 * 目前在host state状态下，开辟了128M的permanent_real_addr_mapping_space用于模拟GuestOS的整个2G的虚拟物理内存，
+	 * 这样做主要是为了后面的调试方便，等整个GuestOS调通以后，会在Host的整个mem_map中调用get_free_page分配.
+	 * 这里先通过EPT-paging-structure映射GuestOS 32M内核空间, Guest-phy-addr --> phy-addr.
+	 */
+	for (unsigned long i = 0x00; i< 0x2000;i++) {  /* i (Granularity: 4K) */
 		unsigned long guest_linear_addr = i*0x1000;
 		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
 		unsigned long phy_addr = get_phy_addr(guest_phy_addr);
