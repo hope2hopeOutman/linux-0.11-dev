@@ -94,8 +94,8 @@ int sys_setup(void * BIOS)
 		hd_info[drive].lzone = *(unsigned short *) (12+BIOS);
 		hd_info[drive].sect = *(unsigned char *) (14+BIOS);
 		BIOS += 16;
-		/*printk("cyl: %d, head: %d, sect: %d, wpcom: %d, ctl: %d, lzone: %d \n\r ",
-				hd_info[drive].cyl, hd_info[drive].head, hd_info[drive].sect, hd_info[drive].wpcom, hd_info[drive].ctl, hd_info[drive].lzone);*/
+		printk("cyl: %d, head: %d, sect: %d, wpcom: %d, ctl: %d, lzone: %d \n\r ",
+				hd_info[drive].cyl, hd_info[drive].head, hd_info[drive].sect, hd_info[drive].wpcom, hd_info[drive].ctl, hd_info[drive].lzone);
 	}
 	if (hd_info[1].cyl)
 		NR_HD=2;
