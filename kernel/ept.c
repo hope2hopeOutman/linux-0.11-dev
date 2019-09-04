@@ -34,7 +34,12 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
 	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
 	unsigned long ept_pdpt_index = guest_phy_addr>>30;
-	unsigned long ept_pdpt_entry = ept_pdpt_addr & ~0xFFF + ept_pdpt_index*8;
+	/*
+	 * 我靠自己挖的巨坑啊，太大意了，浪费了好多时间啊/(ㄒoㄒ)/~~
+	 * 这个"ept_pdpt_addr & ~0xFFF + ept_pdpt_index*8"表达式，由于忘记加优先级了，导致访问的一直是epdpt表的0表项(1G)物理地址空间，
+	 * 所以当要映射>1G的物理地址空间，总是失败。
+	 * */
+	unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
 	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
 	if (!(ept_pd_phy_addr & 0x07)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
@@ -259,6 +264,10 @@ void vm_exit_diagnose() {
 					 "jmp exit_external_intr_loop\n\t"   \
 					 ::);
 		}
+		if (vm_exit_reason == VM_EXIT_REASON_TASK_SWITCH) {
+			/* 得提供一个方法,在VMM下能访问要被调度的任务的task_struct,这样就可以通过存储在tss结构体中的信息来初始化guest要被调度新任务,
+			 * 例如有关guest_ip ldt cs,ds 等field初始化为新任务的相应信息，这样就可以调度新任务在guest中执行了. */
+		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
 			__asm__ ("exit_vmread_loop:\n\t"    \
 					 "xorl %%eax,%%eax\n\t"     \
@@ -279,14 +288,14 @@ void vm_exit_diagnose() {
 				panic("Incorrect exit_reason_no\n\r");
 			}
 			unsigned long spec_phy_addr = get_spec_phy_addr((unsigned long)exit_reason_io_vedio->print_buf);
-			printk("spec_phy_addr: %08x\n\r", spec_phy_addr);
+			//printk("spec_phy_addr: %08x\n\r", spec_phy_addr);
 			guest_printk((unsigned char*)spec_phy_addr, exit_reason_io_vedio->print_size);
 			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
 			unsigned long vm_exit_instruction_info = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_INFO_ENCODING);
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
-			printk("inst_len: %08x, inst_info: %08x, exit_guest_rip: %08x\n\r", vm_exit_instruction_len
+			/*printk("inst_len: %08x, inst_info: %08x, exit_guest_rip: %08x\n\r", vm_exit_instruction_len
 					                                                          , vm_exit_instruction_info
-																			  , vm_exit_guest_rip);
+																			  , vm_exit_guest_rip);*/
 			write_vmcs_field(GUEST_RIP_ENCODING, vm_exit_guest_rip + vm_exit_instruction_len);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_EPT_VIOLATION) {
@@ -314,13 +323,13 @@ void init_guest_kernel_space() {
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-	//printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
+	printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
 	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
-	//printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
+	printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
 	unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
 	unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
 	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
-	//printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
+	printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
 	if (!(ept_pd_phy_addr & 0x07)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 		*((unsigned long*)ept_pdpt_entry) = addr + 7;

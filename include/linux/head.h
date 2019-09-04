@@ -314,6 +314,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
 
 #define VM_EXIT_REASON_EXTERNAL_INTERRUPT     1   /* External interrupt */
+#define VM_EXIT_REASON_TASK_SWITCH            9   /* Task Switch */
 #define VM_EXIT_REASON_VMREAD                 23  /* VMREAD  vmcs-shadow not support */
 #define VM_EXIT_REASON_VMWRITE                25  /* VMWRITE vmcs-shadow not support */
 #define VM_EXIT_REASON_IO_INSTRUCTION         30  /* Use I/O bitmap        */
