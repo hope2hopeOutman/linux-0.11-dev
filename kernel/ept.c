@@ -18,7 +18,7 @@ extern unsigned short	video_port_val;		/* Video register value port	*/
 
 void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
-	for (int i=0;i<1024;i++) {
+	for (int i=0;i<256;i++) {
 		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7;
 	}
 }
@@ -154,13 +154,22 @@ unsigned long get_spec_phy_addr(unsigned long guest_linear_offset) {
 	return phy_addr_base + (guest_linear_addr & 0xFFF);                  /* 返回变量具体的实际物理地址. */
 }
 
+void flush_tlb() {
+	/* 刷新Guest TLB */
+	unsigned long eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+	unsigned long ept_desc[32] = {eptp_addr,0,};
+	unsigned long inv_type = 1;  /* Single-Context */
+	__asm__ ("invept %1,%%eax\n\t" \
+			::"a" (inv_type),"m" (*(char*)ept_desc));
+}
+
 void do_vm_page_fault() {
 	unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
 	unsigned long guest_physical_full_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING);
 	unsigned long guest_physical_high_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING);
 	unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
 	unsigned long guest_esp = read_vmcs_field(GUEST_RSP_ENCODING);
-	printk("guest_linear_addr: %08x,guest_physical_addr: %08x, guest_eip: %08x\n\r", guest_linear_addr,guest_physical_full_addr, guest_eip);
+	//printk("guest_linear_addr: %08x,guest_physical_addr: %08x, guest_eip: %08x\n\r", guest_linear_addr,guest_physical_full_addr, guest_eip);
 	//printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
 	/* Start: 判断Guest-CR3对应的物理页是否存在 */
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
@@ -216,12 +225,7 @@ void do_vm_page_fault() {
 	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
 	printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
 
-	/* 刷新Guest TLB */
-	unsigned long eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-	unsigned long ept_desc[32] = {eptp_addr,0,};
-	unsigned long inv_type = 1;  /* Single-Context */
-	__asm__ ("invept %1,%%eax\n\t" \
-			::"a" (inv_type),"m" (*(char*)ept_desc));
+	//flush_tlb();
 }
 
 void vm_exit_diagnose() {
@@ -349,6 +353,7 @@ void init_guest_kernel_space() {
 		ept_page_phy_addr = addr;
 		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
 		init_page_dir(ept_page_phy_addr);
+		printk("GuestOS task0.cr3.ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
 	}
 	/* ============================================= Init Guest-CR3 End =============================================*/
 
