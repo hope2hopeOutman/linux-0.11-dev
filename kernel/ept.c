@@ -266,7 +266,19 @@ void vm_exit_diagnose() {
 		}
 		if (vm_exit_reason == VM_EXIT_REASON_TASK_SWITCH) {
 			/* 得提供一个方法,在VMM下能访问要被调度的任务的task_struct,这样就可以通过存储在tss结构体中的信息来初始化guest要被调度新任务,
-			 * 例如有关guest_ip ldt cs,ds 等field初始化为新任务的相应信息，这样就可以调度新任务在guest中执行了. */
+			 * 例如有关guest_ip ldt cs,ds 等field初始化为新任务的相应信息，这样就可以调度新任务在guest中执行了.
+			 * 1. 这里还是将这些寄存器的加载工作放在guestOS中来实现比较好,因为在GuestOS的内核太访问每个任务的task_struct比较方便，
+			 *    这样就不需要VMM来维护GuestOS中每个任务的状态信息了,yes就这样干 */
+			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
+			unsigned long vm_exit_instruction_info = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_INFO_ENCODING);
+			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
+			unsigned long vm_exit_guest_rsp        = read_vmcs_field(GUEST_RSP_ENCODING);
+			exit_reason_task_switch_struct* exit_reason_task_switch = (exit_reason_task_switch_struct*) VM_EXIT_SLEF_DEFINED_INFO_ADDR;
+			/* 保存老任务执行ljmp的后一条指令，当重新执行老任务时会从该命令执行，而不会再执行ljmp了. */
+			exit_reason_task_switch->old_task_eip = vm_exit_guest_rip + vm_exit_instruction_len;
+			/* 保存老任务的内核栈指针，当重新调度老任务执行时，当执行到iret时，会从其内核栈中弹出相应的用户态ss,esp,eflags,cs和eip,返回用户态执行. */
+			exit_reason_task_switch->old_task_esp = vm_exit_guest_rsp;
+			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
 			__asm__ ("exit_vmread_loop:\n\t"    \
