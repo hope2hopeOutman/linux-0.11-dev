@@ -4,6 +4,8 @@
 #define EMULATOR_TYPE 0x01   /* 0x00: bochs, 0x01: qemu */
 #define PAGE_SIZE 4096
 
+typedef unsigned long  ulong;
+
 typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
@@ -13,14 +15,6 @@ typedef struct exit_reason_io_vedio_struct {
 	unsigned long  print_size;
 	char*          print_buf;
 } exit_reason_io_vedio_struct;
-
-typedef struct exit_reason_task_switch_struct {
-	unsigned long  task_switch_entry;  /* GuestOS set, read only for VMM    */
-	unsigned long  new_task_nr;        /* GuestOS set, only used by GuestOS */
-	unsigned long  old_task_nr;        /* GuestOS set, only used by GuestOS */
-	unsigned long  old_task_esp;       /* VMM set, read only for GuestOS    */
-	unsigned long  old_task_eip;       /* VMM set, read only for GuestOS    */
-} exit_reason_task_switch_struct;
 
 struct apic_info {
 	unsigned long bsp_flag;        /* 1: BSP, 0: AP */

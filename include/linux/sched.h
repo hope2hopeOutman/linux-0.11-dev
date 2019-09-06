@@ -124,6 +124,13 @@ struct task_struct {
 	int father_nr;
 };
 
+typedef struct exit_reason_task_switch_struct {
+	ulong  task_switch_entry;  /* GuestOS set, read only for VMM    */
+	ulong  new_task_nr;        /* GuestOS set, only used by GuestOS */
+	ulong  old_task_nr;        /* GuestOS set, only used by GuestOS */
+	struct tss_struct tss;
+} exit_reason_task_switch_struct;
+
 /*
  *  INIT_TASK is used to set up the first task table, touch at
  * your own risk!. Base=0, limit=0x9ffff (=640kB)

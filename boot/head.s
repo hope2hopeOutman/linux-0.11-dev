@@ -77,6 +77,9 @@ PG_TAB_BASE_ADDR   = 0x100000   /* 内核页表起始地址,4M大小可以管理
  */
 OS_PRELOAD_SIZE    = 0x8000
 
+/* VM-EXIT reason for task-switch */
+VM_EXIT_TASK_SWITCH = 0x09
+
 /*
  * 1. Bochs linux版本
  * Deprecated: 因为bochs模拟>1G的内存有问题，不是很稳定，我在linux上自己重编了bochs并将--enable-large-mem选项也加上了，但是>1G还是有问题，这里不纠结了。
@@ -667,6 +670,7 @@ ap_default_loop:
       所以在汇编文件里加入备份代码最保险了.
 */
 vm_exit_handler:
+    pushl %ebp
     pushl %edi
     pushl %esi
     pushl %edx
@@ -680,6 +684,7 @@ vm_exit_handler:
     popl %edx
     popl %esi
     popl %edi
+    popl %ebp
     vmresume
 
 

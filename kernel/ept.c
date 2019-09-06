@@ -233,7 +233,11 @@ void do_vm_page_fault() {
 	//flush_tlb();
 }
 
-void vm_exit_diagnose() {
+void backup_guest_task_tss(exit_reason_task_switch_struct* exit_reason_task_switch) {
+
+}
+
+void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulong edi, ulong ebp) {
 		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
@@ -272,12 +276,28 @@ void vm_exit_diagnose() {
 			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
 			unsigned long vm_exit_instruction_info = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_INFO_ENCODING);
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
-			unsigned long vm_exit_guest_rsp        = read_vmcs_field(GUEST_RSP_ENCODING);
+
+			/* Start: 备份老任务的执行上下文 */
 			exit_reason_task_switch_struct* exit_reason_task_switch = (exit_reason_task_switch_struct*) VM_EXIT_SLEF_DEFINED_INFO_ADDR;
-			/* 保存老任务执行ljmp的后一条指令，当重新执行老任务时会从该命令执行，而不会再执行ljmp了. */
-			exit_reason_task_switch->old_task_eip = vm_exit_guest_rip + vm_exit_instruction_len;
+			exit_reason_task_switch->tss.eax = eax;
+			exit_reason_task_switch->tss.ebx = ebx;
+			exit_reason_task_switch->tss.ecx = ecx;
+			exit_reason_task_switch->tss.edx = edx;
+			exit_reason_task_switch->tss.esi = esi;
+			exit_reason_task_switch->tss.edi = edi;
+			exit_reason_task_switch->tss.ebp = ebp;
 			/* 保存老任务的内核栈指针，当重新调度老任务执行时，当执行到iret时，会从其内核栈中弹出相应的用户态ss,esp,eflags,cs和eip,返回用户态执行. */
-			exit_reason_task_switch->old_task_esp = vm_exit_guest_rsp;
+			exit_reason_task_switch->tss.esp = read_vmcs_field(GUEST_RSP_ENCODING);
+			/* 保存老任务执行ljmp的后一条指令，当重新执行老任务时会从该命令执行，而不会再执行ljmp了. */
+			exit_reason_task_switch->tss.eip = vm_exit_guest_rip + vm_exit_instruction_len;
+			exit_reason_task_switch->tss.cs = read_vmcs_field(GUEST_CS_ENCODING);
+			exit_reason_task_switch->tss.ss = read_vmcs_field(GUEST_SS_ENCODING);
+			exit_reason_task_switch->tss.ds = read_vmcs_field(GUEST_DS_ENCODING);
+			exit_reason_task_switch->tss.fs = read_vmcs_field(GUEST_FS_ENCODING);
+			exit_reason_task_switch->tss.es = read_vmcs_field(GUEST_ES_ENCODING);
+			exit_reason_task_switch->tss.gs = read_vmcs_field(GUEST_GS_ENCODING);
+			/* End: 备份老任务的执行上下文 */
+
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
