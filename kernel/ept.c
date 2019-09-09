@@ -278,7 +278,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
 
 			/* Start: 备份老任务的执行上下文 */
-			exit_reason_task_switch_struct* exit_reason_task_switch = (exit_reason_task_switch_struct*) VM_EXIT_SLEF_DEFINED_INFO_ADDR;
+			exit_reason_task_switch_struct* exit_reason_task_switch = (exit_reason_task_switch_struct*) VM_EXIT_SELF_DEFINED_INFO_ADDR;
 			exit_reason_task_switch->tss.eax = eax;
 			exit_reason_task_switch->tss.ebx = ebx;
 			exit_reason_task_switch->tss.ecx = ecx;
@@ -315,7 +315,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 					 ::);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_IO_INSTRUCTION) {
-			exit_reason_io_vedio_struct* exit_reason_io_vedio = (exit_reason_io_vedio_struct*) VM_EXIT_SLEF_DEFINED_INFO_ADDR;
+			exit_reason_io_vedio_struct* exit_reason_io_vedio = (exit_reason_io_vedio_struct*) VM_EXIT_SELF_DEFINED_INFO_ADDR;
 			if (exit_reason_io_vedio->exit_reason_no != VM_EXIT_REASON_IO_INSTRUCTION) {
 				panic("Incorrect exit_reason_no\n\r");
 			}

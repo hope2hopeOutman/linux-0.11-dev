@@ -341,6 +341,6 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
  * 4K~640K 低地址空间利用与分配，该段地址空间被host和所有VM共享，用于它们之间的通信,从高地址开始以4K为单位,由高到低分配的.
  * 注意: 用于映射APIC-base-addr的地址空间是从这个空间的低地址由低到高分配的，这里要注意overlap,后面会优化一下.
  */
-#define VM_EXIT_SLEF_DEFINED_INFO_ADDR        0x9F000
+#define VM_EXIT_SELF_DEFINED_INFO_ADDR        0x9F000
 
 #endif
