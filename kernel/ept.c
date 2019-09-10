@@ -290,15 +290,17 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			exit_reason_task_switch->tss.esp = read_vmcs_field(GUEST_RSP_ENCODING);
 			/* 保存老任务执行ljmp的后一条指令，当重新执行老任务时会从该命令执行，而不会再执行ljmp了. */
 			exit_reason_task_switch->tss.eip = vm_exit_guest_rip + vm_exit_instruction_len;
-			exit_reason_task_switch->tss.cs = read_vmcs_field(GUEST_CS_ENCODING);
-			exit_reason_task_switch->tss.ss = read_vmcs_field(GUEST_SS_ENCODING);
-			exit_reason_task_switch->tss.ds = read_vmcs_field(GUEST_DS_ENCODING);
-			exit_reason_task_switch->tss.fs = read_vmcs_field(GUEST_FS_ENCODING);
-			exit_reason_task_switch->tss.es = read_vmcs_field(GUEST_ES_ENCODING);
-			exit_reason_task_switch->tss.gs = read_vmcs_field(GUEST_GS_ENCODING);
+			exit_reason_task_switch->tss.cs  = read_vmcs_field(GUEST_CS_ENCODING);
+			exit_reason_task_switch->tss.ss  = read_vmcs_field(GUEST_SS_ENCODING);
+			exit_reason_task_switch->tss.ds  = read_vmcs_field(GUEST_DS_ENCODING);
+			exit_reason_task_switch->tss.fs  = read_vmcs_field(GUEST_FS_ENCODING);
+			exit_reason_task_switch->tss.es  = read_vmcs_field(GUEST_ES_ENCODING);
+			exit_reason_task_switch->tss.gs  = read_vmcs_field(GUEST_GS_ENCODING);
+			exit_reason_task_switch->tss.cr3 = read_vmcs_field(GUEST_CR3_ENCODING);
 			/* End: 备份老任务的执行上下文 */
 
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
+			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE1_ENCODING, exit_reason_task_switch->new_task_cr3);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
 			__asm__ ("exit_vmread_loop:\n\t"    \

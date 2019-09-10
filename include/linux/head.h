@@ -156,7 +156,6 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_EXIT_MSR_LOAD_ADDR_FULL_ENCODING   0x2008
 #define IA32_VMX_EXIT_MSR_LOAD_ADDR_HIGH_ENCODING   0x2009
 
-#define IA32_VMX_CR3_TARGET_COUNT_ENCODING                0x400A
 #define IA32_VMX_ENTRY_CTLS_ENCODING                      0x4012
 #define IA32_VMX_ENTRY_MSR_LOAD_COUNT_ENCODING            0x4014
 #define IA32_VMX_ENTRY_MSR_LOAD_ADDR_FULL_ENCODING        0x200A

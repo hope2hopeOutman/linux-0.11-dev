@@ -125,9 +125,10 @@ struct task_struct {
 };
 
 typedef struct exit_reason_task_switch_struct {
-	ulong  task_switch_entry;  /* GuestOS set, read only for VMM    */
-	ulong  new_task_nr;        /* GuestOS set, only used by GuestOS */
-	ulong  old_task_nr;        /* GuestOS set, only used by GuestOS */
+	ulong  task_switch_entry;   /* GuestOS set, read only for VMM    */
+	ulong  new_task_nr;         /* GuestOS set, only used by GuestOS */
+	ulong  new_task_cr3;        /* GuestOS set, only used by VMM */
+	ulong  old_task_nr;         /* GuestOS set, only used by GuestOS */
 	struct tss_struct tss;
 } exit_reason_task_switch_struct;
 
