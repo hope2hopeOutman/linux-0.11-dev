@@ -155,7 +155,7 @@ unsigned long get_spec_phy_addr(unsigned long guest_linear_offset) {
 	unsigned long guest_linear_addr = (guest_cs & ~0xFFF) + guest_linear_offset;
 	unsigned long guest_phy_addr    = get_guest_phy_addr(guest_linear_addr);
 	unsigned long  phy_addr_base    = get_phy_addr(guest_phy_addr);
-	printk("guest_linear_offset:%08x,guest_phy_addr:%08x,phy_addr_base:%08x\n\r", guest_linear_offset, guest_phy_addr, phy_addr_base);
+	//printk("guest_linear_offset:%08x,guest_phy_addr:%08x,phy_addr_base:%08x\n\r", guest_linear_offset, guest_phy_addr, phy_addr_base);
 	return phy_addr_base + (guest_linear_addr & 0xFFF);                  /* 返回变量具体的实际物理地址. */
 }
 
@@ -228,13 +228,9 @@ void do_vm_page_fault() {
 	/* 判断Guest-linear-addr自身的物理页是否存在 */
 	unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
 	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
-	printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
+	//printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
 
 	//flush_tlb();
-}
-
-void backup_guest_task_tss(exit_reason_task_switch_struct* exit_reason_task_switch) {
-
 }
 
 void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulong edi, ulong ebp) {
@@ -260,7 +256,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 		 *  这种实现肯定效率上有损失的，所以APIC-virtualization要是硬件能支持，那持效率就高多了，这也是为什么只有Intel的企业级芯片才支持这个feature.
 		 *  本系统通过开关的形式支持这两种外部I/O的访问方式: (1) VM直接访问外部I/O, (2) VM通过VM-EXIT访问外部I/O.
 		 */
-		printk("exit_reason: %08x, vm_exit_qualification: %08x, guest_eip: %08x\n\r", vm_exit_reason, vm_exit_qualification, guest_eip);
+		//printk("exit_reason: %08x, vm_exit_qualification: %08x, guest_eip: %08x\n\r", vm_exit_reason, vm_exit_qualification, guest_eip);
 		if (vm_exit_reason == VM_EXIT_REASON_EXTERNAL_INTERRUPT) {
 			__asm__ ("exit_external_intr_loop:\n\t"      \
 					 "xorl %%eax,%%eax\n\t"              \
@@ -301,6 +297,11 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
 			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE1_ENCODING, exit_reason_task_switch->new_task_cr3);
+			ulong secondary = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
+			ulong primary   = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
+			printk("task_switch.primary:secondary(%08x:%08x)\n\r", primary, secondary);
+			//write_vmcs_field(GUEST_CR3_ENCODING, exit_reason_task_switch->new_task_cr3);
+			flush_tlb();
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
 			__asm__ ("exit_vmread_loop:\n\t"    \
