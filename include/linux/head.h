@@ -318,6 +318,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define VM_EXIT_REASON_TASK_SWITCH            9   /* Task Switch */
 #define VM_EXIT_REASON_VMREAD                 23  /* VMREAD  vmcs-shadow not support */
 #define VM_EXIT_REASON_VMWRITE                25  /* VMWRITE vmcs-shadow not support */
+#define VM_EXIT_REASON_CONTROL_REGS_ACCESS    28  /* Control-register accesses */
 #define VM_EXIT_REASON_IO_INSTRUCTION         30  /* Use I/O bitmap        */
 #define VM_EXIT_REASON_EPT_VIOLATION          48  /* EPT violation         */
 #define VM_EXIT_REASON_EPT_MISCONFIGURATION   49  /* EPT misconfiguration  */

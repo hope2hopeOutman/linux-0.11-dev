@@ -246,6 +246,7 @@ void init_vmcs_procbased_ctls() {
 
 	if (!(msr_values[0] & (1<<15)) || !(msr_values[1] & (1<<15))) {
 		init_value &= ~(1<<15);  /* Disbale CR3-load exiting */
+		//init_value |= (1<<15); /* Enable CR3-load exiting */
 		write_vmcs_field(IA32_VMX_CR3_TARGET_COUNT_ENCODING, IA32_VMX_CR3_TARGET_COUNT);
 	}
 
