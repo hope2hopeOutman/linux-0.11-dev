@@ -314,8 +314,17 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			/*ulong secondary = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
 			ulong primary   = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
 			printk("task_switch.primary:secondary(%08x:%08x)\n\r", primary, secondary);*/
-			write_vmcs_field(GUEST_CR3_ENCODING, exit_reason_task_switch->new_task_cr3);
+
+			ulong ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+			ulong new_ept_pml4_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+
+			*(ulong* )new_ept_pml4_addr = *(ulong* )(ept_pml4_addr & (~0xFFF));
+			new_ept_pml4_addr |= (ept_pml4_addr & 0xFFF);
+
+
+			//write_vmcs_field(GUEST_CR3_ENCODING, exit_reason_task_switch->new_task_cr3);
 			printk("task_switch.GUEST_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
+			write_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING, new_ept_pml4_addr);
 			flush_tlb();
 
 #if 0
@@ -326,7 +335,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 #endif
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_EXEC_CPUID) {
-			flush_tlb();
+			//flush_tlb();
 			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
 			write_vmcs_field(GUEST_RIP_ENCODING, vm_exit_guest_rip + vm_exit_instruction_len);

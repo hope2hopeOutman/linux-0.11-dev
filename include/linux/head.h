@@ -111,6 +111,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_TRUE_PROCBASED_CTLS  0x48E
 #define IA32_VMX_TRUE_EXIT_CTLS       0x48F
 #define IA32_VMX_TRUE_ENTRY_CTLS      0x490
+#define IA32_VMX_VMFUNC               0x491
 #define IA32_FEATURE_CONTROL          0x3A
 #define IA32_VMX_MISC                 0x485
 
@@ -131,6 +132,11 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_APIC_ACCESS_ADDR_HIGH_ENCODING                  0x2015
 #define IA32_VMX_POSTED_INTERRUPT_DESCRIPTOR_ADDR_FULL_ENCODING  0x2016
 #define IA32_VMX_POSTED_INTERRUPT_DESCRIPTOR_ADDR_HIGH_ENCODING  0x2017
+#define IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING              0x2018
+#define IA32_VMX_VM_FUNCTION_CONTROLS_HIGH_ENCODING              0x2019
+
+#define IA32_VMX_EPTP_LIST_ADDRESS_FULL_ENCODING                 0x2024
+#define IA32_VMX_EPTP_LIST_ADDRESS_HIGH_ENCODING                 0x2025
 
 #define IA32_VMX_EPT_POINTER_FULL_ENCODING    0x201A
 #define IA32_VMX_EPT_POINTER_HIGH_ENCODING    0x201B

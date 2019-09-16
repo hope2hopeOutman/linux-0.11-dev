@@ -291,10 +291,11 @@ void init_vmcs_procbased_ctls() {
 		if ((msr_values[0] & (1<<5)) || (msr_values[1] & (1<<5))) {
 			init_value |= (1<<5);  /* Enable VPID,flush cached-mapping-lines of vTLB associated with VPID, don't need to flush the whole vTLB. */
 		}
-
+#if 0
 		if ((msr_values[0] & (1<<13)) || (msr_values[1] & (1<<13))) {
 			init_value |= (1<<13);  /* Enable VM-functions */
 		}
+#endif
 
 		if ((msr_values[0] & (1<<14)) || (msr_values[1] & (1<<14))) {
 			init_value |= (1<<14);  /* Enable VMCS shadowing */
@@ -526,6 +527,18 @@ void init_vmcs_entry_ctrl_fields() {
 	}
 }
 
+void init_vmcs_functions_ctrl_fields() {
+	unsigned long msr_values[2] = {0,};
+	unsigned long init_value = 0;
+	unsigned long read_value = 0;
+	read_msr(IA32_VMX_VMFUNC,msr_values);
+	printk("IA32_VMX_VMFUNC: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	if (msr_values[0] & (1<<0)) {
+		write_vmcs_field(IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING, 0x01);
+		write_vmcs_field(IA32_VMX_VM_FUNCTION_CONTROLS_HIGH_ENCODING, 0x00);
+	}
+}
+
 void init_vmcs_ctrl_fields() {
 	if (vmx_support_verify()) {
 		unsigned long msr_index = IA32_VMX_BASIC;
@@ -542,6 +555,7 @@ void init_vmcs_ctrl_fields() {
 			init_vmcs_exec_ctrl_fields();
 			init_vmcs_exit_ctrl_fields();
 			init_vmcs_entry_ctrl_fields();
+			//init_vmcs_functions_ctrl_fields();
 		}
 		else {
 		}
