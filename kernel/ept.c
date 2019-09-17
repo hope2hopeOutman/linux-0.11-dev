@@ -33,6 +33,39 @@ void init_page_table(unsigned long page_addr, unsigned long guest_phy_addr) {
 	}
 }
 
+unsigned long get_ept_pt_entry(unsigned long guest_phy_addr) {
+	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
+	unsigned long ept_pdpt_index = guest_phy_addr>>30;
+	/*
+	 * 我靠自己挖的巨坑啊，太大意了，浪费了好多时间啊/(ㄒoㄒ)/~~
+	 * 这个"ept_pdpt_addr & ~0xFFF + ept_pdpt_index*8"表达式，由于忘记加优先级了，导致访问的一直是epdpt表的0表项(1G)物理地址空间，
+	 * 所以当要映射>1G的物理地址空间，总是失败。
+	 * */
+	unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
+	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
+	if (!(ept_pd_phy_addr & 0x07)) {
+		return 0;  /* ept_pd不存在,出错返回 */
+	}
+	else {
+		ept_pd_phy_addr &= ~0xFFF;
+	}
+
+	unsigned long ept_pd_index = (guest_phy_addr>>21) & 0x1FF;
+	unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
+	unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
+	if (!(ept_pt_phy_addr & 0x07)) {
+		return 0; /* ept_pt不存在,出错返回 */
+	}
+	else {
+		ept_pt_phy_addr &= ~0xFFF;
+	}
+
+	unsigned long ept_pt_index = (guest_phy_addr>>12) & 0x1FF;
+	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
+	return ept_pt_entry;
+}
+
 unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
 	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
@@ -311,23 +344,82 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
 			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE0_ENCODING, exit_reason_task_switch->new_task_cr3);
-			/*ulong secondary = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
-			ulong primary   = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
-			printk("task_switch.primary:secondary(%08x:%08x)\n\r", primary, secondary);*/
 
-			ulong ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-			ulong new_ept_pml4_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-
-			*(ulong* )new_ept_pml4_addr = *(ulong* )(ept_pml4_addr & (~0xFFF));
-			new_ept_pml4_addr |= (ept_pml4_addr & 0xFFF);
-
-
-			//write_vmcs_field(GUEST_CR3_ENCODING, exit_reason_task_switch->new_task_cr3);
-			printk("task_switch.GUEST_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
-			write_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING, new_ept_pml4_addr);
 			flush_tlb();
 
+			/*
+			 *
+			 *    详细介绍为什么通过mov-to-cr3将当前cr3存储的目录表地址，改成新任务的目录表地址为什么不行,
+			 *    总是报can not access memory at address xxxxx.
+			 *    实现的思路是这样的： 和非VMX环境下的进程切换一样，在fork一个新进程的时候，会为新进程分配一个自有的目录表，
+			 *    不过这个目录表的前256目录项和父进程相应的目录项的值是一样的都指向相同的页表，这样就共享了1G的内核地址空间了，
+			 *    这样做也节省了内存和不必要的内核页表copy，另外的1024-256个目录项用于管理进程的用户态地址空间共3G大小，这个
+			 *    是每个进程私有的，要按需同缺页分配了。
+			 *    所以在GuestOS中也是想通过这种思路，来实现每个进程都有自己独立的4G地址空间(通过mov-to-cr3)，并通过自己维护进程上相文来实现进程的切换,
+			 *    但是每次运行完该指令后，GDB就报can not access memory at address xxxxx错误.
+			 *    先后做了如下check:
+			 *      1. 看看新任务的目录页和老任务的目录页是不是完全一样的，结果显示是一样的，按理cr3中存储的新任务的目录表(guest-phy-addr)通过EPT-page-structure
+			 *         就可以映射到共享的内核页表了，可老是报can not access memory at address xxxxx错误，但是CR3的值已经是新任务的目录表了，已经切到新任务了，
+			 *         当你通过ni调试指令继续执行下去的话，就是在新任务中执行mov-to-cr3后续的指令；为了验证任务是否是在VM中运行的，故意在mov-to-cr3指令后加了一条cpuid,
+			 *         指令强制vm-exit到VMM中，也确实返回到VMM中了，这说明切换是成功了但有问题。
+			 *      2. 继续看手册，详细研究了paging cache这块，突然发现ept-page-structure本身也有cache，mov-to-cr3仅仅刷新的是TLB而不是EPT cache，到这里真是如获至宝
+			 *         啊，终于找到问题所在了，所以赶紧刷新EPT-cache，通过invept,invvpid，将与当前VPID相关的EPT-page-structure全刷一遍，但结果给了我又一记闷棍，还是
+			 *         报同样错误，到底是哪出错了呢，继续想，折腾。
+			 *      3. 为了验证是否与EPT-cache想关，在fork新进程的时候只分配了一个空目录表，没有将其初始化使其共享内核空间，这时竟然还是报相同错误，CR3已经是新任务的
+			 *         目录表了，执行ni竟然还能继续执行随后的指令，尼玛这肯定是用的ept-cache里的老映射了，无疑了，激动啊，但仔细一想，我不是通过invept和invvpid都flush
+			 *         过了吗，不可能还用老的map啊，迷惑了
+			 *      4. 突然灵光乍现，记得手册上说在VM中可以调用VMFUNC实现eptp-switching，难道不同进程的目录表要对应不同的eptp，通过这种方式实现进程拥有自己独立的4G
+			 *         地址空间，这就是为mov different-value to cr3,做准备的吧，又兴奋起来了，赶紧试一把;
+			 *         在执行mov-to-cr3执行之前，先用VMfunc指令将当前eptp替换为新任务的eptp，然后tm还是相同的错误，要崩溃了，垃圾intel你这是要闹哪样。
+			 *      5. 静下心，仔细复盘一下，突然想到了为什么在VM中不能执行task_swich指令，这条指令会强制VM-EXIT的，之前还吐槽为啥就不支持任务切换呢，
+			 *         到这里我的理解是：
+			 *         手册上说通过设置vm-execute control是可以执行mov-to-cr3和mov-from-cr3指令的，
+			 *         但是执行mov-to-cr3我的理解是不改变CR3的值，这条指令仅仅是为了刷新TLB，因为任务切换后是一定要flush TLB的，
+			 *         压根就不支持chenge cr3 to different value.
+			 *      6. 目前的方式1: 就是通过EPT更改Guest-CR3的实际目录页地址，以达到进程切换到自己的4G地址空间。
+			 *         不过这种方式有个缺点，因为是共享相同的EPT-page-structure，这样每次进程切换就会flush EPT-cache，效率有一定损失。
+			 *      7. 还有一种方式: 为每个进程分配自己的ept-page-structure，不改变Guest-CR3的值，通过vmfunc改变eptp从而能实现每个进程都有独立的4G地址空间，
+			 *         目前的方式2: 就是通过这种方式实现的，但是这种方式的确定就是会占用更多的内存空间，但是每次任务切换由于每个任务都有自己独立的EPT所以EPT-cache
+			 *         中的内容是不需每次都flush的，这样效率更高.
+			 */
+#if 1
+			/* 方式1: Prepare for task-switch by sharing the same eptp */
+			ulong cr3_phy_addr = get_phy_addr(CR3_DEFAULT_GUEST_PHY_ADDR);
+			/*
+			 * 这里是通过共享同一个EPT-page-structure实现task-switch的关键.
+			 * 1. 首先获取新的要被调度的任务cr3的实际物理地址，通过ept-page-structure转换得到.
+			 * 2. 然后将新任务cr3的实际物理地址更新到CR3_DEFAULT_GUEST_PHY_ADDR对应的ept-pt-entry中，
+			 *    这样当回到VM中，CR3寄存器的值虽然没变，但是其对应的目录表已经换成新任务的目录表了，
+			 *    进程运行在新任务的地址空间了，从而实现任务切换,这有点太tricky了^_^。
+			 */
+			ulong new_cr3_phy_addr = get_phy_addr(exit_reason_task_switch->new_task_cr3);
+			printk("task0_cr3:task1_crs (%08x:%08x)\n\r", cr3_phy_addr, new_cr3_phy_addr);
+
+			ulong ept_pt_entry = get_ept_pt_entry(CR3_DEFAULT_GUEST_PHY_ADDR);
+			*(ulong* )ept_pt_entry = new_cr3_phy_addr + 7;
+			printk("ept_pt_entry: %08x\n\r", ept_pt_entry);
+#endif
+
 #if 0
+			/*
+			 *  方式2: Prepare for task-switch by eptp-switching
+			 *  这种方式会为每个进程分配自己独立的EPT-page-structure,这样就能最大化的保留EPT-cache了，但会占用更多的内存。
+			 */
+			ulong ept_list_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			write_vmcs_field(IA32_VMX_EPTP_LIST_ADDRESS_FULL_ENCODING, ept_list_addr);
+			printk("ept_list_addr: %08x\n\r", ept_list_addr);
+			ulong task0_ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+			ulong task1_ept_pml4_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
+			*(ulong* )(ept_list_addr)     = task0_ept_pml4_addr;
+			*(ulong* )(ept_list_addr + 8) = (task1_ept_pml4_addr | (task0_ept_pml4_addr & 0xFFF));
+
+			*(ulong* )task1_ept_pml4_addr = *(ulong* )(task0_ept_pml4_addr & (~0xFFF));
+			task1_ept_pml4_addr |= (task0_ept_pml4_addr & 0xFFF);
+#endif
+			printk("task_switch.GUEST_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
+
+#if 0
+			/* 这种方式也试过了，就是为了解决mov different value to cr3 */
 			__asm__ ("vmclear %0\n\t"    \
 					 "vmptrld %0\n\t"    \
 					 "vmlaunch\n\t"      \

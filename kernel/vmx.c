@@ -197,11 +197,11 @@ void guest_idle_loop() {
 void init_vmcs_field(unsigned long capability_msr_index, unsigned long field_encoding) {
 	unsigned long msr_values[2] = {0,};
 	read_msr(capability_msr_index,msr_values);
-	printk("IA32_VMX_TRUE_XXX_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_TRUE_XXX_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	unsigned long init_value = msr_values[0] & msr_values[1];
 	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
 	unsigned long read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("init:read(%08x:%08x)\n\r", init_value, read_value);
 }
 
 void init_vmcs_pinbased_ctls() {
@@ -209,10 +209,10 @@ void init_vmcs_pinbased_ctls() {
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
 	read_msr(IA32_VMX_PINBASED_CTLS,msr_values);
-	printk("IA32_VMX_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_PINBASED_CTLS,msr_values);
-	printk("IA32_VMX_TRUE_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_TRUE_PINBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value |= (msr_values[0] & msr_values[1]); /* Refer to algorithm 3. chapter 31.5.1 */
 
 	/*
@@ -237,10 +237,10 @@ void init_vmcs_procbased_ctls() {
 
 	/* Using algorithm 3 to init. */
 	read_msr(IA32_VMX_PROCBASED_CTLS,msr_values);
-	printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = msr_values[0] & msr_values[1];
 	read_msr(IA32_VMX_TRUE_PROCBASED_CTLS,msr_values);
-	printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_TRUE_PROCBASED_CTLS: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 
 	init_value |= (msr_values[0] & msr_values[1]);
 
@@ -291,7 +291,7 @@ void init_vmcs_procbased_ctls() {
 		if ((msr_values[0] & (1<<5)) || (msr_values[1] & (1<<5))) {
 			init_value |= (1<<5);  /* Enable VPID,flush cached-mapping-lines of vTLB associated with VPID, don't need to flush the whole vTLB. */
 		}
-#if 0
+#if 1
 		if ((msr_values[0] & (1<<13)) || (msr_values[1] & (1<<13))) {
 			init_value |= (1<<13);  /* Enable VM-functions */
 		}
@@ -416,7 +416,7 @@ void init_vmcs_procbased_ctls() {
 
 		write_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING, init_value);
 		read_value = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
-		printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+		printk("SECONDARY_PROCBASED(%08x:%08x)\n\r", init_value, read_value);
 	}
 }
 
@@ -532,11 +532,13 @@ void init_vmcs_functions_ctrl_fields() {
 	unsigned long init_value = 0;
 	unsigned long read_value = 0;
 	read_msr(IA32_VMX_VMFUNC,msr_values);
-	printk("IA32_VMX_VMFUNC: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_VMFUNC: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	if (msr_values[0] & (1<<0)) {
 		write_vmcs_field(IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING, 0x01);
 		write_vmcs_field(IA32_VMX_VM_FUNCTION_CONTROLS_HIGH_ENCODING, 0x00);
 	}
+	ulong read = read_vmcs_field(IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING);
+	//printk("IA32_VMX_VMFUNC.read: %08x\n\r", read);
 }
 
 void init_vmcs_ctrl_fields() {
@@ -555,7 +557,7 @@ void init_vmcs_ctrl_fields() {
 			init_vmcs_exec_ctrl_fields();
 			init_vmcs_exit_ctrl_fields();
 			init_vmcs_entry_ctrl_fields();
-			//init_vmcs_functions_ctrl_fields();
+			init_vmcs_functions_ctrl_fields();
 		}
 		else {
 		}
@@ -673,10 +675,10 @@ void init_vmcs_guest_state() {
 	/* Init Guest CR4 */
 	ulong fixed0_value, fixed1_value = 0;
 	read_msr(IA32_VMX_CR4_FIXED0,msr_values);
-	printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value = fixed0_value = msr_values[0];
 	read_msr(IA32_VMX_CR4_FIXED1,msr_values);
-	printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	//printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
 	init_value &= (fixed1_value = msr_values[0]);
 
 #if 0
@@ -688,7 +690,7 @@ void init_vmcs_guest_state() {
 
 	write_vmcs_field(GUEST_CR4_ENCODING, init_value);
 	read_value = read_vmcs_field(GUEST_CR4_ENCODING);
-	printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+	//printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
 
 	read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
 	//printk("IA32_VMX_ENTRY_CTLS_ENCODING : %08x\n\r", read_value);
@@ -877,7 +879,7 @@ void init_vmcs_guest_state() {
 	unsigned long guest_phy_idt_addr = GUEST_OS_IDT_BASE_ADDR;
 	write_vmcs_field(GUEST_IDTR_BASE_ENCODING, guest_phy_idt_addr);
 	//write_vmcs_field(GUEST_IDTR_BASE_ENCODING, idt);
-	printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
+	//printk("Read GUEST_IDTR_BASE_ENCODING: %08x\n\r",read_vmcs_field(GUEST_IDTR_BASE_ENCODING));
 
 	/* Init limit for Guest segment */
 	write_vmcs_field(GUEST_ES_LIMIT_ENCODING, 0x3FFFFFFF);
@@ -972,7 +974,7 @@ void init_vmcs_guest_state() {
 		 */
 	}
 	else {
-		write_vmcs_field(GUEST_CR3_ENCODING, 0x00);  /* 设值VM entry后，CR3的初始化值。 */
+		write_vmcs_field(GUEST_CR3_ENCODING, CR3_DEFAULT_GUEST_PHY_ADDR);  /* 设值VM entry后，CR3的初始化值。 */
 	}
 
 	/* Load MSR registers from MSR fields */
@@ -1125,6 +1127,16 @@ void vm_entry() {
 	 *  */
 	init_vmcs_host_state();
 	init_vmcs_guest_state();
+
+#if 0
+	unsigned long read = 0;
+	read = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
+	printk("IA32_VMX_PROCBASED_CTLS_ENCODING: %08x\n\r", read);
+	read = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
+	printk("IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING: %08x\n\r", read);
+	read = read_vmcs_field(IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING);
+	printk("IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING: %08x\n\r", read);
+#endif
 
 	/*
 	 * Enter VM Guest software.
