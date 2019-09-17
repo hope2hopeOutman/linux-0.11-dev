@@ -316,6 +316,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 
 #define VM_EXIT_REASON_EXTERNAL_INTERRUPT     1   /* External interrupt */
 #define VM_EXIT_REASON_TASK_SWITCH            9   /* Task Switch */
+#define VM_EXIT_REASON_EXEC_CPUID             10   /* CPUID */
 #define VM_EXIT_REASON_VMREAD                 23  /* VMREAD  vmcs-shadow not support */
 #define VM_EXIT_REASON_VMWRITE                25  /* VMWRITE vmcs-shadow not support */
 #define VM_EXIT_REASON_CONTROL_REGS_ACCESS    28  /* Control-register accesses */

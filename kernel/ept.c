@@ -16,6 +16,9 @@ extern unsigned long load_guest_os_addr;
 extern unsigned short	video_port_reg;		/* Video register select port	*/
 extern unsigned short	video_port_val;		/* Video register value port	*/
 
+//extern struct vmxon_region_address {unsigned long address[2];} vmxon_region_address;
+extern struct vmcs_region_address {unsigned long address[2];} vmcs_region_address;
+
 void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
 	for (int i=0;i<256;i++) {
@@ -161,17 +164,21 @@ unsigned long get_spec_phy_addr(unsigned long guest_linear_offset) {
 
 void flush_tlb() {
 	/* 刷新Guest TLB */
-	unsigned long eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-	unsigned long ept_desc[32] = {eptp_addr,0,};
-	unsigned long inv_type = 1;  /* Single-Context */
+	ulong eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
+	printk("eptp_addr: %08x\n\r", eptp_addr);
+	struct desc_type {
+		ulong pad1;
+		ulong pad2;
+	} ept_desc[2] = {{eptp_addr & (~0xFFF),0},{0,0}};
+
+	unsigned long inv_type = 2;  /* Single-Context */
 	__asm__ ("invept %1,%%eax\n\t" \
-			::"a" (inv_type),"m" (*(char*)ept_desc));
+			::"a" (inv_type),"m" (*(struct desc_type*)ept_desc));
 
 	ulong vpid = read_vmcs_field(IA32_VMX_VPID_ENCODING);
-	unsigned long vpid_desc[32] = {vpid,0,};
-	inv_type = 2;
+	struct desc_type vpid_desc[2] = {{vpid,0},};
 	__asm__ ("invvpid %1,%%eax\n\t" \
-			::"a" (inv_type),"m" (*(char*)vpid_desc));
+			::"a" (inv_type),"m" (*(struct desc_type*)vpid_desc));
 	printk("flush vpid:%u success.\n\r",vpid);
 }
 
@@ -303,12 +310,26 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			/* End: 备份老任务的执行上下文 */
 
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
-			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE1_ENCODING, exit_reason_task_switch->new_task_cr3);
-			ulong secondary = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
+			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE0_ENCODING, exit_reason_task_switch->new_task_cr3);
+			/*ulong secondary = read_vmcs_field(IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING);
 			ulong primary   = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
-			printk("task_switch.primary:secondary(%08x:%08x)\n\r", primary, secondary);
+			printk("task_switch.primary:secondary(%08x:%08x)\n\r", primary, secondary);*/
 			write_vmcs_field(GUEST_CR3_ENCODING, exit_reason_task_switch->new_task_cr3);
+			printk("task_switch.GUEST_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
 			flush_tlb();
+
+#if 0
+			__asm__ ("vmclear %0\n\t"    \
+					 "vmptrld %0\n\t"    \
+					 "vmlaunch\n\t"      \
+					 ::"m" (*(&vmcs_region_address)));
+#endif
+		}
+		else if (vm_exit_reason == VM_EXIT_REASON_EXEC_CPUID) {
+			flush_tlb();
+			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
+			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
+			write_vmcs_field(GUEST_RIP_ENCODING, vm_exit_guest_rip + vm_exit_instruction_len);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_VMREAD) {
 			__asm__ ("exit_vmread_loop:\n\t"    \

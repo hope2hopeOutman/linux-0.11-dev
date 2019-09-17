@@ -292,6 +292,10 @@ void init_vmcs_procbased_ctls() {
 			init_value |= (1<<5);  /* Enable VPID,flush cached-mapping-lines of vTLB associated with VPID, don't need to flush the whole vTLB. */
 		}
 
+		if ((msr_values[0] & (1<<13)) || (msr_values[1] & (1<<13))) {
+			init_value |= (1<<13);  /* Enable VM-functions */
+		}
+
 		if ((msr_values[0] & (1<<14)) || (msr_values[1] & (1<<14))) {
 			init_value |= (1<<14);  /* Enable VMCS shadowing */
 		}
@@ -652,16 +656,25 @@ void init_vmcs_guest_state() {
 	read_value = read_vmcs_field(GUEST_CR0_ENCODING);
 	//printk("GUEST_CR0_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
 
-	/* Init host CR4 */
+	/* Init Guest CR4 */
+	ulong fixed0_value, fixed1_value = 0;
 	read_msr(IA32_VMX_CR4_FIXED0,msr_values);
-	//printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
-	init_value = msr_values[0];
+	printk("IA32_VMX_CR4_FIXED0: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value = fixed0_value = msr_values[0];
 	read_msr(IA32_VMX_CR4_FIXED1,msr_values);
-	//printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
-	init_value &= msr_values[0];
+	printk("IA32_VMX_CR4_FIXED1: %08x:%08x\n\r", msr_values[1], msr_values[0]);
+	init_value &= (fixed1_value = msr_values[0]);
+
+#if 0
+	/* 开启PCIDE(Process-context identifier enable),前提是vm-entry.bit[9] = 0 IA-32e-guest-mode */
+	if ((fixed0_value & (1 << 17)) || (fixed1_value & (1 << 17))) {
+		init_value |= (1 << 17);
+	}
+#endif
+
 	write_vmcs_field(GUEST_CR4_ENCODING, init_value);
 	read_value = read_vmcs_field(GUEST_CR4_ENCODING);
-	//printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
+	printk("GUEST_CR4_ENCODING init:read(%08x:%08x)\n\r", init_value, read_value);
 
 	read_value = read_vmcs_field(IA32_VMX_ENTRY_CTLS_ENCODING);
 	//printk("IA32_VMX_ENTRY_CTLS_ENCODING : %08x\n\r", read_value);
