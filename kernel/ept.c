@@ -10,6 +10,8 @@
 #include <asm/system.h>
 #include <linux/sched.h>
 
+extern void init_kernel_page(ulong start_addr, ulong attr);
+
 extern unsigned long tty_io_semaphore;
 extern unsigned long load_guest_os_flag; /* This flag indicate do_read_intr loading data whether are GuestOS code */
 extern unsigned long load_guest_os_addr;
@@ -112,15 +114,18 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 				/*
 				 * 1. 因为在Guest环境中，对其内核空间也是实地址映射的，这里将GPT(Guest-page-table)也是分配在GPA(Guest-physical-addr)的1M~5M地址空间的，
 				 *    用于映射Guest的4G物理地址空间，因此如果得到的GPA在这个区间的话，说明它是GPT，所以要进行初始化使其实地址映射内核空间。
-				 * 2. 当然也可以共享host相同位置(1M~5M)的页表，这样就不用再重新分配和映射了，但是这样有个问题，会引起page的RWX和Access位的混乱,
+				 *    那么这部分空间就不能共享host相同的1~5M页表空间了，总之host和guest的目录表和页表是不能共享的。
+				 * 2. 如果Guest的目录表也分配在<1M的guest-phy-addr空间，那么host的<1M地址空间肯定有一页是不能被Guest共享的，
+				 *    因为Guest的<1M中的一页会被EPT映射到mem-map中，所以这一页是不可能映射到Host的<1M地址空间了，也就不能共享了。
+				 * 3. 当然你可以强制共享host相同位置(1M~5M)的页表，这样就不用再重新分配和映射了，但是这样有个问题，会引起page的RWX和Access位的混乱,
 				 *    想想看是不是这样，因此，这里为Guest的GDP和GPT在PAGE_IN_REAL_MEM_MAP空间单独分配page用于管理Guest的地址空间。
-				 * 3. 因此1M~5M用于存储映射GuestOS的4G linear-addr-space的所有页表,所以不能共享Host的页表。
-				 * 4. 当Guest-phy-space > 1G的时候，内核只能实地址映射1G的guest-phy-addr，> 1G的guest-addr-space要用保留的内核线性地址空间remap，
+				 * 4. 因此1M~5M用于存储映射GuestOS的4G linear-addr-space的所有页表,所以不能共享Host的页表。
+				 * 5. 当Guest-phy-space > 1G的时候，内核只能实地址映射1G的guest-phy-addr，> 1G的guest-addr-space要用保留的内核线性地址空间remap，
 				 *    所以这里只初始化1G的guest-phy-addr-space.
 				 */
 				if ((guest_phy_addr>>20) == 1) {
 					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-					*((unsigned long*)ept_pt_entry) = addr + 7;
+					*((unsigned long*)ept_pt_entry) = ((addr + 7) | (1<<6) | (6<<3)); /* bit6: ignore PAE memtype,bit3~5: memtype */
 					ept_page_phy_addr = addr;
 					init_page_table(ept_page_phy_addr, guest_phy_addr);
 				}
@@ -129,7 +134,7 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 			    if ((guest_phy_addr>>20)>= 16) {
 					/* 这部分的guest-phy-addr到phy-addr的映射就是通过get_free_page分配了，而不是实地址映射了 */
 					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-					*((unsigned long*)ept_pt_entry) = addr + 7;
+					*((unsigned long*)ept_pt_entry) = ((addr + 7) | (1<<6) | (6<<3));
 					ept_page_phy_addr = addr;
 				}
 				/*
@@ -138,7 +143,7 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 				 *    分配了实际物理page(通过get_free_page方式)，GuestOS的目录表是已经映射过了，所以代码不会执行到这里.
 				 */
 			    else if ((guest_phy_addr>>20) < 1) {/* 这个分支可以合并到下面的else分支里，这里保留是为了让自己别忘了上面注释. */
-					*((unsigned long*)ept_pt_entry) = (guest_phy_addr & ~0xFFF) + 7;  /* 实地址映射到host相同的page */
+					*((unsigned long*)ept_pt_entry) = (((guest_phy_addr & ~0xFFF) + 7) | (1<<6) | (6<<3));  /* 实地址映射到host相同的page */
 					ept_page_phy_addr = guest_phy_addr;
 				}
 				else {
@@ -148,7 +153,7 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 					 *    因此这部分guest-phy-addr到phy-addr的映射也是实地址映射.
 					 * 2. 5M~12M是用于存储Host-Code和host的磁盘高速缓冲区，这里也是实地址映射了，共享这部分Host代码了
 					 */
-					*((unsigned long*)ept_pt_entry) = (guest_phy_addr & ~0xFFF) + 7;  /* 实地址映射到host相同的page */
+					*((unsigned long*)ept_pt_entry) = (((guest_phy_addr & ~0xFFF) + 7) | (1<<6) | (6<<3));  /* 实地址映射到host相同的page */
 					ept_page_phy_addr = guest_phy_addr;
 					/*
 					 * 12M~13M是用于存储GuestOS-Code，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
@@ -275,7 +280,7 @@ void do_vm_page_fault() {
 	/* 判断Guest-linear-addr自身的物理页是否存在 */
 	unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
 	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
-	//printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
+	printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
 
 	//flush_tlb();
 }
@@ -382,6 +387,11 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			 *         目前的方式2: 就是通过这种方式实现的，但是这种方式的确定就是会占用更多的内存空间，但是每次任务切换由于每个任务都有自己独立的EPT所以EPT-cache
 			 *         中的内容是不需每次都flush的，这样效率更高.
 			 */
+#if 0
+			init_kernel_page(0x1000,0);
+#endif
+
+
 #if 1
 			/* 方式1: Prepare for task-switch by sharing the same eptp */
 			ulong cr3_phy_addr = get_phy_addr(CR3_DEFAULT_GUEST_PHY_ADDR);
@@ -493,7 +503,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 void init_guest_kernel_space() {
 	/* =============== 判断Guest-CR3对应的物理页是否存在,如果不存在分配一个Page并初始化 ===============*/
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
-	//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
+	printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
 	printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
 	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
@@ -514,7 +524,6 @@ void init_guest_kernel_space() {
 	unsigned long ept_pd_index = (cr3_guest_phy_addr>>21) & 0x1FF;
 	unsigned long ept_pd_entry = ept_pd_phy_addr + ept_pd_index*8;
 	unsigned long ept_pt_phy_addr = *((unsigned long*)ept_pd_entry);
-	//printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
 	if (!(ept_pt_phy_addr & 0x07)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 		*((unsigned long*)ept_pd_entry) = addr + 7;
@@ -523,6 +532,7 @@ void init_guest_kernel_space() {
 	else {
 		ept_pt_phy_addr &= ~0xFFF;
 	}
+	printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
 
 	unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
 	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
@@ -530,7 +540,7 @@ void init_guest_kernel_space() {
 	//printk("ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
 	if (!(ept_page_phy_addr & 0x07)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-		*((unsigned long*)ept_pt_entry) = addr + 7;
+		*((unsigned long*)ept_pt_entry) = ((addr + 7) | (1<<6) | (6<<3));
 		ept_page_phy_addr = addr;
 		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
 		init_page_dir(ept_page_phy_addr);
@@ -596,8 +606,11 @@ void init_guest_gdt() {
 	unsigned long guest_phy_gdt_addr = read_vmcs_field(GUEST_GDTR_BASE_ENCODING);
 	unsigned long guest_phy_ldt_addr = read_vmcs_field(GUEST_LDTR_BASE_ENCODING);
 	unsigned long guest_phy_tr_addr  = read_vmcs_field(GUEST_TR_BASE_ENCODING);
-
+#if 1
 	unsigned long gdt_base_addr = get_phy_addr(guest_phy_gdt_addr);
+#else
+	unsigned long gdt_base_addr = guest_phy_gdt_addr;  // todo comments
+#endif
 	*((unsigned long *) (gdt_base_addr+8))  = 0x0000FFFF;  /* CS, base(16 bits):limit(16 bits)*/
 	*((unsigned long *) (gdt_base_addr+12)) = 0x00C39B00;  /* CS, base(8 bits):type(16 bits):base(8 bits) */
 
@@ -612,7 +625,11 @@ void init_guest_gdt() {
 
 void set_io_bitmap(unsigned long bitmap) {
 	unsigned long guest_phy_io_bitmap_a_addr = read_vmcs_field(IA32_VMX_IO_BITMAP_A_FULL_ADDR_ENCODING);
+#if 1
 	unsigned long io_bitmap_a_base_addr = get_phy_addr(guest_phy_io_bitmap_a_addr);
+#else
+	unsigned long io_bitmap_a_base_addr = guest_phy_io_bitmap_a_addr; //todo comments
+#endif
 	printk("video_port_reg: %08x, video_port_val: %08x\n\r", video_port_reg, video_port_val);
 	/* print函数触发VM-EXIT. */
 	unsigned long byte_offset = video_port_reg / 8;

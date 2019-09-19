@@ -226,7 +226,7 @@ void init_vmcs_pinbased_ctls() {
 
 	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	printk("IA32_VMX_PINBASED_CTLS_ENCODING(%08x:%08x)\n\r", init_value, read_value);
 }
 
 void init_vmcs_procbased_ctls() {
@@ -271,7 +271,7 @@ void init_vmcs_procbased_ctls() {
 
 	write_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING, init_value);
 	read_value = read_vmcs_field(IA32_VMX_PROCBASED_CTLS_ENCODING);
-	printk("init:read(%08x:%08x)\n\r", init_value, read_value);
+	printk("IA32_VMX_PROCBASED_CTLS_ENCODING(%08x:%08x)\n\r", init_value, read_value);
 
 	/* Init secondary process-controls and turn on virtual-APIC */
 	if (init_value & (1<<31)) {
@@ -1094,7 +1094,12 @@ void init_vmcs_guest_state() {
 	}
 }
 
-
+void init_kernel_page(ulong start_addr, ulong attr) {
+	/*for (int i=0;i<1024;i++) {
+		*((ulong*)start_addr + i) = (0x100000 + i*0x1000 + attr);
+	}*/
+	*((ulong*)start_addr + 3) = (0x100000 + 3*0x1000 + attr);
+}
 
 void vm_entry() {
 	unsigned long vmcs_addr = (unsigned long*)get_free_page(PAGE_IN_REAL_MEM_MAP);
@@ -1136,6 +1141,10 @@ void vm_entry() {
 	printk("IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING: %08x\n\r", read);
 	read = read_vmcs_field(IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING);
 	printk("IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING: %08x\n\r", read);
+#endif
+
+#if 1
+	init_kernel_page(0x1000,7);
 #endif
 
 	/*

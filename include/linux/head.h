@@ -350,6 +350,6 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
  */
 #define VM_EXIT_SELF_DEFINED_INFO_ADDR        0x9F000
 
-#define CR3_DEFAULT_GUEST_PHY_ADDR            0x00  /* GuestOS默认的CR3 */
+#define CR3_DEFAULT_GUEST_PHY_ADDR            0x1000  /* GuestOS默认的CR3 */
 
 #endif
