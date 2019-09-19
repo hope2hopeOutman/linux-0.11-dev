@@ -172,7 +172,11 @@ void main(void)		/* This really IS void, no error here. */
 	 * 因为12M~16M这4M地址空间用来保存GuestOS代码，并且通过EPT表实地址映射这个区间,这么做主要是为了好调试GuestOS的代码.
 	 * 因此这4M内存空间Host是不能放进mem_map里用于page-fault映射的.
 	 */
-	main_memory_start += 0x400; /* todo removed after GuestOS debug. */
+#if 0
+	main_memory_start += 0x400; /* todo removed after GuestOS debug. 12M~16M用于实地址存放GuestOS代码 */
+#else
+	main_memory_start += 0x800; /* todo removed after GuestOS debug. 12M~16M用于实地址存放GuestOS代码,16M~20M用于存放GuestOS的页表（全为0，用于测试） */
+#endif
 	PAGING_PAGES = memory_end - main_memory_start;
 	LOW_MEM      = main_memory_start*0x1000;
 	HIGH_MEMORY  = (memory_end-1)*0x1000+0xFFF;

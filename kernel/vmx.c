@@ -1070,6 +1070,7 @@ void init_vmcs_guest_state() {
 			 *    每个PDPT-entry可以管理1G物理地址空间，所以一共可以管理4G物理地址空间，这就对上了O(∩_∩)O哈哈~。
 			 *    总之： EPT paging-structure 是通过4级分页映射来管理Guest paging-structure.
 			 */
+#if 1
 			unsigned long ept_pd_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pdpt_addr) = ept_pd_addr + 7;
 
@@ -1081,6 +1082,7 @@ void init_vmcs_guest_state() {
 
 			ept_pd_addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 			*((unsigned long*)ept_pdpt_addr + 6) = ept_pd_addr + 7;
+#endif
 		}
 	}
 
@@ -1094,11 +1096,34 @@ void init_vmcs_guest_state() {
 	}
 }
 
-void init_kernel_page(ulong start_addr, ulong attr) {
-	/*for (int i=0;i<1024;i++) {
-		*((ulong*)start_addr + i) = (0x100000 + i*0x1000 + attr);
-	}*/
-	*((ulong*)start_addr + 3) = (0x100000 + 3*0x1000 + attr);
+void init_kernel_page(ulong start_addr, ulong len, ulong set) {
+	if (!set) {
+		for (int i=0;i<len;i++) {
+			*((ulong*)start_addr + i) = 0x00;
+		}
+	}
+	else {
+		for (int i=0;i<len;i++) {
+#if 1
+			*((ulong*)start_addr + i) = (0x1000000 + i*0x1000 + 7);
+#else
+			*((ulong*)start_addr + i) = (0x100000 + i*0x1000 + 7);
+#endif
+		}
+	}
+}
+
+void init_page_tables() {
+	ulong page_addr = 0x1000000;
+	ulong phy_addr = 0x00;
+	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
+	for (int n=0;n<256;n++) {
+		for (int i=0;i<1024;i++) {
+			*((unsigned long*) page_addr + i) = phy_addr + 7;
+			phy_addr += 0x1000;
+		}
+		page_addr += 0x1000;
+	}
 }
 
 void vm_entry() {
@@ -1143,10 +1168,6 @@ void vm_entry() {
 	printk("IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING: %08x\n\r", read);
 #endif
 
-#if 1
-	init_kernel_page(0x1000,7);
-#endif
-
 	/*
 	 * Enter VM Guest software.
 	 * 注意：vmlaunch这个命令执行的时候如果出错的话，其后续的处理方式有两种。
@@ -1169,6 +1190,19 @@ void vm_entry() {
 	 * 后面制作一个GuestOS image，这样就不用共享host内核了.
 	 */
 	init_guest_kernel_space();
+
+#if 1
+
+	init_page_tables();
+
+	init_kernel_page(0x1000, 1024, 1);
+
+	ulong cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
+	ulong cr3_phy_addr = get_phy_addr(cr3_guest_phy_addr);
+	printk("cr3_phy_addr: %08x\n\r", cr3_phy_addr);
+	//init_kernel_page(cr3_phy_addr+16, 1020, 0);
+	//init_kernel_page(0x1000+12, 7, 1);
+#endif
 
 	/* 必须要在init_guest_kernel_space函数后才能初始化guest-gdt,想想看为什么(EPT开启了) */
     init_guest_gdt();
