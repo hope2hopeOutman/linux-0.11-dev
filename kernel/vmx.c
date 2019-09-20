@@ -1096,7 +1096,7 @@ void init_vmcs_guest_state() {
 	}
 }
 
-void init_kernel_page(ulong start_addr, ulong len, ulong set) {
+void init_dir_page(ulong start_addr, ulong len, ulong set) {
 	if (!set) {
 		for (int i=0;i<len;i++) {
 			*((ulong*)start_addr + i) = 0x00;
@@ -1113,7 +1113,7 @@ void init_kernel_page(ulong start_addr, ulong len, ulong set) {
 	}
 }
 
-void init_page_tables() {
+void init_pt_tables() {
 	ulong page_addr = 0x1000000;
 	ulong phy_addr = 0x00;
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
@@ -1192,16 +1192,14 @@ void vm_entry() {
 	init_guest_kernel_space();
 
 #if 1
-
-	init_page_tables();
-
-	init_kernel_page(0x1000, 1024, 1);
+	init_dir_page(0x1000, 1024, 1);
+	init_pt_tables();
 
 	ulong cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	ulong cr3_phy_addr = get_phy_addr(cr3_guest_phy_addr);
 	printk("cr3_phy_addr: %08x\n\r", cr3_phy_addr);
-	//init_kernel_page(cr3_phy_addr+16, 1020, 0);
-	//init_kernel_page(0x1000+12, 7, 1);
+	//init_dir_page(cr3_phy_addr+16, 1020, 0);
+	//init_dir_page(0x1000, 7, 0);
 #endif
 
 	/* 必须要在init_guest_kernel_space函数后才能初始化guest-gdt,想想看为什么(EPT开启了) */

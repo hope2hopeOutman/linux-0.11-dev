@@ -25,16 +25,16 @@ void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
 	for (int i=0;i<256;i++) {
 #if 1
-		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7; /* 页表分配在1M~5M了 */
+		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7;  /* Guest页表分配在1M~5M了 */
 #else
-		*((unsigned long*) page_addr + i) = 0x1000000 + 0x1000*i + 7; /* 页表分配在16M~20M了，just for test */
+		*((unsigned long*) page_addr + i) = 0x1000000 + 0x1000*i + 7; /* Guest页表分配在16M~20M了，just for test */
 #endif
 	}
 }
 
 void init_page_table(unsigned long page_addr, unsigned long guest_phy_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
-#if 0
+#if 1
 	for (int i=0;i<1024;i++) {
 		*((unsigned long*) page_addr + i) = ((guest_phy_addr - 0x100000)>>12)*0x400000 + 0x1000*i + 7;
 	}
@@ -304,14 +304,14 @@ void flush_tlb() {
 }
 
 void do_vm_page_fault() {
-	unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
+	/* Start: 判断Guest-CR3对应的物理页是否存在,这里一定是存在的，在init_guest_kernel_space中已经分配并初始化了，所以就注释掉了 */
+#if 0
 	unsigned long guest_physical_full_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING);
 	unsigned long guest_physical_high_addr = read_vmcs_field(IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING);
 	unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
 	unsigned long guest_esp = read_vmcs_field(GUEST_RSP_ENCODING);
 	//printk("guest_linear_addr: %08x,guest_physical_addr: %08x, guest_eip: %08x\n\r", guest_linear_addr,guest_physical_full_addr, guest_eip);
 	//printk("guest_physical_addr(%08x:%08x)\n\r", guest_physical_full_addr, guest_physical_high_addr);
-	/* Start: 判断Guest-CR3对应的物理页是否存在 */
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
@@ -355,8 +355,10 @@ void do_vm_page_fault() {
 		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
 		init_page_dir(ept_page_phy_addr);
 	}
+#endif
 	/* End: 判断Guest-CR3对应的物理页是否存在 */
 
+	unsigned long guest_linear_addr = read_vmcs_field(IA32_VMX_GUEST_LINEAR_ADDR_ENCODING);
 	/* 判断Guest-linear-addr所在的页表的物理页是否存在 */
 	unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
 	//printk("guest_linear_addr: %08x,guest_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr);
@@ -681,11 +683,13 @@ void init_guest_kernel_space() {
 	 * 这样做主要是为了后面的调试方便，等整个GuestOS调通以后，会在Host的整个mem_map中调用get_free_page分配.
 	 * 这里先通过EPT-paging-structure映射GuestOS 32M内核空间, Guest-phy-addr --> phy-addr.
 	 */
+#if 0
 	for (unsigned long i = 0x00; i< 0x2000;i++) {  /* i (Granularity: 4K) */
 		unsigned long guest_linear_addr = i*0x1000;
 		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
 		unsigned long phy_addr = get_phy_addr(guest_phy_addr);
 	}
+#endif
 }
 
 void init_guest_gdt() {
