@@ -16,6 +16,12 @@ typedef struct exit_reason_io_vedio_struct {
 	char*          print_buf;
 } exit_reason_io_vedio_struct;
 
+typedef struct exit_reason_fork {
+	ulong  exit_reason_no;
+	ulong  operation;  /* 0: default, 1: GuestOS中执行fork操作 */
+	ulong  task_cr3;
+} exit_reason_fork;
+
 struct apic_info {
 	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
 	unsigned long apic_id;
@@ -295,6 +301,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 
 #endif
 
+#define PAGE_IN_REAL_MEM_MAP_FOR_GUEST_CR3 2 /* 这部分内存专用于存储Guset-CR3对应的实地址内存页 */
 #define PAGE_IN_REAL_MEM_MAP 1               /* 表示分配的物理地址来自于内核实地址映射的空间，mem_map开始的一部分是内核实地址映射的 */
 #define PAGE_IN_MEM_MAP 0                    /* 表示分配的物理地址来自于整个mem_map管理的内存 */
 
@@ -349,8 +356,11 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
  * 4K~640K 低地址空间利用与分配，该段地址空间被host和所有VM共享，用于它们之间的通信,从高地址开始以4K为单位,由高到低分配的.
  * 注意: 用于映射APIC-base-addr的地址空间是从这个空间的低地址由低到高分配的，这里要注意overlap,后面会优化一下.
  */
-#define VM_EXIT_SELF_DEFINED_INFO_ADDR        0x9F000
+#define VM_EXIT_REASON_IO_INFO_ADDR                 0x9F000
+#define VM_EXIT_REASON_TASK_SWITCH_INFO_ADDR        0x9E000
 
-#define CR3_DEFAULT_GUEST_PHY_ADDR            0x1000  /* GuestOS默认的CR3 */
+#define GUEST_KERNEL_CR3_PHY_ADDR             0x1000  /* GuestOS kernel CR3,所有进攻共享的部分 */
+#define GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR         0x1000000  /* 16M~20M */
+#define GUEST_SPACE_KERNEL_PAGE_TABLES_ADDR                  0x100000   /* 1M~5M */
 
 #endif

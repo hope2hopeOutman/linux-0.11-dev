@@ -175,7 +175,11 @@ void main(void)		/* This really IS void, no error here. */
 #if 0
 	main_memory_start += 0x400; /* todo removed after GuestOS debug. 12M~16M用于实地址存放GuestOS代码 */
 #else
-	main_memory_start += 0x800; /* todo removed after GuestOS debug. 12M~16M用于实地址存放GuestOS代码,16M~20M用于存放GuestOS的页表（全为0，用于测试） */
+	/* todo removed after GuestOS debug.
+	 * 12M~16M用于实地址存放GuestOS代码,16M~20M用于存放GuestOS的页表（全为0，用于测试）,
+	 * 这样main_memory_start=20M,也就是内存从20M,OS开始利用mem_map进行分页管理.
+	 */
+	main_memory_start += 0x800;
 #endif
 	PAGING_PAGES = memory_end - main_memory_start;
 	LOW_MEM      = main_memory_start*0x1000;

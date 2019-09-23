@@ -10,8 +10,7 @@
 #include <asm/system.h>
 #include <linux/sched.h>
 
-extern void init_kernel_page(ulong start_addr, ulong attr);
-
+extern void init_dir_page(ulong start_addr, ulong len, ulong set);
 extern unsigned long tty_io_semaphore;
 extern unsigned long load_guest_os_flag; /* This flag indicate do_read_intr loading data whether are GuestOS code */
 extern unsigned long load_guest_os_addr;
@@ -24,25 +23,15 @@ extern struct vmcs_region_address {unsigned long address[2];} vmcs_region_addres
 void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
 	for (int i=0;i<256;i++) {
-#if 1
-		*((unsigned long*) page_addr + i) = 0x100000 + 0x1000*i + 7;  /* Guest页表分配在1M~5M了 */
-#else
-		*((unsigned long*) page_addr + i) = 0x1000000 + 0x1000*i + 7; /* Guest页表分配在16M~20M了，just for test */
-#endif
+		*((unsigned long*) page_addr + i) = GUEST_SPACE_KERNEL_PAGE_TABLES_ADDR + 0x1000*i + 7;  /* Guest页表分配在1M~5M了 */
 	}
 }
 
 void init_page_table(unsigned long page_addr, unsigned long guest_phy_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
-#if 1
 	for (int i=0;i<1024;i++) {
-		*((unsigned long*) page_addr + i) = ((guest_phy_addr - 0x100000)>>12)*0x400000 + 0x1000*i + 7;
+		*((unsigned long*) page_addr + i) = ((guest_phy_addr - GUEST_SPACE_KERNEL_PAGE_TABLES_ADDR)>>12)*0x400000 + 0x1000*i + 7;
 	}
-#else
-	for (int i=0;i<1024;i++) {
-		*((unsigned long*) page_addr + i) = ((guest_phy_addr - 0x1000000)>>12)*0x400000 + 0x1000*i + 7;
-	}
-#endif
 }
 
 unsigned long get_ept_pt_entry(unsigned long guest_phy_addr) {
@@ -113,7 +102,6 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	unsigned long ept_pt_index = (guest_phy_addr>>12) & 0x1FF;
 	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
 	unsigned long ept_page_phy_addr = *((unsigned long*)ept_pt_entry);
-#if 1
 	if (!(ept_page_phy_addr & 0x07)) {
 		/*
 		 * 1. Host-kernel-code的实地址空间是12M,Guest-phy-addr的前12M地址空间就实地址映射到这12M实际内存地址，这样VM就共享host主机的12M内核地址空间了，
@@ -142,7 +130,7 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 				}
 			}
 			else {
-			    if ((guest_phy_addr>>20)>= 16) {
+			    if ((guest_phy_addr>>20)>= ((GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR>>20) + 4)) {
 					/* 这部分的guest-phy-addr到phy-addr的映射就是通过get_free_page分配了，而不是实地址映射了 */
 					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 					*((unsigned long*)ept_pt_entry) = ((addr + 7) | (1<<6) | (6<<3));
@@ -184,78 +172,6 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 			}
 		}
 	}
-#else
-	if (!(ept_page_phy_addr & 0x07)) {
-		/*
-		 * 1. Host-kernel-code的实地址空间是12M,Guest-phy-addr的前12M地址空间就实地址映射到这12M实际内存地址，这样VM就共享host主机的12M内核地址空间了，
-		 *    这样就可以在这个12M，尤其是4K～640K的内存空间开辟共享页，供Host与VM通信，也就是所谓的IPC.
-		 * 2. 因为GuestOS也有2G的物理内存(虚拟的)，所以EPT就要映射这2G的虚拟内存.
-		 */
-		if ((guest_phy_addr>>20) < 2048) {
-			if ((guest_phy_addr>>20) >= 16 && (guest_phy_addr>>20) < 20) {
-				/*
-				 * 1. 因为在Guest环境中，对其内核空间也是实地址映射的，这里将GPT(Guest-page-table)也是分配在GPA(Guest-physical-addr)的1M~5M地址空间的，
-				 *    用于映射Guest的4G物理地址空间，因此如果得到的GPA在这个区间的话，说明它是GPT，所以要进行初始化使其实地址映射内核空间。
-				 *    那么这部分空间就不能共享host相同的1~5M页表空间了，总之host和guest的目录表和页表是不能共享的。
-				 * 2. 如果Guest的目录表也分配在<1M的guest-phy-addr空间，那么host的<1M地址空间肯定有一页是不能被Guest共享的，
-				 *    因为Guest的<1M中的一页会被EPT映射到mem-map中，所以这一页是不可能映射到Host的<1M地址空间了，也就不能共享了。
-				 * 3. 当然你可以强制共享host相同位置(1M~5M)的页表，这样就不用再重新分配和映射了，但是这样有个问题，会引起page的RWX和Access位的混乱,
-				 *    想想看是不是这样，因此，这里为Guest的GDP和GPT在PAGE_IN_REAL_MEM_MAP空间单独分配page用于管理Guest的地址空间。
-				 * 4. 因此1M~5M用于存储映射GuestOS的4G linear-addr-space的所有页表,所以不能共享Host的页表。
-				 * 5. 当Guest-phy-space > 1G的时候，内核只能实地址映射1G的guest-phy-addr，> 1G的guest-addr-space要用保留的内核线性地址空间remap，
-				 *    所以这里只初始化1G的guest-phy-addr-space.
-				 */
-				if ((guest_phy_addr>>20) == 16) { /* 开始的1M的空间用于存储映射内核空间的页表(内核占用256个页表) */
-					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-					*((unsigned long*)ept_pt_entry) = ((addr + 7) | (1<<6) | (6<<3)); /* bit6: ignore PAE memtype,bit3~5: memtype */
-					ept_page_phy_addr = addr;
-					init_page_table(ept_page_phy_addr, guest_phy_addr);
-				}
-			}
-			else {
-			    if ((guest_phy_addr>>20)>= 20) {
-					/* 这部分的guest-phy-addr到phy-addr的映射就是通过get_free_page分配了，而不是实地址映射了 */
-					unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
-					*((unsigned long*)ept_pt_entry) = ((addr + 7) | (1<<6) | (6<<3));
-					ept_page_phy_addr = addr;
-				}
-				/*
-				 * 1. 共享host 4K~1M的内核空间,尤其是4K～640K用于Host与Guest之间的通信.
-				 * 2. 0~4K空间是Host的目录表，这里不能共享，因为在初始化EPT-paging-structure的时候就已经为GuestOS
-				 *    分配了实际物理page(通过get_free_page方式)，GuestOS的目录表是已经映射过了，所以代码不会执行到这里.
-				 */
-			    else if ((guest_phy_addr>>20) < 1) {/* 这个分支可以合并到下面的else分支里，这里保留是为了让自己别忘了上面注释. */
-					*((unsigned long*)ept_pt_entry) = (((guest_phy_addr & ~0xFFF) + 7) | (1<<6) | (6<<3));  /* 实地址映射到host相同的page */
-					ept_page_phy_addr = guest_phy_addr;
-				}
-				else {
-					/*
-					 * 1. GuestOS-Code是存放在12M～16M这4M之间的，其中还包括磁盘的高速缓冲区,
-					 *    这部分空间Host没有利用，是专用于实地址映射GuestOS的内核Code和高速缓冲区的,
-					 *    因此这部分guest-phy-addr到phy-addr的映射也是实地址映射.
-					 * 2. 5M~12M是用于存储Host-Code和host的磁盘高速缓冲区，这里也是实地址映射了，共享这部分Host代码了
-					 */
-					*((unsigned long*)ept_pt_entry) = (((guest_phy_addr & ~0xFFF) + 7) | (1<<6) | (6<<3));  /* 实地址映射到host相同的page */
-					ept_page_phy_addr = guest_phy_addr;
-					/*
-					 * 12M~13M是用于存储GuestOS-Code，所以要page by page分配并从硬盘读取相应页数据复制到该空间,
-					 * 因为内核的代码还不超过1M所以就只加载1M的内核代码.
-					 * GuestOS的code是从硬盘的5M地址处开始存储的，所以这里用guest_phy_addr作为参数每次读取一页.
-					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
-					 */
-					if ((guest_phy_addr>>20) >= 12 && (guest_phy_addr>>20) < 13) {
-						if ((guest_phy_addr & ~0xFFF) == 0x500000) {
-							printk("OS_start_addr: %08x\n\r", guest_phy_addr);
-						}
-						load_guest_os_addr = guest_phy_addr & ~0xFFF;
-						do_hd_read_request_in_vm((guest_phy_addr & ~0xFFF)-0x700000, 8);
-					}
-				}
-				//printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
-			}
-		}
-	}
-#endif
 	return ept_page_phy_addr & ~0xFFF;
 }
 
@@ -415,7 +331,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
 
 			/* Start: 备份老任务的执行上下文 */
-			exit_reason_task_switch_struct* exit_reason_task_switch = (exit_reason_task_switch_struct*) VM_EXIT_SELF_DEFINED_INFO_ADDR;
+			exit_reason_task_switch_struct* exit_reason_task_switch = (exit_reason_task_switch_struct*) VM_EXIT_REASON_TASK_SWITCH_INFO_ADDR;
 			exit_reason_task_switch->old_task_tss.eax = eax;
 			exit_reason_task_switch->old_task_tss.ebx = ebx;
 			exit_reason_task_switch->old_task_tss.ecx = ecx;
@@ -438,10 +354,21 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
 			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE0_ENCODING, exit_reason_task_switch->new_task_cr3);
+			ulong new_cr3_page = get_free_page(PAGE_IN_REAL_MEM_MAP_FOR_GUEST_CR3);
+			printk("host.new_cr3_page: %08x,guest.new_cr3_page: %08x\n\r", new_cr3_page, exit_reason_task_switch->new_task_cr3);
+			if (new_cr3_page != exit_reason_task_switch->new_task_cr3) {
+				panic("host.new_cr3_page != guest.new_cr3_page\n\r");
+			}
+
+			init_dir_page(new_cr3_page,1024,1);
 
 			flush_tlb();
 
-			/*
+			printk("task_switch.GUEST_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
+
+#if 0
+			/*    这里是关于mov-to-cr3导致内存不可访问的详细排查过程，也提出了很tricky的临时解决方案，但是总觉得不完美，
+			 *    最后功夫不负有心人啊，最终找到了根本原因，完美解决了该问题。
 			 *
 			 *    详细介绍为什么通过mov-to-cr3将当前cr3存储的目录表地址，改成新任务的目录表地址为什么不行,
 			 *    总是报can not access memory at address xxxxx.
@@ -476,14 +403,10 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			 *         目前的方式2: 就是通过这种方式实现的，但是这种方式的确定就是会占用更多的内存空间，但是每次任务切换由于每个任务都有自己独立的EPT所以EPT-cache
 			 *         中的内容是不需每次都flush的，这样效率更高.
 			 */
-#if 0
-			init_kernel_page(0x1000,0);
-#endif
 
 
-#if 1
 			/* 方式1: Prepare for task-switch by sharing the same eptp */
-			ulong cr3_phy_addr = get_phy_addr(CR3_DEFAULT_GUEST_PHY_ADDR);
+			ulong cr3_phy_addr = get_phy_addr(GUEST_KERNEL_CR3_PHY_ADDR);
 			/*
 			 * 这里是通过共享同一个EPT-page-structure实现task-switch的关键.
 			 * 1. 首先获取新的要被调度的任务cr3的实际物理地址，通过ept-page-structure转换得到.
@@ -494,12 +417,10 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			ulong new_cr3_phy_addr = get_phy_addr(exit_reason_task_switch->new_task_cr3);
 			printk("task0_cr3:task1_crs (%08x:%08x)\n\r", cr3_phy_addr, new_cr3_phy_addr);
 
-			ulong ept_pt_entry = get_ept_pt_entry(CR3_DEFAULT_GUEST_PHY_ADDR);
+			ulong ept_pt_entry = get_ept_pt_entry(GUEST_KERNEL_CR3_PHY_ADDR);
 			*(ulong* )ept_pt_entry = new_cr3_phy_addr + 7;
 			printk("ept_pt_entry: %08x\n\r", ept_pt_entry);
-#endif
 
-#if 0
 			/*
 			 *  方式2: Prepare for task-switch by eptp-switching
 			 *  这种方式会为每个进程分配自己独立的EPT-page-structure,这样就能最大化的保留EPT-cache了，但会占用更多的内存。
@@ -514,16 +435,14 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			*(ulong* )task1_ept_pml4_addr = *(ulong* )(task0_ept_pml4_addr & (~0xFFF));
 			task1_ept_pml4_addr |= (task0_ept_pml4_addr & 0xFFF);
-#endif
-			printk("task_switch.GUEST_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
 
-#if 0
 			/* 这种方式也试过了，就是为了解决mov different value to cr3 */
 			__asm__ ("vmclear %0\n\t"    \
 					 "vmptrld %0\n\t"    \
 					 "vmlaunch\n\t"      \
 					 ::"m" (*(&vmcs_region_address)));
 #endif
+
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_EXEC_CPUID) {
 			//flush_tlb();
@@ -553,7 +472,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			flush_tlb();
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_IO_INSTRUCTION) {
-			exit_reason_io_vedio_struct* exit_reason_io_vedio = (exit_reason_io_vedio_struct*) VM_EXIT_SELF_DEFINED_INFO_ADDR;
+			exit_reason_io_vedio_struct* exit_reason_io_vedio = (exit_reason_io_vedio_struct*) VM_EXIT_REASON_IO_INFO_ADDR;
 			if (exit_reason_io_vedio->exit_reason_no != VM_EXIT_REASON_IO_INSTRUCTION) {
 				panic("Incorrect exit_reason_no\n\r");
 			}
@@ -683,7 +602,7 @@ void init_guest_kernel_space() {
 	 * 这样做主要是为了后面的调试方便，等整个GuestOS调通以后，会在Host的整个mem_map中调用get_free_page分配.
 	 * 这里先通过EPT-paging-structure映射GuestOS 32M内核空间, Guest-phy-addr --> phy-addr.
 	 */
-#if 0
+#if 1
 	for (unsigned long i = 0x00; i< 0x2000;i++) {  /* i (Granularity: 4K) */
 		unsigned long guest_linear_addr = i*0x1000;
 		unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);

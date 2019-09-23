@@ -16,6 +16,9 @@
 #include <asm/system.h>
 #include <linux/common.h>
 
+#define invalidate(dir_addr) \
+__asm__("movl %%eax,%%cr3"::"a" ((unsigned long)dir_addr))
+
 void ia32_sysenter();
 unsigned long support_64arch_check();
 void save_apic_id_for_vm();
@@ -974,7 +977,7 @@ void init_vmcs_guest_state() {
 		 */
 	}
 	else {
-		write_vmcs_field(GUEST_CR3_ENCODING, CR3_DEFAULT_GUEST_PHY_ADDR);  /* 设值VM entry后，CR3的初始化值。 */
+		write_vmcs_field(GUEST_CR3_ENCODING, GUEST_KERNEL_CR3_PHY_ADDR);  /* 设值VM entry后，CR3的初始化值。 */
 	}
 
 	/* Load MSR registers from MSR fields */
@@ -1104,19 +1107,15 @@ void init_dir_page(ulong start_addr, ulong len, ulong set) {
 	}
 	else {
 		for (int i=0;i<len;i++) {
-#if 1
-			*((ulong*)start_addr + i) = (0x1000000 + i*0x1000 + 7);
-#else
-			*((ulong*)start_addr + i) = (0x100000 + i*0x1000 + 7);
-#endif
+			*((ulong*)start_addr + i) = (GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR + i*0x1000 + 7);
 		}
 	}
 }
 
 void init_pt_tables() {
-	ulong page_addr = 0x1000000;
+	ulong page_addr = GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR;
 	ulong phy_addr = 0x00;
-	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
+	/* VM(GuestOS)中: 实地址映射4G线性地址空间,物理地址的开始4K~8K用于存储PD; 16M后的4M空间用于存储PT,用来实地址映射4G物理地址空间 */
 	for (int n=0;n<256;n++) {
 		for (int i=0;i<1024;i++) {
 			*((unsigned long*) page_addr + i) = phy_addr + 7;
@@ -1192,7 +1191,15 @@ void vm_entry() {
 	init_guest_kernel_space();
 
 #if 1
-	init_dir_page(0x1000, 1024, 1);
+	init_dir_page(GUEST_KERNEL_CR3_PHY_ADDR, 1024, 1);
+	//init_dir_page(0x2000, 1024, 1); /* 将GuestOS的内核目录表设置在8k~12K空间，然后将其映射在host内核目录表的4K~8K线性地址空间 */
+
+	/* remap host内核地址空间的4k~8k到8K~12K */
+/*	ulong dir_entry = (0x1000>>22)*4;
+	ulong pt_base = (*(ulong*)dir_entry & ~0xFFF);
+    ulong pt_entry = pt_base + ((0x1000>>12) & (0x3FF)) * 4;
+    *(ulong*)pt_entry = 0x2007;*/
+
 	init_pt_tables();
 
 	ulong cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
