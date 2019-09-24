@@ -282,8 +282,6 @@ void do_vm_page_fault() {
 	unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
 	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
 	printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
-
-	//flush_tlb();
 }
 
 void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulong edi, ulong ebp) {
