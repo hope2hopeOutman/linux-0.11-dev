@@ -128,6 +128,7 @@ typedef struct exit_reason_task_switch_struct {
 	ulong  task_switch_entry;        /* VM  set, only used by VMM  */
 	ulong  new_task_nr;              /* VM  set, only used by VM   */
 	ulong  new_task_cr3;             /* VM  set, only used by VMM  */
+	ulong  new_task_executed;        /* VM  set, only used by VMM  */
 	ulong  old_task_nr;              /* VM  set, only used by VM   */
 	ulong  old_task_cr3;             /* VM  set, only used by VMM  */
 	struct tss_struct old_task_tss;  /* VMM set, only used by VM   */

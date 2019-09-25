@@ -20,6 +20,9 @@ extern unsigned short	video_port_val;		/* Video register value port	*/
 //extern struct vmxon_region_address {unsigned long address[2];} vmxon_region_address;
 extern struct vmcs_region_address {unsigned long address[2];} vmcs_region_address;
 
+void init_guest_cr3_shadow(exit_reason_task_switch_struct* exit_reason_task_switch);
+void reset_guest_tss_status(ulong task_nr, ulong status);
+
 void init_page_dir(unsigned long page_addr) {
 	/* 实地址映射4G线性地址空间,物理地址的开始4K用于存储PD; 1M~5M空间(4M大小)用于存储PT,用来实地址映射4G物理地址空间 */
 	for (int i=0;i<256;i++) {
@@ -352,13 +355,17 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
 			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE0_ENCODING, exit_reason_task_switch->new_task_cr3);
-			ulong new_cr3_page = get_free_page(PAGE_IN_REAL_MEM_MAP_FOR_GUEST_CR3);
-			printk("host.new_cr3_page: %08x,guest.new_cr3_page: %08x\n\r", new_cr3_page, exit_reason_task_switch->new_task_cr3);
-			if (new_cr3_page != exit_reason_task_switch->new_task_cr3) {
-				panic("host.new_cr3_page != guest.new_cr3_page\n\r");
-			}
 
-			init_dir_page(new_cr3_page,1024,1);
+			/* 将老进程的tss.status状态设置为available,为下一次调度做准备 */
+			reset_guest_tss_status(exit_reason_task_switch->old_task_nr, GUEST_TSS_STATUS_AVAILABLE);
+
+			/*
+			 * 初始化VM中新进程的guest-cr3-shadow(用于控制对EPT-page-structure转化后得到的实际物理页的访问)
+			 * 对于第一次运行的进程，一定要初始化它的guest_cr3_shadow目录表结构
+			 */
+			if (!exit_reason_task_switch->new_task_executed) {
+				init_guest_cr3_shadow(exit_reason_task_switch);
+			}
 
 			flush_tlb();
 
@@ -633,11 +640,7 @@ void init_guest_gdt() {
 
 void set_io_bitmap(unsigned long bitmap) {
 	unsigned long guest_phy_io_bitmap_a_addr = read_vmcs_field(IA32_VMX_IO_BITMAP_A_FULL_ADDR_ENCODING);
-#if 1
 	unsigned long io_bitmap_a_base_addr = get_phy_addr(guest_phy_io_bitmap_a_addr);
-#else
-	unsigned long io_bitmap_a_base_addr = guest_phy_io_bitmap_a_addr; //todo comments
-#endif
 	printk("video_port_reg: %08x, video_port_val: %08x\n\r", video_port_reg, video_port_val);
 	/* print函数触发VM-EXIT. */
 	unsigned long byte_offset = video_port_reg / 8;
@@ -647,5 +650,37 @@ void set_io_bitmap(unsigned long bitmap) {
 	byte_offset = video_port_val / 8;
 	bit_offset  = video_port_val % 8;
 	*(((unsigned char *) io_bitmap_a_base_addr) + byte_offset) |= (1<<bit_offset);
+}
+
+/* 初始化VM中新进程的guest-cr3-shadow(用于控制对EPT-page-structure转化后得到的实际物理页的访问) */
+void init_guest_cr3_shadow(exit_reason_task_switch_struct* exit_reason_task_switch) {
+	ulong new_cr3_page = get_free_page(PAGE_IN_REAL_MEM_MAP_FOR_GUEST_CR3);
+	printk("host.new_cr3_page: %08x,guest.new_cr3_page: %08x\n\r", new_cr3_page, exit_reason_task_switch->new_task_cr3);
+	if (new_cr3_page != exit_reason_task_switch->new_task_cr3) {
+		panic("host.new_cr3_page != guest.new_cr3_page\n\r");
+	}
+	init_dir_page(new_cr3_page,1024,1);
+}
+
+/*
+ * VM中，当前正在运行任务的tss-status是处于busy状态的(ltr tss-selector,会自动将GDT表中对应tss.status设置为busy)，
+ * 切换到新进程运行后，该进程的tss-status一定要设置为available.
+ * 不然的话，当你执行ljmp切换到新进程(busy状态)会报GA异常，也就不会触发task_switch异常导致VM-EXIT了，这真是个巨坑啊，尼玛排查了一天才搞定。
+ */
+void reset_guest_tss_status(ulong task_nr, ulong status) {
+	ulong gdt_guest_linear_addr = read_vmcs_field(GUEST_GDTR_BASE_ENCODING);
+	ulong gdt_guest_phy_addr = get_guest_phy_addr(gdt_guest_linear_addr);
+	ulong gdt_phy_addr = get_phy_addr(gdt_guest_phy_addr);
+	ulong* tss_high_addr = (ulong* )(gdt_phy_addr + _TSS(task_nr) + 4); /* desc_high_addr.tss_status(segment-type): bit(8~11) */
+	ulong tss_status = ((*tss_high_addr & 0xF00)>>8);
+	if (tss_status != GUEST_TSS_STATUS_BUSY && tss_status != GUEST_TSS_STATUS_AVAILABLE) {
+		printk("Tss.status: %08x\n\r", tss_status);
+		panic("The status of current process is not valid in VM env\n\r");
+	}
+	else {
+		if (tss_status != status) {
+			*tss_high_addr &= ((~0x00F00) | (9<<8));
+		}
+	}
 }
 

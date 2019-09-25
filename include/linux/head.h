@@ -363,4 +363,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR         0x1000000  /* 16M~20M */
 #define GUEST_SPACE_KERNEL_PAGE_TABLES_ADDR                  0x100000   /* 1M~5M */
 
+#define GUEST_TSS_STATUS_AVAILABLE   9     /* VM中tss段的状态 */
+#define GUEST_TSS_STATUS_BUSY        11
+
 #endif
