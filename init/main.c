@@ -225,8 +225,8 @@ static int printf(const char *fmt, ...)
 {
 	va_list args;
 	int i;
-
 	va_start(args, fmt);
+
 	write(1,user_print_buf,i=vsprintf(user_print_buf, fmt, args));
 	va_end(args);
 	return i;

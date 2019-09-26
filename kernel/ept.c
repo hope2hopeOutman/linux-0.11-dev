@@ -205,7 +205,7 @@ unsigned long get_spec_phy_addr(unsigned long guest_linear_offset) {
 void flush_tlb() {
 	/* 刷新Guest TLB */
 	ulong eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-	printk("eptp_addr: %08x\n\r", eptp_addr);
+	//printk("eptp_addr: %08x\n\r", eptp_addr);
 	struct desc_type {
 		ulong pad1;
 		ulong pad2;
@@ -219,7 +219,7 @@ void flush_tlb() {
 	struct desc_type vpid_desc[2] = {{vpid,0},};
 	__asm__ ("invvpid %1,%%eax\n\t" \
 			::"a" (inv_type),"m" (*(struct desc_type*)vpid_desc));
-	printk("flush vpid:%u success.\n\r",vpid);
+	//printk("flush vpid:%u success.\n\r",vpid);
 }
 
 void do_vm_page_fault() {
@@ -369,7 +369,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			flush_tlb();
 
-			printk("task_switch.GUEST_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
+			printk("task_switch.Current_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
 
 #if 0
 			/*    这里是关于mov-to-cr3导致内存不可访问的详细排查过程，也提出了很tricky的临时解决方案，但是总觉得不完美，
