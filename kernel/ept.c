@@ -193,11 +193,12 @@ unsigned long get_guest_phy_addr(unsigned long guest_linear_addr) {
 	return guest_phy_addr;
 }
 
-unsigned long get_spec_phy_addr(unsigned long guest_linear_offset) {
-	unsigned long guest_cs          = read_vmcs_field(GUEST_CS_ENCODING);
-	unsigned long guest_linear_addr = (guest_cs & ~0xFFF) + guest_linear_offset;
-	unsigned long guest_phy_addr    = get_guest_phy_addr(guest_linear_addr);
-	unsigned long  phy_addr_base    = get_phy_addr(guest_phy_addr);
+unsigned long get_spec_phy_addr(unsigned long guest_linear_addr) {
+	/* 这里得到的永远都是内核态段的基地址 */
+	unsigned long guest_cs_base  = read_vmcs_field(GUEST_CS_BASE_ENCODING);
+	//printk("guest_cs_base: %08x\n\r", guest_cs_base);
+	unsigned long guest_phy_addr = get_guest_phy_addr(guest_linear_addr);
+	unsigned long  phy_addr_base = get_phy_addr(guest_phy_addr);
 	//printk("guest_linear_offset:%08x,guest_phy_addr:%08x,phy_addr_base:%08x\n\r", guest_linear_offset, guest_phy_addr, phy_addr_base);
 	return phy_addr_base + (guest_linear_addr & 0xFFF);                  /* 返回变量具体的实际物理地址. */
 }
@@ -284,7 +285,7 @@ void do_vm_page_fault() {
 	/* 判断Guest-linear-addr自身的物理页是否存在 */
 	unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
 	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
-	printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
+	//printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
 }
 
 void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulong edi, ulong ebp) {
@@ -413,11 +414,13 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			/* 方式1: Prepare for task-switch by sharing the same eptp */
 			ulong cr3_phy_addr = get_phy_addr(GUEST_KERNEL_CR3_PHY_ADDR);
 			/*
-			 * 这里是通过共享同一个EPT-page-structure实现task-switch的关键.
+			 * 这里是通过共享同一个EPT-page-structure和相同的CR3(guest-phy-addr and guest-cr3-shadow)实现task-switch.
 			 * 1. 首先获取新的要被调度的任务cr3的实际物理地址，通过ept-page-structure转换得到.
-			 * 2. 然后将新任务cr3的实际物理地址更新到CR3_DEFAULT_GUEST_PHY_ADDR对应的ept-pt-entry中，
+			 * 2. 然后将新任务cr3的实际物理地址更新到CR3_DEFAULT_GUEST_PHY_ADDR对应的ept-pt-entry中(其实这一步操作可以在VM中完成，这样就不用触发VM-EXIT了，效率比较高),
 			 *    这样当回到VM中，CR3寄存器的值虽然没变，但是其对应的目录表已经换成新任务的目录表了，
 			 *    进程运行在新任务的地址空间了，从而实现任务切换,这有点太tricky了^_^。
+			 *    这样做有个缺点就是CR3对应的guest-cr3-shadow(CR3中实地址映射的内存页)，管理的实际物理内存就是Guest的所有进程占用的内存页了，
+			 *    无法区分Guest中每个进程占用的实际物理内存页有哪些.
 			 */
 			ulong new_cr3_phy_addr = get_phy_addr(exit_reason_task_switch->new_task_cr3);
 			printk("task0_cr3:task1_crs (%08x:%08x)\n\r", cr3_phy_addr, new_cr3_phy_addr);

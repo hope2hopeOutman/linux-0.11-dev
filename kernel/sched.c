@@ -429,6 +429,7 @@ void schedule(void)
 		}
 	}
 
+
 	if (current_apic_id == apic_ids[0].apic_id) {  /* 调度任务发生在BSP上 */
 #if 0
 		unsigned long sched_apic_id = get_min_load_ap();
@@ -511,6 +512,7 @@ void schedule(void)
 		}
 #endif
 	}
+
 	if (lock_flag) {
 		unlock_op(&sched_semaphore);
 		lock_flag = 0;
