@@ -70,6 +70,18 @@ unsigned long get_ept_pt_entry(unsigned long guest_phy_addr) {
 	return ept_pt_entry;
 }
 
+void free_ept_page(ulong guest_page_phy_addr) {
+	ulong ept_pt_entry = get_ept_pt_entry(guest_page_phy_addr);
+	ulong page_phy_addr = *(ulong *)ept_pt_entry;
+	if (page_phy_addr & 0x7) {
+		free_page(page_phy_addr & (~0xFFF));
+	}
+	else {
+		panic("free_ept_page free a nonexist page\n\r");
+	}
+	*(ulong *)ept_pt_entry = 0;  /* 释放该被占用的ept表项 */
+}
+
 unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
 	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
@@ -454,6 +466,11 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_EXEC_CPUID) {
 			//flush_tlb();
+			exit_reason_cpuid* exit_reason_cpuid_info_p = (exit_reason_cpuid*)VM_EXIT_REASON_CPUID_INFO_ADDR;
+			if (exit_reason_cpuid_info_p->exit_reason_no == VM_EXIT_REASON_CPUID_FOR_FREE_EPT_PAGE) {
+				ulong guest_page_phy_addr = exit_reason_cpuid_info_p->exit_info.free_ept_page_info.guest_page_phy_addr;
+				free_ept_page(guest_page_phy_addr);
+			}
 			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
 			write_vmcs_field(GUEST_RIP_ENCODING, vm_exit_guest_rip + vm_exit_instruction_len);
@@ -686,4 +703,3 @@ void reset_guest_tss_status(ulong task_nr, ulong status) {
 		}
 	}
 }
-

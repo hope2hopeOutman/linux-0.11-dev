@@ -22,6 +22,19 @@ typedef struct exit_reason_fork {
 	ulong  task_cr3;
 } exit_reason_fork;
 
+typedef struct exit_reason_free_ept_page{
+	ulong  guest_page_phy_addr;
+}exit_reason_free_ept_page;
+
+typedef union cpuid_exit_info {
+	exit_reason_free_ept_page free_ept_page_info;
+}cpuid_exit_info;
+
+typedef struct exit_reason_cpuid {
+	ulong  exit_reason_no;
+	cpuid_exit_info exit_info;
+} exit_reason_cpuid;
+
 struct apic_info {
 	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
 	unsigned long apic_id;
@@ -358,6 +371,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
  */
 #define VM_EXIT_REASON_IO_INFO_ADDR                 0x9F000
 #define VM_EXIT_REASON_TASK_SWITCH_INFO_ADDR        0x9E000
+#define VM_EXIT_REASON_CPUID_INFO_ADDR              0x9D000
 
 #define GUEST_KERNEL_CR3_PHY_ADDR             0x1000  /* GuestOS kernel CR3,所有进攻共享的部分 */
 #define GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR         0x1000000  /* 16M~20M */
@@ -365,5 +379,8 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 
 #define GUEST_TSS_STATUS_AVAILABLE   9     /* VM中tss段的状态 */
 #define GUEST_TSS_STATUS_BUSY        11
+
+/* 通过cpuid指令触发VM-EXIT,用于不同的业务，这里针对不同的业务做了如下的区分 */
+#define VM_EXIT_REASON_CPUID_FOR_FREE_EPT_PAGE 1
 
 #endif
