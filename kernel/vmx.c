@@ -1192,6 +1192,9 @@ void vm_entry() {
 
 #if 1
 	init_dir_page(GUEST_KERNEL_CR3_PHY_ADDR, 1024, 1);
+#else
+	init_dir_page(GUEST_KERNEL_CR3_PHY_ADDR, 4, 1);
+#endif
 	//init_dir_page(0x2000, 1024, 1); /* 将GuestOS的内核目录表设置在8k~12K空间，然后将其映射在host内核目录表的4K~8K线性地址空间 */
 
 	/* remap host内核地址空间的4k~8k到8K~12K */
@@ -1205,9 +1208,6 @@ void vm_entry() {
 	ulong cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	ulong cr3_phy_addr = get_phy_addr(cr3_guest_phy_addr);
 	printk("cr3_phy_addr: %08x\n\r", cr3_phy_addr);
-	//init_dir_page(cr3_phy_addr+16, 1020, 0);
-	//init_dir_page(0x1000, 7, 0);
-#endif
 
 	/* 必须要在init_guest_kernel_space函数后才能初始化guest-gdt,想想看为什么(EPT开启了) */
     init_guest_gdt();

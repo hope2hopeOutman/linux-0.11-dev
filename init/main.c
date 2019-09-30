@@ -196,16 +196,18 @@ void main(void)		/* This really IS void, no error here. */
 	tty_init();
 	time_init();
 	sched_init();
+	hd_init();
 	buffer_init(buffer_memory_end);
-	//hd_init();
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
-	//init_ap();
+#if 0
+	init_ap();
 	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
 	//get_cpu_topology_info();
+#else
 	vmx_env_entry();
-	hd_init();
+#endif
 	sti();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

@@ -215,6 +215,35 @@ unsigned long get_spec_phy_addr(unsigned long guest_linear_addr) {
 	return phy_addr_base + (guest_linear_addr & 0xFFF);                  /* 返回变量具体的实际物理地址. */
 }
 
+/* 这个方法有局限性,因为GuestOS中的free_page_tables会将guest-dir-item > 1G的目录项及其guest-pt清空的，所以就访问不到其对应的guest-phy-addr了，
+ * 这时就无法释放对应的ept-pt-entry了，所以有问题.
+ * 要想使用该方法就得该GuestOS里的free_page_tables方法了，但这样感觉GuestOS的就有点不太common了. */
+void free_ept_pages(ulong guest_cr3_addr) {
+	ulong ept_cr3_entry = get_phy_addr(guest_cr3_addr);
+	ulong* dir = (unsigned long *)(ept_cr3_entry + (KERNEL_LINEAR_ADDR_LIMIT / PAGE_TABLE_SIZE) * 4);
+	ulong size = (USER_LINEAR_ADDR_LIMIT >> 22); // (size/4M)目录项个数
+
+	for ( ; size-->0 ; dir++) {
+		if (!(1 & *dir))
+			continue;
+		ulong pt_guest_phy_addr = (*dir & (~0xFFF));
+		ulong* pt_phy_addr = (ulong* )get_phy_addr(pt_guest_phy_addr);
+		ulong pt_size = 1024;
+		for ( ; pt_size-->0 ; pt_phy_addr++) {
+			if (!(1 & *pt_phy_addr))
+				continue;
+			ulong page_guest_phy_addr = (*pt_phy_addr & (~0xFFF));
+			ulong page_phy_addr = get_phy_addr(page_guest_phy_addr);
+			free_page(page_phy_addr);
+			ulong* ept_pt_entry_4_guest_page = (ulong* )get_ept_pt_entry(page_guest_phy_addr);
+			*ept_pt_entry_4_guest_page = 0x00;
+		}
+		ulong* ept_pt_entry_4_guest_pt = (ulong* )get_ept_pt_entry(pt_guest_phy_addr);
+		*ept_pt_entry_4_guest_pt = 0x00;
+		*dir = 0x00;
+	}
+}
+
 void flush_tlb() {
 	/* 刷新Guest TLB */
 	ulong eptp_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
@@ -233,6 +262,22 @@ void flush_tlb() {
 	__asm__ ("invvpid %1,%%eax\n\t" \
 			::"a" (inv_type),"m" (*(struct desc_type*)vpid_desc));
 	//printk("flush vpid:%u success.\n\r",vpid);
+}
+
+void set_guest_cr3_shadow_entry(ulong cr3, ulong phy_addr) {
+	ulong* dir_entry = (ulong *)(cr3 + (phy_addr>>22)*4);
+	if (!(*dir_entry & 0x07)) {
+		*dir_entry = get_free_page(PAGE_IN_REAL_MEM_MAP) + 7;
+	}
+	ulong pt_base = (*dir_entry & (~0xFFF));
+	ulong* pt_entry = (ulong *)(pt_base + ((phy_addr>>12) & 0x3FF)*4);
+	if (!(*pt_entry & 0x07)) {
+		*pt_entry = phy_addr + 7;
+	}
+	else {
+		printk("cr3:%08x,phy_addr: %08x\n\r",cr3, *pt_entry);
+		panic("CR3.pt.entry not empty error\n\r");
+	}
 }
 
 void do_vm_page_fault() {
@@ -298,6 +343,8 @@ void do_vm_page_fault() {
 	unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
 	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
 	//printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
+	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
+	//set_guest_cr3_shadow_entry(cr3_guest_phy_addr, ept_phy_addr);
 }
 
 void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulong edi, ulong ebp) {
@@ -382,7 +429,10 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			flush_tlb();
 
-			printk("task_switch.Current_CR3_ENCODING: %08x\n\r", read_vmcs_field(GUEST_CR3_ENCODING));
+			printk("task_switch.old(NR[%u],CR3[%08x]):new(NR[%u],CR3[%08x])\n\r", exit_reason_task_switch->old_task_nr,
+																				  read_vmcs_field(GUEST_CR3_ENCODING),
+																				  exit_reason_task_switch->new_task_nr,
+																				  exit_reason_task_switch->new_task_cr3);
 
 #if 0
 			/*    这里是关于mov-to-cr3导致内存不可访问的详细排查过程，也提出了很tricky的临时解决方案，但是总觉得不完美，
@@ -679,7 +729,12 @@ void init_guest_cr3_shadow(exit_reason_task_switch_struct* exit_reason_task_swit
 	if (new_cr3_page != exit_reason_task_switch->new_task_cr3) {
 		panic("host.new_cr3_page != guest.new_cr3_page\n\r");
 	}
-	init_dir_page(new_cr3_page,1024,1);
+	/*
+	 * 一开始只初始化内核代码段和数据段共16M,4个目录项，这样其他目录项管理的页表及其page都是某个guest进程私有的，
+	 * 在该进程被销毁的时候，可以通过遍历该目录表一次性销毁，这样效率更高，这应该就是Qemu建立guest-cr3-shadow的初衷吧，
+	 * 当然，还可以对每个guest进程所占用的内存页进行更精细化的控制(RWX).
+	 */
+	init_dir_page(new_cr3_page, 1024, 1);
 }
 
 /*

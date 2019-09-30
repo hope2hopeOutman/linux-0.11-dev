@@ -257,7 +257,7 @@ if (memory_end > KERNEL_LINEAR_ADDR_SPACE)  /* 判断实际的物理内存是否
 		/* 从main_memory_start开始的paging_num个物理页专用于存储进程的task_struc和dir的，这部分物理页是肯定在内核的实地址寻址空间的 */
 		paging_end = mem_map + (paging_num -1);
 	}
-	else if (real_space) { /* 这里将会在分页内存区的开始8M(这个值由最大进程数确定)空间，寻找空闲页，用于存储task_struct和目录表 */
+	else if (real_space == 1) { /* 这里将会在分页内存区的开始8M(这个值由最大进程数确定)空间，寻找空闲页，用于存储task_struct和目录表 */
 		paging_num = permanent_real_addr_mapping_space;
 		/* 从main_memory_start开始的paging_num个物理页专用于存储进程的task_struc和dir的，这部分物理页是肯定在内核的实地址寻址空间的 */
 		paging_end = mem_map + permanent_real_addr_mapping_for_guest_cr3 + (paging_num -1);
