@@ -172,13 +172,16 @@ int check_default_task_running_on_ap() {
 /*
  * 向指定的AP发送IPI中断消息,要先写ICR的高32位，因为写低32位就会触发IPI了，
  * 所以要现将apic_id写到destination field,然后再触发IPI。
+ * 注意^n:尼玛嵌入式中调用函数，一定要注意备份eax,ecx和edx的值，这个必须要手工备份，编译器是不会帮你的，尼玛，浪费时间啊。
  */
 #if EMULATOR_TYPE
 void send_IPI(int apic_id, int v_num) {
 __asm__ ("movl bsp_apic_default_location,%%edx\n\t" \
+		 "pushl %%ecx\n\t" /* 注意^n:尼玛嵌入式中调用函数，一定要注意备份eax,ecx和edx的值，这个必须要手工备份，编译器是不会帮你的，尼玛，浪费时间啊。 */ \
 		 "pushl %%edx\n\t" \
 		 "call remap_msr_linear_addr\n\t" \
 		 "popl %%edx\n\t" \
+		 "popl %%ecx\n\t" \
 		 "movl %%eax,%%edx\n\t"          /* eax中存储映射后的linear addr */ \
 		 "addl $0x10,%%edx\n\t"          /* 获得ICR的高32位地址 */ \
 		 "shll $24,%%ecx\n\t" \
@@ -854,5 +857,5 @@ void sched_init(void)
 	set_intr_gate(APIC_TIMER_INTR_NO,&timer_interrupt);  /* Vector value 0x83 for APIC timer */
 #endif
 
-	set_system_gate(0x80,&system_call);
+	set_system_gate(SYSTEM_CALL_INTR_NO,&system_call);
 }

@@ -200,8 +200,9 @@ void main(void)		/* This really IS void, no error here. */
 	buffer_init(buffer_memory_end);
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
-#if 0
+#if 1
 	init_ap();
+
 	/*printk("apic0: %d, apic1: %d, apic2: %d apic3: %d \n\r",
 			apic_ids[0].apic_id,apic_ids[1].apic_id,apic_ids[2].apic_id,apic_ids[3].apic_id);*/
 	//get_cpu_topology_info();
@@ -209,6 +210,7 @@ void main(void)		/* This really IS void, no error here. */
 	vmx_env_entry();
 #endif
 	sti();
+	send_IPI(2, VMX_INTR_NO);
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
 		init();

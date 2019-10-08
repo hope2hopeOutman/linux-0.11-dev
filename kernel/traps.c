@@ -211,9 +211,11 @@ void trap_init(void)
 }
 
 void parse_cpu_topology(void);
-void handle_ipi_interrupt(void);
+void handle_sched_ipi_intr(void);
+void handle_vmx_ipi_intr(void);
 void ipi_intr_init(void)
 {
-	set_intr_gate(0x81,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */
-	set_intr_gate(0x82,&handle_ipi_interrupt);
+	set_intr_gate(TOPOLOGY_INTR_NO,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */
+	set_intr_gate(SCHED_INTR_NO,&handle_sched_ipi_intr);
+	set_intr_gate(VMX_INTR_NO,&handle_vmx_ipi_intr);
 }

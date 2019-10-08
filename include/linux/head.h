@@ -334,11 +334,14 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define BSP_APIC_REGS_RELOCATION  0x20000   /* BSP Local APIC Registers在内存中的remap */
 #define BSP_APIC_ICR_RELOCATION   0x20300   /* BSP ICR(Interrupt command register) 在内存中的位置 */
 
-
+#define SYSTEM_CALL_INTR_NO   0x80      /* 系统调用中断号 */
+#define TOPOLOGY_INTR_NO      0x81      /* 解析AP拓扑结构的中断号 */
 #define SCHED_INTR_NO         0x82      /* AP响应BSP发来的进程调度IPI中断号 */
+#define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
+#define VMX_INTR_NO           0x84      /* AP响应BSP发来的进入VMX的IPI中断号 */
 
 #define AP_DEFAULT_TASK_NR    0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
-#define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
+
 
 #define VM_EXIT_REASON_EXTERNAL_INTERRUPT     1   /* External interrupt */
 #define VM_EXIT_REASON_TRIPLE_FAULT           2   /* External interrupt */

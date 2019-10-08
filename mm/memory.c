@@ -330,7 +330,7 @@ int free_page(unsigned long addr)
 	unsigned long addr_bk = addr;
 	if (addr < LOW_MEM) return 1;
 	if (addr >= HIGH_MEMORY){
-		printk("nonexistent page: %p, high_mem: %u \n\r", addr, HIGH_MEMORY);
+		printk("nonexistent page: %p, high_mem: %08x \n\r", addr, HIGH_MEMORY);
 		panic("trying to free nonexistent page");
 	}
 	addr -= LOW_MEM;

@@ -67,7 +67,7 @@ nr_system_calls = 72
  */
 .globl system_call,sys_fork,timer_interrupt,sys_execve
 .globl hd_interrupt,floppy_interrupt,parallel_interrupt
-.globl device_not_available, coprocessor_error, parse_cpu_topology,handle_ipi_interrupt
+.globl device_not_available, coprocessor_error, parse_cpu_topology,handle_sched_ipi_intr,handle_vmx_ipi_intr
 
 .align 4
 bad_sys_call:
@@ -306,13 +306,26 @@ parse_cpu_topology:
 	popl %eax
 	iret
 
-handle_ipi_interrupt:
+handle_sched_ipi_intr:
 	pushl %eax
 	pushl %ebx
 	pushl %ecx
 	pushl %edx
 	call send_EOI
 	call schedule
+	popl %edx
+	popl %ecx
+	popl %ebx
+	popl %eax
+	iret
+
+handle_vmx_ipi_intr:
+	pushl %eax
+	pushl %ebx
+	pushl %ecx
+	pushl %edx
+	call send_EOI
+	call vmx_env_entry
 	popl %edx
 	popl %ecx
 	popl %ebx
