@@ -176,14 +176,21 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
 					 */
 					if ((guest_phy_addr>>20) >= 12 && (guest_phy_addr>>20) < 13) {
-						if ((guest_phy_addr & ~0xFFF) == 0x500000) {
-							printk("OS_start_addr: %08x\n\r", guest_phy_addr);
+#if 1
+						retry:
+						if (load_guest_os_addr == (guest_phy_addr & ~0xFFF)) {
+							printk("load_guest_os_addr: %08x\n\r", load_guest_os_addr);
+							do_hd_read_request_in_vm((guest_phy_addr & ~0xFFF)-0x700000, 8);
 						}
-						load_guest_os_addr = guest_phy_addr & ~0xFFF;
+						else {
+							goto retry;
+						}
+#else
 						do_hd_read_request_in_vm((guest_phy_addr & ~0xFFF)-0x700000, 8);
+#endif
 					}
 				}
-				//printk("get_phy_addr.ept_pt_entry: %08x\n\r", ept_page_phy_addr);
+				//printk("guest_phy_addr:ept_page_phy_addr: (%08x:%08x)\n\r", guest_phy_addr,ept_page_phy_addr);
 			}
 		}
 	}
@@ -349,7 +356,7 @@ void do_vm_page_fault() {
 
 void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulong edi, ulong ebp) {
 		unlock_op(&tty_io_semaphore);
-		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING);
+		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING) & 0xFFFF;
 		unsigned long vm_exit_qualification = read_vmcs_field(IA32_VMX_EXIT_QUALIFICATION_ENCODING);
 		unsigned long guest_eip = read_vmcs_field(GUEST_RIP_ENCODING);
 		/*

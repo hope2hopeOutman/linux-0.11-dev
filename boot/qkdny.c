@@ -19,7 +19,7 @@
 extern void hd_read_interrupt(void);
 extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
 unsigned long load_guest_os_flag = 0; /* This flag indicate do_read_intr loading data whether are GuestOS code */
-unsigned long load_guest_os_addr = 0;
+unsigned long load_guest_os_addr = 0xC00000;
 #define OS_PARAMS_ADDR(total_mem_4k_size) \
 					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\
 					  ((total_mem_4k_size-OS_INIT_PARAMS_LIMIT)<<12)\
@@ -104,7 +104,8 @@ void do_hd_read_out(unsigned int drive, unsigned int nsect, unsigned int sect,
 		HdParamsT* hd_params) {
 	register int port asm("dx");
 	int retries = 10000;
-	repeat: if (!do_controller_ready(retries)) {
+	repeat:
+	if (!do_controller_ready(retries)) {
 		retries = 10000;
 		goto repeat;
 	};
@@ -145,9 +146,12 @@ void do_reset_controller(HdParamsT* hd_params) {
 	for (i = 0; i < 100; i++)
 		nop();
 	outb(hd_params->ctl & 0x0f, HD_CMD);
+	retry:
 	if (do_drive_busy()) {
+		goto retry;
 	}
 	if ((i = inb(HD_ERROR)) != 1) {
+		//goto retry;
 	}
 }
 
@@ -226,14 +230,7 @@ void do_hd_read_request(void) {
 	 *  the sync not only by high level app, but also should be concern in kernel. the correct logic sometimes can not make you have the right result,
 	 *  in kernel the nop[1...n] command is very important sometimes, sync anytime anywhere.
 	 */
-	if (!totalNeedSects) {
-		int retries = 10000;
-		repeat:
-		if (!do_controller_ready(retries)) {
-			retries = 10000;
-			goto repeat;
-		};
-	}
+
 }
 
 void set_seg_limit(void* addr, unsigned long limit){
@@ -289,19 +286,12 @@ void do_hd_read_request_in_vm(unsigned long start_addr, unsigned long sectors) {
 			}
 		}
 	}
-
-	/*
-	 *  This code segment is very important, it can make sure the final left sectors(<63 sectors) can be loaded successfully before
-	 *  executing CLI command in head.s, This fault spent me three days, i want to cry hahahaha, this event let me have a deep understand is that
-	 *  the sync not only by high level app, but also should be concern in kernel. the correct logic sometimes can not make you have the right result,
-	 *  in kernel the nop[1...n] command is very important sometimes, sync anytime anywhere.
-	 */
 	if (!totalNeedSects) {
 		int retries = 10000;
 		repeat:
 		if (!do_controller_ready(retries)) {
 			retries = 10000;
 			goto repeat;
-		};
+		}
 	}
 }

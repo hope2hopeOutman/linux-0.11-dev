@@ -182,22 +182,23 @@ __asm__ ("movl bsp_apic_default_location,%%edx\n\t" \
 		 "call remap_msr_linear_addr\n\t" \
 		 "popl %%edx\n\t" \
 		 "popl %%ecx\n\t" \
-		 "movl %%eax,%%edx\n\t"          /* eax中存储映射后的linear addr */ \
-		 "addl $0x10,%%edx\n\t"          /* 获得ICR的高32位地址 */ \
+		 "movl %%eax,%%edx\n\t"                       /* eax中存储映射后的linear addr */ \
+		 "addl bsp_apic_icr_high_offset,%%edx\n\t"    /* 获得ICR的高32位地址 */ \
 		 "shll $24,%%ecx\n\t" \
-		 "movl %%ecx,0(%%edx)\n\t"       /* 设置ICR高32位中的destination field */  \
+		 "movl %%ecx,0(%%edx)\n\t"                    /* 设置ICR高32位中的destination field */  \
 		 "movl %%eax,%%edx\n\t" \
+		 "addl bsp_apic_icr_full_offset,%%edx\n\t"    /* 获得ICR的高32位地址 */ \
 		 "addl $0x00004000,%%ebx\n\t" \
-		 "movl %%ebx,0(%%edx)\n\t"       /* 设置ICR低32位的vector field */   \
-		 "pushl %%eax\n\t" \
-		 "call recov_msr_swap_linear\n\t" \
-		 "popl %%eax\n\t" \
+		 "movl %%ebx,0(%%edx)\n\t"                    /* 设置ICR低32位的vector field */   \
 		 "wait_loop_ipi:\n\t" \
-		 "xorl %%eax,%%eax\n\t" \
-		 "movl 0(%%edx),%%eax\n\t" \
-		 "andl $0x00001000,%%eax\n\t"    /* 判断ICR低32位的delivery status field, 0: idle, 1: send pending */  \
-		 "cmpl $0x00,%%eax\n\t"   \
+		 "xorl %%ecx,%%ecx\n\t" \
+		 "movl 0(%%edx),%%ecx\n\t" \
+		 "andl $0x00001000,%%ecx\n\t"                 /* 判断ICR低32位的delivery status field, 0: idle, 1: send pending */  \
+		 "cmpl $0x00,%%ecx\n\t"   \
 		 "jne wait_loop_ipi\n\t"  \
+		 "pushl %%eax\n\t"        \
+		 "call recov_msr_swap_linear\n\t"             /* 一定要在这里释放remap页，不然的话会被其他进程占用，这样上面的会进入死循环，坑啊 */  \
+		 "popl %%eax\n\t"   \
 		 ::"c" (apic_id),"b" (v_num));
 }
 

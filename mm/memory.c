@@ -90,7 +90,7 @@ void recov_msr_swap_linear(unsigned long linear_addr)
 		 * 因此，当新进程(NR>1)在执行do_execve().free_page_tables().free_page()的时候，会报“trying to free nonexistent page”。
 		 * 如果内存是4G的话，这段内存就只能定义为preseverd mem,而不能放到mem_map中被进程所使用。
 		 * 后面会完善这块？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？ */
-		reset_swap_table_entry(linear_addr, 0);
+		reset_swap_table_entry(linear_addr & (~0xFFF), linear_addr & (~0xFFF));
 	}
 }
 

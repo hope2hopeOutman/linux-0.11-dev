@@ -9,6 +9,8 @@
 #include <linux/sched.h>
 
 unsigned long bsp_apic_default_location = BSP_APIC_REGS_DEFAULT_LOCATION;
+unsigned long bsp_apic_icr_full_offset  = BSP_APIC_ICR_FULL_OFFSET;
+unsigned long bsp_apic_icr_high_offset  = BSP_APIC_ICR_HIGH_OFFSET;
 unsigned long bsp_apic_regs_relocation  = BSP_APIC_REGS_RELOCATION;
 unsigned long bsp_apic_icr_relocation   = BSP_APIC_ICR_RELOCATION;
 

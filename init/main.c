@@ -196,7 +196,7 @@ void main(void)		/* This really IS void, no error here. */
 	tty_init();
 	time_init();
 	sched_init();
-	hd_init();
+	//hd_init();
 	buffer_init(buffer_memory_end);
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
@@ -210,7 +210,9 @@ void main(void)		/* This really IS void, no error here. */
 	vmx_env_entry();
 #endif
 	sti();
-	send_IPI(2, VMX_INTR_NO);
+	send_IPI(3, VMX_INTR_NO);
+	while(1);
+
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
 		init();
