@@ -176,10 +176,10 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 					 * 如果不是存储在硬盘的5M地址处的话，这里要调整.
 					 */
 					if ((guest_phy_addr>>20) >= 12 && (guest_phy_addr>>20) < 13) {
-#if 1
+#if 0
 						retry:
-						if (load_guest_os_addr == (guest_phy_addr & ~0xFFF)) {
-							printk("load_guest_os_addr: %08x\n\r", load_guest_os_addr);
+						if ((load_guest_os_addr % 0x1000) == 0) {
+							//printk("load_guest_os_addr: %08x\n\r", load_guest_os_addr);
 							do_hd_read_request_in_vm((guest_phy_addr & ~0xFFF)-0x700000, 8);
 						}
 						else {

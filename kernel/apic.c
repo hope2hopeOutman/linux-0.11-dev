@@ -394,4 +394,26 @@ void start_apic_timer(int apic_index) {
 #endif
 }
 
+void print_lint0(ulong addr){
+	printk("lint.value: %08x\n\r",*(ulong*)addr);
+}
+
+void init_local_apic() {
+	__asm__ ("movl bsp_apic_default_location,%%edx\n\t" \
+			 "pushl %%edx\n\t" \
+			 "call remap_msr_linear_addr\n\t" \
+			 "popl %%edx\n\t" \
+			 "movl %%eax,%%edx\n\t"                       /* eax中存储映射后的linear addr */ \
+			 "addl $0x350,%%edx\n\t"                      /* LVT lint0 addr */ \
+			 "movl $0x072E,0(%%edx)\n\t"   \
+			 "pushl %%eax\n\t"        \
+			 "pushl %%edx\n\t" \
+			 "call print_lint0\n\t" \
+			 "popl %%edx\n\t" \
+			 "call recov_msr_swap_linear\n\t"             /* 一定要在这里释放remap页，不然的话会被其他进程占用，这样上面的会进入死循环，坑啊 */  \
+			 "popl %%eax\n\t"   \
+			 "nop\n\t" \
+			 ::);
+}
+
 
