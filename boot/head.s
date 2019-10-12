@@ -300,6 +300,7 @@ hd_read_interrupt:
 	mov %ax,%fs
 	movb $0x20,%al
 	outb %al,$0xA0		# EOI to interrupt controller #1
+
 	jmp 1f			    # give port chance to breathe
 1:	jmp 1f
 
@@ -307,14 +308,28 @@ hd_read_interrupt:
     movl %ds:hd_intr_cmd,%edx
     cmpl $HD_INTERRUPT_READ,%edx
     jne omt
+
 	call do_read_intr	# interesting way of handling intr.
-omt:pop %fs
+/*
+    cmp $0,read_from_ap
+    je omt
+    subl $1,nsects_one_time
+    cmp $0,nsects_one_time
+    jne omt
+    pushl $0x85
+    pushl $0x03
+    call send_IPI
+    popl %eax
+    popl %eax
+*/
+omt:
+    pop %fs
 	pop %es
 	pop %ds
 	popl %edx
 	popl %ecx
 	popl %eax
-	iret
+    iret
 /* init stack struct for lss comand to load. */
 .align 4
 temp_stack:
@@ -633,9 +648,11 @@ enable_paging:
 	call init_apic_timer
 	popl %eax
 
+/*
     cmp $3,%eax
     jne 1f
 	call init_local_apic
+*/
 
 	1:
 	addl $0x01,%ds:apic_index

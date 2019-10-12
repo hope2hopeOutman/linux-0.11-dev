@@ -341,6 +341,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define SCHED_INTR_NO         0x82      /* AP响应BSP发来的进程调度IPI中断号 */
 #define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
 #define VMX_INTR_NO           0x84      /* AP响应BSP发来的进入VMX的IPI中断号 */
+#define HALT_EXIT_INTR_NO     0x85      /* AP响应BSP发来的跳出halt的IPI中断号 */
 
 #define AP_DEFAULT_TASK_NR    0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 

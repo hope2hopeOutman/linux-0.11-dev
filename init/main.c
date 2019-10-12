@@ -55,6 +55,8 @@ extern long startup_time;
 extern long params_table_addr;
 extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
+extern volatile ulong load_guest_os_addr;
+extern volatile ulong load_guest_os_flag;
 
 
 long memory_end = 0;         /* Granularity is 4K */
@@ -200,6 +202,7 @@ void main(void)		/* This really IS void, no error here. */
 	buffer_init(buffer_memory_end);
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
+	load_guest_os();
 #if 1
 	init_ap();
 
@@ -209,10 +212,8 @@ void main(void)		/* This really IS void, no error here. */
 #else
 	vmx_env_entry();
 #endif
-	cli();
 	send_IPI(3, VMX_INTR_NO);
 	while(1);
-
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
 		init();
@@ -286,4 +287,12 @@ void init(void)
 		sync();
 	}
 	_exit(0);	/* NOTE! _exit, not exit() */
+}
+
+void load_guest_os() {
+	load_guest_os_addr = 0xC00000;  /* guestOS存放在内存的位置 */
+	ulong start_addr   = 0x500000;  /* guestos在硬盘的位置 */
+	set_hd_intr_gate();
+	load_guest_os_flag = 1;
+	do_hd_read_request_in_vm(start_addr,1024*1024/512);
 }

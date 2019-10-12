@@ -11,6 +11,7 @@
 #include <linux/sched.h>
 
 extern void init_dir_page(ulong start_addr, ulong len, ulong set);
+extern void do_retries(ulong retries);
 extern unsigned long tty_io_semaphore;
 extern unsigned long load_guest_os_flag; /* This flag indicate do_read_intr loading data whether are GuestOS code */
 extern unsigned long load_guest_os_addr;
@@ -177,17 +178,10 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 					 */
 					if ((guest_phy_addr>>20) >= 12 && (guest_phy_addr>>20) < 13) {
 #if 0
-						retry:
-						if ((load_guest_os_addr % 0x1000) == 0) {
-							//printk("load_guest_os_addr: %08x\n\r", load_guest_os_addr);
-							do_hd_read_request_in_vm((guest_phy_addr & ~0xFFF)-0x700000, 8);
-						}
-						else {
-							goto retry;
-						}
-#else
+						do_retries(100000000);
 						do_hd_read_request_in_vm((guest_phy_addr & ~0xFFF)-0x700000, 8);
 #endif
+
 					}
 				}
 				//printk("guest_phy_addr:ept_page_phy_addr: (%08x:%08x)\n\r", guest_phy_addr,ept_page_phy_addr);
@@ -671,8 +665,8 @@ void init_guest_kernel_space() {
 	 * 我这里又将其映射到host的kernel，使其能共享host的kernel地址空间，又进一步复杂化，尼玛搞死人啊O(∩_∩)O哈哈~，
 	 * 后面会基于本OS，制作一个Guest-OS image将其加载到VM中运行，这样就不用共享host kernel了，不会这么复杂了。
 	 */
-	load_guest_os_flag = 1;
-	set_hd_intr_gate();
+	/*load_guest_os_flag = 1;
+	set_hd_intr_gate();*/
 	/*
 	 * GuestOS的内核空间的Guest-linear-addr到Guest-physical-addr的映射有两种情况：
 	 * 1. guest-phy-space<=1G

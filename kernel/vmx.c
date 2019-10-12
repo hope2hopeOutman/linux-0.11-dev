@@ -1218,6 +1218,9 @@ void vm_entry() {
     /* 设置I/O bitmap指定的bit位，让其对应的I/O端口一旦发生读写就引发VM-EXIT. */
     set_io_bitmap();
 
+    /* 因为init_guest_kernel_space方法将HD_INTR设置为hd_read_interrupt,这里要还原成成FS用到的hd_interrupt */
+    hd_init();
+
 	__asm__ ("vmlaunch\n\t"              \
 			 "ctl_passthrough_ip:\n\t"   \
 			 "xor %%eax,%%eax\n\t"       \

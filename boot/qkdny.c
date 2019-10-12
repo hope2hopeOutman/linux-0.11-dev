@@ -17,10 +17,14 @@
 #define OS_SIZE 0x80000         /* 因为当前的OS只有不到120K,所以这里先把OS的大小设置为512K,以后随着功能扩展，OS会变大的，自己调整就行了。 */
 #define OS_PRELOAD_SIZE 0x8000  /* 被预加载的OS-CODE大小，这部分代码用于加载剩余的OS-CODE，OS-CODE完全加载后再初始化内核。 */
 extern void hd_read_interrupt(void);
-unsigned long hd_interrupt_semaphore = 0;
-extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
-unsigned long load_guest_os_flag = 0; /* This flag indicate do_read_intr loading data whether are GuestOS code */
-volatile unsigned long load_guest_os_addr = 0xC00000;
+volatile ulong hd_interrupt_semaphore = 0;
+extern volatile ulong params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
+ulong load_guest_os_flag = 0; /* This flag indicate do_read_intr loading data whether are GuestOS code */
+volatile ulong load_guest_os_addr = 0xC00000;
+volatile ulong nsects_one_time = 0;
+volatile ulong hd_intr_count   = 0;
+volatile ulong next_instruction_addr = 0;
+ulong read_from_ap = 0x00;
 #define OS_PARAMS_ADDR(total_mem_4k_size) \
 					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\
 					  ((total_mem_4k_size-OS_INIT_PARAMS_LIMIT)<<12)\
@@ -54,6 +58,10 @@ __asm__("pushl %%edx\n\t" \
 	  "m" (*((addr)+6)), \
 	  "d" (limit))
 
+void print_hd_ap(){
+	printk("read times greater than nsects_one_time\n\r");
+}
+
 /* 这里也要讲内存转换成以4K为单位的总大小. */
 void move_params_to_memend() {
 	unsigned long totalMem  = 0;
@@ -76,6 +84,17 @@ int do_controller_ready(int retries) {
 		;
 	return (retries);
 }
+
+void do_retries(int retries) {
+	while (--retries) {
+		__asm__ ("nop;nop;nop"::);
+	}
+}
+
+#define enter_halt()                             \
+__asm__ ("hlt\n\t"                               \
+	     ::);                                    \
+
 
 void set_hd_intr_gate() {
 	set_intr_gate(0x2E, &hd_read_interrupt);
@@ -111,11 +130,14 @@ void do_hd_read_out(unsigned int drive, unsigned int nsect, unsigned int sect,
 		goto repeat;
 	};
 
+	//lock_op(&hd_interrupt_semaphore);
 	if (cmd == WIN_READ) {
 		hd_intr_cmd = WIN_READ;
 	} else {
 		hd_intr_cmd = 0;
 	}
+	//unlock_op(&hd_interrupt_semaphore);
+
 	outb_p(hd_params->ctl, HD_CMD);
 	port = HD_DATA;
 	outb_p(hd_params->wpcom>>2, ++port);
@@ -152,7 +174,7 @@ void do_reset_controller(HdParamsT* hd_params) {
 		goto retry;
 	}
 	if ((i = inb(HD_ERROR)) != 1) {
-		goto retry;
+		//goto retry;
 	}
 }
 
@@ -171,11 +193,9 @@ void do_read_intr() {
 		load_os_addr += 512;
 	}
 	else {
-		if (inb_p(HD_ERROR) == 3) {
-			printk("hd_error: %08x\n\r", 3);
-		}
 		port_read(HD_DATA, load_guest_os_addr, 256);
 		load_guest_os_addr += 512;
+		++hd_intr_count;
 	}
 }
 
@@ -275,15 +295,15 @@ void do_hd_read_request_in_vm(unsigned long start_addr, unsigned long sectors) {
 			nsect = totalNeedSects;
 		}
 
-/*		if (nsect != 8) {
-			printk("nsect=%08x\n\r", nsect);
-		}*/
-
+		nsects_one_time = nsect;
+		read_from_ap = 1;
 		ulong prev_load_guest_os_addr = load_guest_os_addr;
 
 		do_hd_read_out(dev, nsect, sec, head, cyl, WIN_READ, &hd_params);
 
 #if 1
+		//enter_halt();
+#else
 		retry:
 		if ((load_guest_os_addr - prev_load_guest_os_addr) != nsect*512) {
 			goto retry;

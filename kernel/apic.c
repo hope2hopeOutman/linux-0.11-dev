@@ -60,9 +60,11 @@ void init_ap() {
 	/* ============================= End Set Apic ID for BSP ============================= */
 
 	/* ============================= Init APIC timer for BSP ============================= */
+		/*
 		"pushl $0x00\n\t"            \
 		"call init_apic_timer\n\t"   \
 		"popl %%eax\n\t"             \
+		*/
     /* ============================= End init APIC timer for BSP ========================= */
 
 	/* ============================= Sending INIT中断消息给APs  ============================= */
@@ -398,7 +400,9 @@ void print_lint0(ulong addr){
 	printk("lint.value: %08x\n\r",*(ulong*)addr);
 }
 
+/* 将某个AP的lint0设置为EXTint，directly connect to 8259A中断控制器 */
 void init_local_apic() {
+#if 1
 	__asm__ ("movl bsp_apic_default_location,%%edx\n\t" \
 			 "pushl %%edx\n\t" \
 			 "call remap_msr_linear_addr\n\t" \
@@ -414,6 +418,7 @@ void init_local_apic() {
 			 "popl %%eax\n\t"   \
 			 "nop\n\t" \
 			 ::);
+#endif
 }
 
 
