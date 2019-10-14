@@ -648,11 +648,11 @@ enable_paging:
 	call init_apic_timer
 	popl %eax
 
-/*
+
     cmp $3,%eax
     jne 1f
 	call init_local_apic
-*/
+
 
 	1:
 	addl $0x01,%ds:apic_index

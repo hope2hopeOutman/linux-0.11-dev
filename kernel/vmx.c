@@ -14,10 +14,16 @@
 #include <linux/head.h>
 #include <linux/sched.h>
 #include <asm/system.h>
+#include <asm/io.h>
 #include <linux/common.h>
 
 #define invalidate(dir_addr) \
 __asm__("movl %%eax,%%cr3"::"a" ((unsigned long)dir_addr))
+
+#define CMOS_READ(addr) ({ \
+outb_p(0x80|addr,0x70); \
+inb_p(0x71); \
+})
 
 void ia32_sysenter();
 unsigned long support_64arch_check();
@@ -1220,6 +1226,8 @@ void vm_entry() {
 
     /* 因为init_guest_kernel_space方法将HD_INTR设置为hd_read_interrupt,这里要还原成成FS用到的hd_interrupt */
     hd_init();
+
+    CMOS_READ(0x12);
 
 	__asm__ ("vmlaunch\n\t"              \
 			 "ctl_passthrough_ip:\n\t"   \
