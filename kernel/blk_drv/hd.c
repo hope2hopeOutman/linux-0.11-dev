@@ -245,7 +245,8 @@ static void reset_hd(int nr)
 
 void unexpected_hd_interrupt(void)
 {
-	printk("Unexpected HD interrupt\n\r");
+	send_IPI(3,0x88);
+	//printk("Unexpected HD interrupt\n\r");
 }
 
 static void bad_rw_intr(void)

@@ -213,6 +213,7 @@ void main(void)		/* This really IS void, no error here. */
 	vmx_env_entry();
 #endif
 	send_IPI(3, VMX_INTR_NO);
+	cli();
 	while(1);
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */

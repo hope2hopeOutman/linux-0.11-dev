@@ -196,6 +196,8 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING         0x440C
 #define IA32_VMX_VM_EXIT_INSTRUCTION_INFO_ENCODING        0x440E
 
+#define IA32_VMX_PREEMPTION_TIMER_VALUE_ENCODING          0x482E
+
 #define IA32_VMX_EXIT_QUALIFICATION_ENCODING    0x6400
 #define IA32_VMX_GUEST_LINEAR_ADDR_ENCODING     0x640A
 
@@ -356,6 +358,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define VM_EXIT_REASON_IO_INSTRUCTION         30  /* Use I/O bitmap        */
 #define VM_EXIT_REASON_EPT_VIOLATION          48  /* EPT violation         */
 #define VM_EXIT_REASON_EPT_MISCONFIGURATION   49  /* EPT misconfiguration  */
+#define VM_EXIT_REASON_PREEMPTION_TIMER_EXPIRED 52 /* preemption timer expired.  */
 
 #define GDT_IDENTITY_NO  0
 #define IDT_IDENTITY_NO  1
@@ -388,5 +391,8 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 
 /* 通过cpuid指令触发VM-EXIT,用于不同的业务，这里针对不同的业务做了如下的区分 */
 #define VM_EXIT_REASON_CPUID_FOR_FREE_EPT_PAGE 1
+#define VM_EXIT_REASON_CPUID_FOR_SEND_EOI      2
+
+#define VMX_PREEMPTION_TIMER_VALUE       10000
 
 #endif

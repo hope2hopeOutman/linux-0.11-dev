@@ -348,6 +348,11 @@ void do_vm_page_fault() {
 	//set_guest_cr3_shadow_entry(cr3_guest_phy_addr, ept_phy_addr);
 }
 
+void reset_preemption_timer() {
+	ulong preemption_timer_value = read_vmcs_field(IA32_VMX_PREEMPTION_TIMER_VALUE_ENCODING);
+	write_vmcs_field(IA32_VMX_PREEMPTION_TIMER_VALUE_ENCODING, VMX_PREEMPTION_TIMER_VALUE);
+}
+
 void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulong edi, ulong ebp) {
 		unlock_op(&tty_io_semaphore);
 		unsigned long vm_exit_reason        = read_vmcs_field(IA32_VMX_EXIT_REASON_ENCODING) & 0xFFFF;
@@ -430,10 +435,10 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 
 			flush_tlb();
 
-			printk("task_switch.old(NR[%u],CR3[%08x]):new(NR[%u],CR3[%08x])\n\r", exit_reason_task_switch->old_task_nr,
+			/*printk("task_switch.old(NR[%u],CR3[%08x]):new(NR[%u],CR3[%08x])\n\r", exit_reason_task_switch->old_task_nr,
 																				  read_vmcs_field(GUEST_CR3_ENCODING),
 																				  exit_reason_task_switch->new_task_nr,
-																				  exit_reason_task_switch->new_task_cr3);
+																				  exit_reason_task_switch->new_task_cr3);*/
 
 #if 0
 			/*    这里是关于mov-to-cr3导致内存不可访问的详细排查过程，也提出了很tricky的临时解决方案，但是总觉得不完美，
@@ -522,6 +527,9 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 				ulong guest_page_phy_addr = exit_reason_cpuid_info_p->exit_info.free_ept_page_info.guest_page_phy_addr;
 				free_ept_page(guest_page_phy_addr);
 			}
+			else if (exit_reason_cpuid_info_p->exit_reason_no == VM_EXIT_REASON_CPUID_FOR_SEND_EOI) {
+				send_EOI();
+			}
 			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
 			write_vmcs_field(GUEST_RIP_ENCODING, vm_exit_guest_rip + vm_exit_instruction_len);
@@ -572,6 +580,9 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 					 "nop\n\t"                           \
 					 "jmp exit_ept_misconfig_loop\n\t"   \
 					 ::);
+		}
+		else if (vm_exit_reason == VM_EXIT_REASON_PREEMPTION_TIMER_EXPIRED) {
+			reset_preemption_timer();
 		}
 		else {
 			printk("Can't handle this kind of exit error:%08x\n\r", vm_exit_reason);

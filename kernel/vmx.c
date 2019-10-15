@@ -233,7 +233,17 @@ void init_vmcs_pinbased_ctls() {
 		//init_value |= (1<<0);  /* External-interrupt exiting. */
 	}
 
+	/*
+	 * If this control is 1, the VMX-preemption timer counts down in VMX non-root operation; see
+       Section 25.5.1. A VM exit occurs when the timer counts down to zero.
+	 */
+	if ((msr_values[0] & (1<<6)) || (msr_values[1] & (1<<6))) {
+		init_value |= (1<<6);  /* Activate VMX-preemption timer. */
+	}
+
 	write_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING, init_value);
+	write_vmcs_field(IA32_VMX_PREEMPTION_TIMER_VALUE_ENCODING, VMX_PREEMPTION_TIMER_VALUE);
+
 	read_value = read_vmcs_field(IA32_VMX_PINBASED_CTLS_ENCODING);
 	printk("IA32_VMX_PINBASED_CTLS_ENCODING(%08x:%08x)\n\r", init_value, read_value);
 }
@@ -1227,7 +1237,7 @@ void vm_entry() {
     /* 因为init_guest_kernel_space方法将HD_INTR设置为hd_read_interrupt,这里要还原成成FS用到的hd_interrupt */
     hd_init();
 
-    CMOS_READ(0x12);
+    //start_apic_timer();
 
 	__asm__ ("vmlaunch\n\t"              \
 			 "ctl_passthrough_ip:\n\t"   \
