@@ -401,7 +401,7 @@ void print_lint0(ulong addr){
 }
 
 /* 将某个AP的lint0设置为EXTint，directly connect to 8259A中断控制器 */
-void init_local_apic() {
+void init_apic_lint0() {
 #if 1
 	__asm__ ("movl bsp_apic_default_location,%%edx\n\t" \
 			 "pushl %%edx\n\t" \

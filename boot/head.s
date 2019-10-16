@@ -652,16 +652,24 @@ enable_paging:
     cmp $3,%eax
     jne 1f
     /* Directly connect 8259A to APIC lint0, and make AP-APIC can receive HD-INTR,
-     * HD-INTR will defaultly route to BSP,if we don't set 8259A to AP-lint0/lint1
+     * HD-INTR will defaultly route to BSP,if we don't set 8259A to AP-lint0/lint1,
+     * Note, just one APIC can directly connect to 8259A PIC (Intel page defined)
      */
-	//call init_local_apic
 
+	//call init_apic_lint0
 
 	1:
 	addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
 
-    /* 开启AP timer */
+    /* 是否开启AP timer
+     *
+     * 这里选择在AP init的时候不开启APs的apic_timer
+     * 这样做的原因还是为了HostOS的稳定性，因为这时就开启了timer，AP就会对不停的执行schedule进而执行lock_op和unlock_op操作，
+     * 偶尔会导致莫名奇妙的死锁，之前没加VMX feature没有这种情况，加了VMX后就偶尔有这种情况产生，不知道是qemu的问题，还是我程序的问题，
+     * 调试了n次都没问题，但是直接运行，就是偶尔会死锁,等VM运行完GuestOS后，再开启AP的timer就再也不会出现死锁了.
+     */
+    movl $3,%eax
     cmp $3,%eax  /* apic_id=3用来开启VMX，所以这里判断如果在该ap中开启VMX就先不开启timer. */
     je idle_loop
     pushl %eax    /* 作为start_apic_timer的apic_index参数 */

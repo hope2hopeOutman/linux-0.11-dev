@@ -531,7 +531,14 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 				send_EOI();
 			}
 			else if (exit_reason_cpuid_info_p->exit_reason_no == VM_EXIT_REASON_CPUID_FOR_GAME_OVER) {
-				printk("GameOver on VM.\n\r");
+				printk("GameOver on VM running at AP[%d].\n\r",get_current_apic_id());
+				/*
+				 * 在这里释放VMM_VM共享的锁，可以保证在运行HostOS的后续代码时，VMX处于halt状态.
+				 * 这样做是为了保证系统的稳定性，因为如果还让VMX不停地执行vmx_preemption_timer中断，会影响HostOS后续运行的稳定性，
+				 * 这个问题也调试了好长时间，可以肯定VMX运行空循环从程序上是没问题的，但是就是偶尔会影响HostOS的正常运行，
+				 * 怀疑是QEMU的问题或VM-ware中运行QEMU使得qemu的表现不太稳定。
+				 * 但是设置为hlt状态就没问题了
+				 */
 				unlock_op((ulong*)VMM_VM_SHARED_SPACE_SEMAPHORE);
 				__asm__ ("hlt;"::);
 			}

@@ -203,6 +203,12 @@ void main(void)		/* This really IS void, no error here. */
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	load_guest_os();
+	/*
+	 * 一定要在send_IPI(3, VMX_ENTRY_IPI_INTR_NO)之前就加锁，
+	 * 之前是在vmx_env_entry中加锁的，这样是有风险的，因为很有可能在AP响应VMX_ENTRY_IPI_INTR_NO中断之前当前程序就运行到了block_host_os了
+	 * 这样会造成AP无法成功运行GuestOS，事实这种情况的确时有发生，有一定的概率。
+	 * 不过在这里加锁就不会了.
+	 */
 	lock_op((ulong*)VMM_VM_SHARED_SPACE_SEMAPHORE);
 #if 1
 	init_ap();
@@ -213,11 +219,31 @@ void main(void)		/* This really IS void, no error here. */
 #else
 	vmx_env_entry();
 #endif
-	send_IPI(3, VMX_IPI_INTR_NO);
-	//cli();
-	//while(1);
+	send_IPI(3, VMX_ENTRY_IPI_INTR_NO);
+
+#if 0
+	/* 如果将8259A PIC连接到AP的lint0那么这里一定要关闭BSP的中断，
+	 * 因为如果不关闭的话会应到到AP接收来自8259A的中断,中断还是会被route到BSP，
+	 * 但Intel官方文档说只有一个processor可以directly connect to 8259A。
+	 * 已经通过init_apic_lint0将某个AP连接到了8259A了，这里BSP应该接收不到来自8259A的中断了，但事实不是这样，
+	 * 但是将BSP的中断关闭的话，AP就可以接收来自8259A的中断了，这里很费解，怀疑qemu对于这块默认的处理机制就是这样.
+	 * 这样GuestOS就可以直接访问HD了。
+	 * 但这样做有个弊端，如果有n>=2个AP中同时运行GuestOS这样的话，对来自不同VM中GuestOS的hd_request/response进行同步就是个大问题了
+	 * 这里只有一个GuestOS在运行不会有以上问题.
+	 *
+	 * 下面介绍另一种方式实现GuestOS对HD的访问
+	 *  实现思路是:所有的HD_INTR中断都route到BSP，由BSP来区分是谁触发了该HD_INTR，然后通过发送IPI中断的方式触发对应的AP响应该HD_INTR.
+	 *  这种实现方式就是考虑到以后多个GuestOS在不同的AP上并发运行时，产生HD_INTR如何同步的问题，在BSP侧加锁实现.
+	 *  该方式已经实现，具体看host如何发送HD_IPI_INTR_NO中断号，以及GuestOS如何处理该HD_IPI_INTR_NO中断号的.
+	 */
+	cli();
+#endif
+
+	block_host_os:
 	lock_op((ulong*)VMM_VM_SHARED_SPACE_SEMAPHORE);
 	hd_init();
+	send_IPI(1, APIC_TIMER_ENABLE_IPI_INTR_NO);
+	send_IPI(2, APIC_TIMER_ENABLE_IPI_INTR_NO);
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
 		init();
