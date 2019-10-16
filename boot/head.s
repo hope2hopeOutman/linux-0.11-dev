@@ -651,7 +651,10 @@ enable_paging:
 
     cmp $3,%eax
     jne 1f
-	call init_local_apic
+    /* Directly connect 8259A to APIC lint0, and make AP-APIC can receive HD-INTR,
+     * HD-INTR will defaultly route to BSP,if we don't set 8259A to AP-lint0/lint1
+     */
+	//call init_local_apic
 
 
 	1:
@@ -659,8 +662,8 @@ enable_paging:
     subl $1,%ds:sync_semaphore
 
     /* 开启AP timer */
-    cmp $16,%eax  /* apic_id=3用来开启VMX，所以这里判断如果在该ap中开启VMX就先不开启timer. */
-    jne idle_loop
+    cmp $3,%eax  /* apic_id=3用来开启VMX，所以这里判断如果在该ap中开启VMX就先不开启timer. */
+    je idle_loop
     pushl %eax    /* 作为start_apic_timer的apic_index参数 */
     call start_apic_timer
     popl %eax

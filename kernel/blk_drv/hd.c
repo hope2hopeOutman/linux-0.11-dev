@@ -21,6 +21,7 @@
 #include <asm/system.h>
 #include <asm/io.h>
 #include <asm/segment.h>
+#include <linux/head.h>
 
 #define MAJOR_NR 3
 #include "blk.h"
@@ -243,9 +244,29 @@ static void reset_hd(int nr)
 		hd_info[nr].cyl,WIN_SPECIFY,&recal_intr);
 }
 
+ulong get_vm_hd_oper() {
+	return *(ulong* )VM_HD_OPERATION_ADDR;
+}
+
 void unexpected_hd_interrupt(void)
 {
-	send_IPI(3,0x88);
+	ulong vm_hd_oper = get_vm_hd_oper();
+	if (vm_hd_oper == WIN_SPECIFY) {
+
+	}
+	else if (vm_hd_oper == WIN_RESTORE) {
+
+	}
+	else if (vm_hd_oper == WIN_READ) {
+
+	}
+	else if (vm_hd_oper == WIN_WRITE) {
+
+	}
+	else {
+
+	}
+	send_IPI(3,HD_IPI_INTR_NO);
 	//printk("Unexpected HD interrupt\n\r");
 }
 

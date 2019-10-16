@@ -109,8 +109,10 @@ void vmx_capability_verify() {
  */
 
 void vmx_env_entry() {
-	vmxon_region_address.address[0] = get_free_page(PAGE_IN_REAL_MEM_MAP);
+	apic_info* apic_info_p = get_apic_info(get_current_apic_id());
+	apic_info_p->vmx_entry_flag = 1;  /* 这样该processor就不会被调度用来执行HostOS的普通进程了，专用于VMX */
 
+	vmxon_region_address.address[0] = get_free_page(PAGE_IN_REAL_MEM_MAP);
 	/*
 	 * For Intel 64 and IA-32 processors that support x2APIC, a value of 1 reported by CPUID.01H:ECX[21] indicates that
        the processor supports x2APIC and the extended topology enumeration leaf (CPUID.0BH)
@@ -1223,7 +1225,7 @@ void vm_entry() {
 
 	ulong cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	ulong cr3_phy_addr = get_phy_addr(cr3_guest_phy_addr);
-	printk("cr3_phy_addr: %08x\n\r", cr3_phy_addr);
+	//printk("cr3_phy_addr: %08x\n\r", cr3_phy_addr);
 
 	/* 必须要在init_guest_kernel_space函数后才能初始化guest-gdt,想想看为什么(EPT开启了) */
     init_guest_gdt();
@@ -1265,7 +1267,7 @@ unsigned long support_64arch_check() {
 	__asm__ ("movl $0x80000001,%%eax\n\r"  \
 			 "cpuid\n\r"                  \
 			 :"=d" (support_check):);
-	printk("edx: %08x\n\r", support_check);
+	//printk("edx: %08x\n\r", support_check);
 	return support_check & (1<<29);
 }
 

@@ -35,7 +35,7 @@ typedef struct exit_reason_cpuid {
 	cpuid_exit_info exit_info;
 } exit_reason_cpuid;
 
-struct apic_info {
+typedef struct apic_info {
 	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
 	unsigned long apic_id;
 	unsigned long apic_regs_addr;
@@ -49,8 +49,8 @@ struct apic_info {
 	 */
 	unsigned long load_per_apic;
 	struct task_struct *current;
-	unsigned long vm_entry_flag;  /* 1: have entered non-root vm env, 0: host env (VMM) */
-};
+	unsigned long vmx_entry_flag;  /* 1: have entered vmx-env, can not be scheduled to run HostOS task; 0: not */
+}apic_info;
 
 //extern unsigned long pg_dir[1024];
 extern unsigned long* pg_dir;
@@ -342,8 +342,9 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define TOPOLOGY_INTR_NO      0x81      /* 解析AP拓扑结构的中断号 */
 #define SCHED_INTR_NO         0x82      /* AP响应BSP发来的进程调度IPI中断号 */
 #define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
-#define VMX_INTR_NO           0x84      /* AP响应BSP发来的进入VMX的IPI中断号 */
-#define HALT_EXIT_INTR_NO     0x85      /* AP响应BSP发来的跳出halt的IPI中断号 */
+#define VMX_IPI_INTR_NO           0x84      /* AP响应BSP发来的进入VMX的IPI中断号  */
+#define HALT_EXIT_IPI_INTR_NO     0x85      /* AP响应BSP发来的跳出halt的IPI中断号 */
+#define HD_IPI_INTR_NO            0x88      /* AP响应BSP发来的跳出halt的IPI中断号 */
 
 #define AP_DEFAULT_TASK_NR    0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 
@@ -381,6 +382,8 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define VM_EXIT_REASON_IO_INFO_ADDR                 0x9F000
 #define VM_EXIT_REASON_TASK_SWITCH_INFO_ADDR        0x9E000
 #define VM_EXIT_REASON_CPUID_INFO_ADDR              0x9D000
+#define VM_HD_OPERATION_ADDR                        0x9C000
+#define VMM_VM_SHARED_SPACE_SEMAPHORE               0x9B000
 
 #define GUEST_KERNEL_CR3_PHY_ADDR             0x1000  /* GuestOS kernel CR3,所有进攻共享的部分 */
 #define GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR         0x1000000  /* 16M~20M */
@@ -392,6 +395,7 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 /* 通过cpuid指令触发VM-EXIT,用于不同的业务，这里针对不同的业务做了如下的区分 */
 #define VM_EXIT_REASON_CPUID_FOR_FREE_EPT_PAGE 1
 #define VM_EXIT_REASON_CPUID_FOR_SEND_EOI      2
+#define VM_EXIT_REASON_CPUID_FOR_GAME_OVER     3
 
 #define VMX_PREEMPTION_TIMER_VALUE       10000
 

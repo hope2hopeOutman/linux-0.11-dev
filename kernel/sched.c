@@ -136,20 +136,25 @@ void reset_cpu_load() {
 /* 计算哪个AP的负载最小，后续的task将会调度该AP执行。 */
 unsigned long get_min_load_ap() {
 	unsigned long apic_index = 1;  /* BSP不参与计算 */
-	int overload = 0;
+	int processor_overload_num = 0;
 	if (apic_ids[apic_index].load_per_apic == 0xFFFFFFFF) {
-		++overload;
+		++processor_overload_num;
 	}
 	for (int i=2;i<LOGICAL_PROCESSOR_NUM;i++) {
-		if (apic_ids[i].load_per_apic == 0xFFFFFFFF) {
-			++overload;
-			continue;
+		if (!apic_ids[i].vmx_entry_flag) { /* vmx_entry_flag=1 表明该processor不能用于HostOS调度执行其普通任务 */
+			if (apic_ids[i].load_per_apic == 0xFFFFFFFF) {
+				++processor_overload_num;
+				continue;
+			}
+			if (apic_ids[apic_index].load_per_apic > apic_ids[i].load_per_apic) {
+				apic_index = i;
+			}
 		}
-		if (apic_ids[apic_index].load_per_apic > apic_ids[i].load_per_apic) {
-			apic_index = i;
+		else {
+			++processor_overload_num; /* vmx_entry_flag=1的processor可以看成是一直overload. */
 		}
 	}
-	if (overload == LOGICAL_PROCESSOR_NUM-1) {
+	if (processor_overload_num == LOGICAL_PROCESSOR_NUM-1) {
 		reset_cpu_load();
 		return apic_ids[LOGICAL_PROCESSOR_NUM-1].apic_id;
 	}

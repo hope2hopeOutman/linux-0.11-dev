@@ -530,6 +530,11 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			else if (exit_reason_cpuid_info_p->exit_reason_no == VM_EXIT_REASON_CPUID_FOR_SEND_EOI) {
 				send_EOI();
 			}
+			else if (exit_reason_cpuid_info_p->exit_reason_no == VM_EXIT_REASON_CPUID_FOR_GAME_OVER) {
+				printk("GameOver on VM.\n\r");
+				unlock_op((ulong*)VMM_VM_SHARED_SPACE_SEMAPHORE);
+				__asm__ ("hlt;"::);
+			}
 			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
 			write_vmcs_field(GUEST_RIP_ENCODING, vm_exit_guest_rip + vm_exit_instruction_len);
@@ -598,15 +603,15 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 void init_guest_kernel_space() {
 	/* =============== 判断Guest-CR3对应的物理页是否存在,如果不存在分配一个Page并初始化 ===============*/
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
-	printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
+	//printk("cr3_guest_phy_addr: %08x\n\r", cr3_guest_phy_addr);
 	unsigned long ept_pml4_addr = read_vmcs_field(IA32_VMX_EPT_POINTER_FULL_ENCODING);
-	printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
+	//printk("ept_pml4_addr: %08x\n\r", ept_pml4_addr);
 	unsigned long ept_pdpt_addr = *((unsigned long*) (ept_pml4_addr & ~0xFFF));  /* PDPT表默认是预先分配好的 */
-	printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
+	//printk("ept_pdpt_addr: %08x\n\r", ept_pdpt_addr);
 	unsigned long ept_pdpt_index = cr3_guest_phy_addr>>30;
 	unsigned long ept_pdpt_entry = (ept_pdpt_addr & ~0xFFF) + ept_pdpt_index*8;
 	unsigned long ept_pd_phy_addr = *((unsigned long*)ept_pdpt_entry);
-	printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
+	//printk("ept_pd_phy_addr: %08x\n\r", ept_pd_phy_addr);
 	if (!(ept_pd_phy_addr & 0x07)) {
 		unsigned long addr = get_free_page(PAGE_IN_REAL_MEM_MAP);
 		*((unsigned long*)ept_pdpt_entry) = addr + 7;
@@ -627,7 +632,7 @@ void init_guest_kernel_space() {
 	else {
 		ept_pt_phy_addr &= ~0xFFF;
 	}
-	printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
+	//printk("ept_pt_phy_addr: %08x\n\r", ept_pt_phy_addr);
 
 	unsigned long ept_pt_index = (cr3_guest_phy_addr>>12) & 0x1FF;
 	unsigned long ept_pt_entry = ept_pt_phy_addr + ept_pt_index*8;
@@ -639,7 +644,7 @@ void init_guest_kernel_space() {
 		ept_page_phy_addr = addr;
 		/* 至此，已经为guest CR3分配一个实际物理页了，下面开始初始化该物理页，实地址映射guest linear addr. */
 		init_page_dir(ept_page_phy_addr);  //todo resume
-		printk("GuestOS task0.cr3.ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
+		//printk("GuestOS task0.cr3.ept_page_phy_addr: %08x\n\r", ept_page_phy_addr);
 	}
 	/* ============================================= Init Guest-CR3 End =============================================*/
 
@@ -723,7 +728,7 @@ void init_guest_gdt() {
 void set_io_bitmap() {
 	unsigned long guest_phy_io_bitmap_a_addr = read_vmcs_field(IA32_VMX_IO_BITMAP_A_FULL_ADDR_ENCODING);
 	unsigned long io_bitmap_a_base_addr = get_phy_addr(guest_phy_io_bitmap_a_addr);
-	printk("video_port_reg: %08x, video_port_val: %08x\n\r", video_port_reg, video_port_val);
+	//printk("video_port_reg: %08x, video_port_val: %08x\n\r", video_port_reg, video_port_val);
 	/* print函数触发VM-EXIT. */
 	unsigned long byte_offset = video_port_reg / 8;
 	unsigned long bit_offset  = video_port_reg % 8;
@@ -737,7 +742,7 @@ void set_io_bitmap() {
 /* 初始化VM中新进程的guest-cr3-shadow(用于控制对EPT-page-structure转化后得到的实际物理页的访问) */
 void init_guest_cr3_shadow(exit_reason_task_switch_struct* exit_reason_task_switch) {
 	ulong new_cr3_page = get_free_page(PAGE_IN_REAL_MEM_MAP_FOR_GUEST_CR3);
-	printk("host.new_cr3_page: %08x,guest.new_cr3_page: %08x\n\r", new_cr3_page, exit_reason_task_switch->new_task_cr3);
+	//printk("host.new_cr3_page: %08x,guest.new_cr3_page: %08x\n\r", new_cr3_page, exit_reason_task_switch->new_task_cr3);
 	if (new_cr3_page != exit_reason_task_switch->new_task_cr3) {
 		panic("host.new_cr3_page != guest.new_cr3_page\n\r");
 	}
@@ -769,4 +774,13 @@ void reset_guest_tss_status(ulong task_nr, ulong status) {
 			*tss_high_addr &= ((~0x00F00) | (9<<8));
 		}
 	}
+}
+
+/*
+ * 当VM因为preemption timer中断返回到VMM状态，如果这时收到来自BSP的HD_IPI中断，
+ * 那么这时应该先发送EOI, 然后返回到VM中去实际处理该中断,千万别在VMM状态下处理，因为VM有自己的FS且内存是EPT虚拟化的，
+ * 在VMM中处理后如何定位到VM中FS就太复杂了且效率也太差。
+ */
+void entry_vm_read_intr() {
+	printk("VMM response HD_IPI_INTR.\n\r");
 }

@@ -203,6 +203,7 @@ void main(void)		/* This really IS void, no error here. */
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
 	load_guest_os();
+	lock_op((ulong*)VMM_VM_SHARED_SPACE_SEMAPHORE);
 #if 1
 	init_ap();
 
@@ -212,9 +213,11 @@ void main(void)		/* This really IS void, no error here. */
 #else
 	vmx_env_entry();
 #endif
-	send_IPI(3, VMX_INTR_NO);
-	cli();
-	while(1);
+	send_IPI(3, VMX_IPI_INTR_NO);
+	//cli();
+	//while(1);
+	lock_op((ulong*)VMM_VM_SHARED_SPACE_SEMAPHORE);
+	hd_init();
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
 		init();

@@ -61,9 +61,9 @@ void init_ap() {
 
 	/* ============================= Init APIC timer for BSP ============================= */
 
-/*		"pushl $0x00\n\t"            \
+		"pushl $0x00\n\t"            \
 		"call init_apic_timer\n\t"   \
-		"popl %%eax\n\t"             \*/
+		"popl %%eax\n\t"             \
 
     /* ============================= End init APIC timer for BSP ========================= */
 

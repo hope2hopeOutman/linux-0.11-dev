@@ -58,7 +58,7 @@ void page_fault(void);
 void coprocessor_error(void);
 void reserved(void);
 void parallel_interrupt(void);
-void handle_ipi_interrupt(void);
+void handle_hd_ipi_interrupt(void);
 void irq13(void);
 
 static void die(char * str,long esp_ptr,long nr)
@@ -218,6 +218,7 @@ void ipi_intr_init(void)
 {
 	set_intr_gate(TOPOLOGY_INTR_NO,&parse_cpu_topology); /* 解析CPU的拓扑结构，例如有几个core，每个core是否支持HT */
 	set_intr_gate(SCHED_INTR_NO,&handle_sched_ipi_intr);
-	set_intr_gate(VMX_INTR_NO,&handle_vmx_ipi_intr);
-	set_intr_gate(HALT_EXIT_INTR_NO,&handle_halt_exit_intr);
+	set_intr_gate(VMX_IPI_INTR_NO,&handle_vmx_ipi_intr);
+	set_intr_gate(HALT_EXIT_IPI_INTR_NO,&handle_halt_exit_intr);
+	set_intr_gate(HD_IPI_INTR_NO,&handle_hd_ipi_interrupt);
 }
