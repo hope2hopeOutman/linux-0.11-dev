@@ -57,6 +57,7 @@ extern long total_memory_size;
 extern struct apic_info apic_ids[LOGICAL_PROCESSOR_NUM];
 extern volatile ulong load_guest_os_addr;
 extern volatile ulong load_guest_os_flag;
+extern ulong bsp_apic_default_location;
 
 
 long memory_end = 0;         /* Granularity is 4K */
@@ -202,6 +203,22 @@ void main(void)		/* This really IS void, no error here. */
 	buffer_init(buffer_memory_end);
 	floppy_init();
 	printk("mem_size: %u (granularity 4K) \n\r", memory_end);  /* 知道print函数为甚么必须在这里才有效吗嘿嘿。 */
+
+#if 0
+    /* 得到的结果是bsp (lint0:lint1):(0x8700:0x8400)
+     * 由此可以看出:
+     * BSP.lint0被初始化为ExtINT
+     * BSP.lint1被初始化为NMI
+     * 这也就是为什么AP上发起的HD_INTR默认是route到BSP上的
+     * CLI(BSP) 然后调用init_apic_lint0就能将HD_INTR route到AP上了.
+     * 和我之前猜测的一样，这里终于验证了，QEMU没有严格按照Intel的官方文档进行reset和init.
+     *
+     * 以下说明是"Figure 10-8. Local Vector Table (LVT)"中的原话.
+     * The mask bit for its associated LVT entry is set. Value After Reset: 0001 0000H
+     */
+	print_bsp_lint_values();
+#endif
+
 	load_guest_os();
 	/*
 	 * 一定要在send_IPI(3, VMX_ENTRY_IPI_INTR_NO)之前就加锁，
@@ -325,4 +342,12 @@ void load_guest_os() {
 	set_hd_intr_gate();
 	load_guest_os_flag = 1;
 	do_hd_read_request_in_vm(start_addr,1024*1024/512);
+}
+void print_bsp_lint_values() {
+	ulong linear_addr = remap_msr_linear_addr(bsp_apic_default_location);
+	ulong* msr_lint0_p =  (ulong* )(linear_addr + 0x350);
+	ulong* msr_lint1_p =  (ulong* )(linear_addr + 0x360);
+    printk("BSP (lint0:lint1):(%08x:%08x)\n\r", *msr_lint0_p, *msr_lint1_p);
+    recov_msr_swap_linear(linear_addr, linear_addr);
+    while(1);
 }
