@@ -55,12 +55,12 @@ __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 #if EMULATOR_TYPE
-unsigned char linear_msr_addr_swap_map[KERNEL_MSR_REMAP_ADDR_SPACE] = {0,};
+unsigned char linear_msr_addr_swap_map[KERNEL_MSR_REMAP_ADDR_SPACE_SIZE] = {0,};
 #endif
 unsigned char linear_addr_swap_map[KERNEL_REMAP_ADDR_SPACE] = {0,};
 unsigned long page_lock_semaphore = 0;              /* 用于同步get_free_page方法 */
-unsigned long remap_linear_addr_semaphore = 0;      /* 896M~1024M */
-unsigned long remap_msr_linear_addr_semaphore = 0;  /* 4k~640K    */
+unsigned long remap_linear_addr_semaphore = 0;      /* 128M: 896M~1024M */
+unsigned long remap_msr_linear_addr_semaphore = 0;  /* 128K: 8k~136K    */
 
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
@@ -80,8 +80,13 @@ void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 #if EMULATOR_TYPE
 void recov_msr_swap_linear(unsigned long linear_addr)
 {
+
 	if (linear_addr) {
+
+#if LOCK_FOR_KERNEL_MSR_REMAP
 		linear_msr_addr_swap_map[(linear_addr>>12)-KERNEL_MSR_REMAP_ADDR_START] = 0;
+#endif
+
 		/* 注意：这里是个大坑，要详细解释一下，后悔自己当初为什么不把内核地址空间分配在高地址空间>=3G
 		 * 因为QEMU不支持relocate APIC base address,所以只能使用其默认值，但是其默认物理地址是>1G(0xFEE00000)的，
 		 * 由于内核的地址空间是分配在低1G的地址空间，所以要访问>1G的地址空间就必须要重映射，这里用4K~640K(内核不用的低地址空间)地址范围remap >1G的物理地址，
@@ -107,14 +112,15 @@ void recov_msr_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 /* 对>3G的MSR物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long remap_msr_linear_addr(unsigned long phy_addr)
 {
+	unsigned long linear_addr = 0;
+	struct task_struct* current = get_current_task();
+#if LOCK_FOR_KERNEL_MSR_REMAP
 	/*
 	 * 当内存>3G时,内核用于映射>3G内存的保留线性地址空间也是多进程共享资源,所以一定要加锁同步,
 	 * 否则会导致多个>3G的内存页被映射到了相同的线性地址空间,导致系统崩溃,大坑一口哈哈.
 	 * */
     lock_op(&remap_msr_linear_addr_semaphore);
-	struct task_struct* current = get_current_task();
-	unsigned long linear_addr = 0;
-	for (int i=0; i< KERNEL_MSR_REMAP_ADDR_SPACE; i++)
+	for (int i=0; i< KERNEL_MSR_REMAP_ADDR_SPACE_SIZE; i++)
 	{
 		if (linear_msr_addr_swap_map[i] == 0)
 		{
@@ -126,8 +132,13 @@ unsigned long remap_msr_linear_addr(unsigned long phy_addr)
 	}
 	unlock_op(&remap_msr_linear_addr_semaphore);
 	if (!linear_addr) {
-		panic("Linear address has been full \n\r");
+		panic("remap_msr_linear_addr has been full \n\r");
 	}
+#else
+	ulong apic_id = get_current_apic_id();
+	linear_addr = (KERNEL_MSR_REMAP_ADDR_START + apic_id) << 12; /* 计算需要被重映射的内核空间线性地址 */
+	reset_swap_table_entry(linear_addr, phy_addr & 0xFFFFF000);
+#endif
 	invalidate(current->tss.cr3);
 	return linear_addr;
 }

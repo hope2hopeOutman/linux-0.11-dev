@@ -719,6 +719,3 @@ vm_exit_handler:
     popl %edi
     popl %ebp
     vmresume
-
-
-

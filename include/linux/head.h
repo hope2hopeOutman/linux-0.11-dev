@@ -112,8 +112,15 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
  * 1M的低地址范围内，4K~640K没有被使用，所以可以用来remap >3G物理地址空间的APIC base address.
  * */
 #if EMULATOR_TYPE
-#define KERNEL_MSR_REMAP_ADDR_START 0x0001   /* granularity 4K,起始地址空间是4K. */
-#define KERNEL_MSR_REMAP_ADDR_SPACE 0x009F   /* granularity 4K,可用于remap APIC base address的地址空间大小，636K=159*4K=0x9F*4K */
+/*
+ * 这里最大允许有64个processor(BSP+APs)
+ * 每个processor通过其APIC_ID预先分配好一个remap page，这样当读写apic MSR-regs的时候就不用通过加锁随机分配一个空闲的remap page给某个ap去执行send_EOI操作了，
+ * 这样做的好处是减小多核加锁竞争带来的性能消耗和死锁的风险，想想看当每个processor都开启了apic-timer后,这种竞争是多么的恐怖.
+ * 通过非加锁的方式实现MSRs的访问，系统现在稳定多了啦O(∩_∩)O哈哈~
+ */
+#define LOCK_FOR_KERNEL_MSR_REMAP        0x00     /* 0x00:为每个processor的MSRs分配一个固定的映射页; 0x01:通过加锁机制为每个processor的MSRs动态分配映射页 */
+#define KERNEL_MSR_REMAP_ADDR_START      0x0002   /* granularity 4K,起始地址是8K,地址0x00用于HostOS的内核目录表，地址0x4k用于GuestOS内核目录表 */
+#define KERNEL_MSR_REMAP_ADDR_SPACE_SIZE 0x0040   /* granularity 4K,可用于remap APIC base address的地址空间大小，64*4k=256K */
 
 #define IA32_VMX_BASIC                0x480
 #define IA32_VMX_PINBASED_CTLS        0x481
