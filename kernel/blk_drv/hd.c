@@ -21,6 +21,7 @@
 #include <asm/system.h>
 #include <asm/io.h>
 #include <asm/segment.h>
+#include <linux/head.h>
 
 #define MAJOR_NR 3
 #include "blk.h"
@@ -94,8 +95,8 @@ int sys_setup(void * BIOS)
 		hd_info[drive].lzone = *(unsigned short *) (12+BIOS);
 		hd_info[drive].sect = *(unsigned char *) (14+BIOS);
 		BIOS += 16;
-		/*printk("cyl: %d, head: %d, sect: %d, wpcom: %d, ctl: %d, lzone: %d \n\r ",
-				hd_info[drive].cyl, hd_info[drive].head, hd_info[drive].sect, hd_info[drive].wpcom, hd_info[drive].ctl, hd_info[drive].lzone);*/
+		printk("cyl: %d, head: %d, sect: %d, wpcom: %d, ctl: %d, lzone: %d \n\r ",
+				hd_info[drive].cyl, hd_info[drive].head, hd_info[drive].sect, hd_info[drive].wpcom, hd_info[drive].ctl, hd_info[drive].lzone);
 	}
 	if (hd_info[1].cyl)
 		NR_HD=2;
@@ -243,9 +244,30 @@ static void reset_hd(int nr)
 		hd_info[nr].cyl,WIN_SPECIFY,&recal_intr);
 }
 
+ulong get_vm_hd_oper() {
+	return *(ulong* )VM_HD_OPERATION_ADDR;
+}
+
 void unexpected_hd_interrupt(void)
 {
-	printk("Unexpected HD interrupt\n\r");
+	ulong vm_hd_oper = get_vm_hd_oper();
+	if (vm_hd_oper == WIN_SPECIFY) {
+
+	}
+	else if (vm_hd_oper == WIN_RESTORE) {
+
+	}
+	else if (vm_hd_oper == WIN_READ) {
+
+	}
+	else if (vm_hd_oper == WIN_WRITE) {
+
+	}
+	else {
+
+	}
+	send_IPI(3,HD_IPI_INTR_NO);
+	//printk("Unexpected HD interrupt\n\r");
 }
 
 static void bad_rw_intr(void)

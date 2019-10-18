@@ -77,6 +77,9 @@ PG_TAB_BASE_ADDR   = 0x100000   /* 内核页表起始地址,4M大小可以管理
  */
 OS_PRELOAD_SIZE    = 0x8000
 
+/* VM-EXIT reason for task-switch */
+VM_EXIT_TASK_SWITCH = 0x09
+
 /*
  * 1. Bochs linux版本
  * Deprecated: 因为bochs模拟>1G的内存有问题，不是很稳定，我在linux上自己重编了bochs并将--enable-large-mem选项也加上了，但是>1G还是有问题，这里不纠结了。
@@ -92,7 +95,7 @@ KERNEL_LINEAR_ADDR_SPACE = 0x40000    /* granularity 4K (1G)   */
 AP_DEFAULT_TASK_NR = 0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
 
 .text
-.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size
+.globl idt,gdt,tmp_floppy_area,params_table_addr,load_os_addr,hd_read_interrupt,hd_intr_cmd,check_x87,total_memory_size,vm_exit_handler
 .globl startup_32,sync_semaphore,idle_loop,ap_default_loop,task_exit_clear,globle_var_test_start,globle_var_test_end,init_pgt
 startup_32:
 	movl $0x10,%eax
@@ -297,6 +300,7 @@ hd_read_interrupt:
 	mov %ax,%fs
 	movb $0x20,%al
 	outb %al,$0xA0		# EOI to interrupt controller #1
+
 	jmp 1f			    # give port chance to breathe
 1:	jmp 1f
 
@@ -304,14 +308,28 @@ hd_read_interrupt:
     movl %ds:hd_intr_cmd,%edx
     cmpl $HD_INTERRUPT_READ,%edx
     jne omt
+
 	call do_read_intr	# interesting way of handling intr.
-omt:pop %fs
+/*
+    cmp $0,read_from_ap
+    je omt
+    subl $1,nsects_one_time
+    cmp $0,nsects_one_time
+    jne omt
+    pushl $0x85
+    pushl $0x03
+    call send_IPI
+    popl %eax
+    popl %eax
+*/
+omt:
+    pop %fs
 	pop %es
 	pop %ds
 	popl %edx
 	popl %ecx
 	popl %eax
-	iret
+    iret
 /* init stack struct for lss comand to load. */
 .align 4
 temp_stack:
@@ -630,15 +648,33 @@ enable_paging:
 	call init_apic_timer
 	popl %eax
 
-    pushl %eax    /* 作为start_apic_timer的apic_index参数 */
+
+    cmp $3,%eax
+    jne 1f
+    /* Directly connect 8259A to APIC lint0, and make AP-APIC can receive HD-INTR,
+     * HD-INTR will defaultly route to BSP,if we don't set 8259A to AP-lint0/lint1,
+     * Note, just one APIC can directly connect to 8259A PIC (Intel page defined)
+     */
+
+	//call init_apic_lint0
+
+	1:
 	addl $0x01,%ds:apic_index
     subl $1,%ds:sync_semaphore
 
-    /* 开启AP timer */
+    /* 是否开启AP timer
+     *
+     * 这里选择在AP init的时候不开启APs的apic_timer
+     * 这样做的原因还是为了HostOS的稳定性，因为这时就开启了timer，AP就会对不停的执行schedule进而执行lock_op和unlock_op操作，
+     * 偶尔会导致莫名奇妙的死锁，之前没加VMX feature没有这种情况，加了VMX后就偶尔有这种情况产生，不知道是qemu的问题，还是我程序的问题，
+     * 调试了n次都没问题，但是直接运行，就是偶尔会死锁,等VM运行完GuestOS后，再开启AP的timer就再也不会出现死锁了.
+     */
+    movl $3,%eax
+    cmp $3,%eax  /* apic_id=3用来开启VMX，所以这里判断如果在该ap中开启VMX就先不开启timer. */
+    je idle_loop
+    pushl %eax    /* 作为start_apic_timer的apic_index参数 */
     call start_apic_timer
     popl %eax
-
-    hlt
 idle_loop:
     hlt
     xorl %ebx,%ebx
@@ -657,5 +693,29 @@ ap_default_loop:
     xorl %eax,%eax
     jmp ap_default_loop
 
-
-
+/*
+ *  这里详细解释下为什么要保存Guest的通用寄存器值,而且为什么要在这里保存而不是在C函数中通过嵌入式汇编保存.
+ *  1. 如果基于寄存器进行寻址的话, 一定要备份Guest通用寄存器的值
+ *     例如 movl Ox4(%%eax),%%ecx
+ *     通过上面方式寻址时出现page-fault错误的话，那么当处理完page-fault后执行vmresume,eax寄存器的值很可能会改变的，这时得到的就不是想要的值了
+ *     程序会出错，例如lock_op就会遇到这样的问题，在处理完page-fault后,这个问题太难排查了，压根就没往这方面想.
+ *  2. 如果在C函数的开头嵌入这些备份汇编，GCC优化后就不是你想要的顺序了,备份会有问题.
+ *     所以在汇编文件里加入备份代码最保险了.
+*/
+vm_exit_handler:
+    pushl %ebp
+    pushl %edi
+    pushl %esi
+    pushl %edx
+    pushl %ecx
+    pushl %ebx
+    pushl %eax
+    call vm_exit_diagnose
+    popl %eax
+    popl %ebx
+    popl %ecx
+    popl %edx
+    popl %esi
+    popl %edi
+    popl %ebp
+    vmresume

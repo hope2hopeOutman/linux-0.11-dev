@@ -249,14 +249,22 @@ gdt_descr:
     .word 0x2800,0x0050
     .word 0
 /*
- * 因为bootsect.s占用一个sector,这里设置ap_init起始地址是第8个sector开始处，
- * 链接后，加上bootsect.s占用的一个sector,ap_init就是从第九个sector开始了，所以是4K对齐的,这样做就是为了AP能处理SIFI中断消息，这里稍微有点tricky。
- * 这也是内核很有魅力的地方，如今已进入知命境，想怎么玩都可以了，下一步就要适配MESI还有根据thermal&performance monitor(这是实现cgroup的根本)将进程调度到合适的processor上，
- * 搞完这些应该就是知命上品了吧，当然夫子的无矩境是神往哈哈。
+ * 下面解释下，为什么ap_sipi在本文件中要放置在0xE00地址处:
+ *
+ *	  1. 因为bootsect.s占用一个sector(0x200),从第0个sector开始,这里设置ap_init起始地址(ap_sipi)是第7个sector开始，
+ *	     合并后(注意这里不能用链接，容易产生歧义)，加上bootsect.s占用的一个sector,这样ap_sipi就是从第8个sector开始了，所以是4K对齐的,
+ *	     这样做就是为了AP能处理SIFI中断消息，这里稍微有点tricky。
+ *	     这里再额外解释下，为什么ap_sipi代码段要将ds,fs,es的基地址设置为0x90200
+ *	     因为bootsect.s,setup.s和后面的kernel分别被编译成单独的可执行程序的，所以是先去掉这三个可执行的header，
+ *	     然后再把他们合并成一个文件的，所以每个可执行文件里的相对寻址都是独立的,所以setup.s的段基地址要加上一个sector，想想看是不是这样.
+ *	  2. 这也是内核很有魅力的地方，如今已进入知命境，想怎么玩都可以了.
+ *	     下一步就要适配MESI还有根据thermal&performance monitor(这是实现cgroup的根本)将进程调度到合适的processor上，
+ *	     搞完这些应该就是知命上品了吧，当然夫子的无矩境是神往哈哈。
  */
 .org 0xE00
-ap_sipi:
-    mov ax,#0x9020   !这里的基地址就是0x90200,必须要加上bootsect.s占用的512个字节
+ap_sipi:              /* 内核链接后，ap_sipi所在的位置 */
+    /* 这里的基地址就是0x90200,必须要加上bootsect.s占用的512个字节 */
+    mov ax,#0x9020
     mov ds,ax
     mov fs,ax
     mov es,ax
@@ -268,21 +276,6 @@ ap_sipi:
 	mov	ax,#0x0001	                 ! protected mode (PE) bit
 	lmsw	ax		                 ! load machine status word,set CR0 bit
 	jmpi	0x500000+0x4000,8	     ! jmp offset 0 of segment 8 (cs),这里的cs的基地址是0x00，所以这里要计算segment_init实际的offset.
-
-/*
-segment_init:
-    mov ax,0x10
-    mov ds,ax
-    mov ss,ax
-    mov fs,ax
-    mov es,ax
-
-sipi_nop_loop:
-    nop
-    nop
-    nop
-    jmp sipi_nop_loop
-*/
 
 /*
  * 实地址模式下，处理IFI中断消息

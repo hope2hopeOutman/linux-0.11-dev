@@ -17,7 +17,14 @@
 #define OS_SIZE 0x80000         /* 因为当前的OS只有不到120K,所以这里先把OS的大小设置为512K,以后随着功能扩展，OS会变大的，自己调整就行了。 */
 #define OS_PRELOAD_SIZE 0x8000  /* 被预加载的OS-CODE大小，这部分代码用于加载剩余的OS-CODE，OS-CODE完全加载后再初始化内核。 */
 extern void hd_read_interrupt(void);
-extern long params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
+volatile ulong hd_interrupt_semaphore = 0;
+extern volatile ulong params_table_addr, load_os_addr, hd_intr_cmd, total_memory_size;
+ulong load_guest_os_flag = 0; /* This flag indicate do_read_intr loading data whether are GuestOS code */
+volatile ulong load_guest_os_addr = 0xC00000;
+volatile ulong nsects_one_time = 0;
+volatile ulong hd_intr_count   = 0;
+volatile ulong next_instruction_addr = 0;
+ulong read_from_ap = 0x00;
 #define OS_PARAMS_ADDR(total_mem_4k_size) \
 					((total_mem_4k_size >= KERNEL_LINEAR_ADDR_SPACE) ? ((KERNEL_LINEAR_ADDR_SPACE-OS_INIT_PARAMS_LIMIT)<<12) :\
 					  ((total_mem_4k_size-OS_INIT_PARAMS_LIMIT)<<12)\
@@ -51,6 +58,10 @@ __asm__("pushl %%edx\n\t" \
 	  "m" (*((addr)+6)), \
 	  "d" (limit))
 
+void print_hd_ap(){
+	printk("read times greater than nsects_one_time\n\r");
+}
+
 /* 这里也要讲内存转换成以4K为单位的总大小. */
 void move_params_to_memend() {
 	unsigned long totalMem  = 0;
@@ -74,8 +85,25 @@ int do_controller_ready(int retries) {
 	return (retries);
 }
 
+void do_retries(int retries) {
+	while (--retries) {
+		__asm__ ("nop;nop;nop"::);
+	}
+}
+
+#define enter_halt()                             \
+__asm__ ("hlt\n\t"                               \
+	     ::);                                    \
+
+
 void set_hd_intr_gate() {
 	set_intr_gate(0x2E, &hd_read_interrupt);
+	outb_p(inb_p(0x21)&0xfb, 0x21);
+	outb(inb_p(0xA1)&0xbf, 0xA1);
+}
+
+void set_hd_intr_gate_in_vm(struct desc_struct * guest_idt_p) {
+	set_intr_gate_in_vm(guest_idt_p, 0x2E, &hd_read_interrupt);
 	outb_p(inb_p(0x21)&0xfb, 0x21);
 	outb(inb_p(0xA1)&0xbf, 0xA1);
 }
@@ -96,16 +124,20 @@ void do_hd_read_out(unsigned int drive, unsigned int nsect, unsigned int sect,
 		HdParamsT* hd_params) {
 	register int port asm("dx");
 	int retries = 10000;
-	repeat: if (!do_controller_ready(retries)) {
+	repeat:
+	if (!do_controller_ready(retries)) {
 		retries = 10000;
 		goto repeat;
 	};
 
+	//lock_op(&hd_interrupt_semaphore);
 	if (cmd == WIN_READ) {
 		hd_intr_cmd = WIN_READ;
 	} else {
 		hd_intr_cmd = 0;
 	}
+	//unlock_op(&hd_interrupt_semaphore);
+
 	outb_p(hd_params->ctl, HD_CMD);
 	port = HD_DATA;
 	outb_p(hd_params->wpcom>>2, ++port);
@@ -137,9 +169,12 @@ void do_reset_controller(HdParamsT* hd_params) {
 	for (i = 0; i < 100; i++)
 		nop();
 	outb(hd_params->ctl & 0x0f, HD_CMD);
+	retry:
 	if (do_drive_busy()) {
+		goto retry;
 	}
 	if ((i = inb(HD_ERROR)) != 1) {
+		//goto retry;
 	}
 }
 
@@ -153,8 +188,15 @@ void do_read_intr() {
 	if (do_win_result()) {
 		return;
 	}
-	port_read(HD_DATA, load_os_addr, 256);
-	load_os_addr += 512;
+	if (!load_guest_os_flag) {
+		port_read(HD_DATA, load_os_addr, 256);
+		load_os_addr += 512;
+	}
+	else {
+		port_read(HD_DATA, load_guest_os_addr, 256);
+		load_guest_os_addr += 512;
+		++hd_intr_count;
+	}
 }
 
 /* 这块是加载剩余OS-CODE的方法，具体如何访问硬盘参见bootsect.s，那里有我详细的注释。 */
@@ -162,11 +204,11 @@ void do_hd_read_request(void) {
 	HdParamsT hd_params;
 
 	hd_params.cyl   = *(unsigned short *) (0  + 0x90080);
-	hd_params.head  =  *(unsigned char *) (2  + 0x90080);
+	hd_params.head  = *( unsigned char *) (2  + 0x90080);
 	hd_params.wpcom = *(unsigned short *) (5  + 0x90080);
-	hd_params.ctl   =  *(unsigned char *) (8  + 0x90080);
+	hd_params.ctl   = *( unsigned char *) (8  + 0x90080);
 	hd_params.lzone = *(unsigned short *) (12 + 0x90080);
-	hd_params.sect  =  *(unsigned char *) (14 + 0x90080);
+	hd_params.sect  = *( unsigned char *) (14 + 0x90080);
 
 	unsigned int block, dev = 0;
 	unsigned int sec, head, cyl, sread;
@@ -212,17 +254,81 @@ void do_hd_read_request(void) {
 	 *  the sync not only by high level app, but also should be concern in kernel. the correct logic sometimes can not make you have the right result,
 	 *  in kernel the nop[1...n] command is very important sometimes, sync anytime anywhere.
 	 */
+
+}
+
+void set_seg_limit(void* addr, unsigned long limit){
+   limit -=1;              /* limit的粒度G设置为1(4k) */
+   set_limit(addr, limit);
+}
+
+/* Just for test HD I/O in VM whether can work well */
+void do_hd_read_request_in_vm(unsigned long start_addr, unsigned long sectors) {
+	HdParamsT hd_params;
+
+	hd_params.cyl   = *(unsigned short *) (0  + 0x90080);
+	hd_params.head  = *(unsigned  char *) (2  + 0x90080);
+	hd_params.wpcom = *(unsigned short *) (5  + 0x90080);
+	hd_params.ctl   = *(unsigned  char *) (8  + 0x90080);
+	hd_params.lzone = *(unsigned short *) (12 + 0x90080);
+	hd_params.sect  = *(unsigned  char *) (14 + 0x90080);
+
+	unsigned int block, dev = 0;
+	unsigned int sec, head, cyl, sread;
+	unsigned int nsect;
+	unsigned int totalNeedSects = sectors; /* 读取硬盘1M地址处开始的4K OS code. */
+	block = start_addr / 512;              /* 1M，因为现代硬盘的引导区已经扩展到1M了(不是以前的1个扇区了)，所以OS代码是放在1M硬盘空间的开始处的. */
+
+	do_reset_hd(dev, &hd_params); /* reset hd. */
+	do_hd_read_out(dev, hd_params.sect, 0, 0, 0, WIN_RESTORE, &hd_params); /* recalibrate HD. */
+
+	__asm__("divl %4":"=a" (block),"=d" (sec):"0" (block),"1" (0),
+			"r" (hd_params.sect));
+	__asm__("divl %4":"=a" (cyl),"=d" (head):"0" (block),"1" (0),
+			"r" (hd_params.head));
+
+	sread = sec++;
+	while (totalNeedSects) {
+		if ((hd_params.sect - sread) <= totalNeedSects) {
+			nsect = hd_params.sect - sread;
+		} else {
+			nsect = totalNeedSects;
+		}
+
+		nsects_one_time = nsect;
+		read_from_ap = 1;
+		ulong prev_load_guest_os_addr = load_guest_os_addr;
+
+		do_hd_read_out(dev, nsect, sec, head, cyl, WIN_READ, &hd_params);
+
+#if 1
+		//enter_halt();
+#else
+		retry:
+		if ((load_guest_os_addr - prev_load_guest_os_addr) != nsect*512) {
+			goto retry;
+		}
+#endif
+
+		totalNeedSects -= nsect;
+		sread += nsect;
+		if (sread == hd_params.sect) {
+			sread = 0;
+			sec = 1;
+			if (head == (hd_params.head - 1)) {
+				++cyl;
+				head = 0;
+			} else {
+				++head;
+			}
+		}
+	}
 	if (!totalNeedSects) {
 		int retries = 10000;
 		repeat:
 		if (!do_controller_ready(retries)) {
 			retries = 10000;
 			goto repeat;
-		};
+		}
 	}
-}
-
-void set_seg_limit(void* addr, unsigned long limit){
-   limit -=1;              /* limit的粒度G设置为1(4k) */
-   set_limit(addr, limit);
 }

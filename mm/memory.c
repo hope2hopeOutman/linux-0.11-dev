@@ -55,12 +55,12 @@ __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024))
 
 unsigned char mem_map [MAX_PAGING_PAGES] = {0,};
 #if EMULATOR_TYPE
-unsigned char linear_msr_addr_swap_map[KERNEL_MSR_REMAP_ADDR_SPACE] = {0,};
+unsigned char linear_msr_addr_swap_map[KERNEL_MSR_REMAP_ADDR_SPACE_SIZE] = {0,};
 #endif
 unsigned char linear_addr_swap_map[KERNEL_REMAP_ADDR_SPACE] = {0,};
 unsigned long page_lock_semaphore = 0;              /* 用于同步get_free_page方法 */
-unsigned long remap_linear_addr_semaphore = 0;      /* 896M~1024M */
-unsigned long remap_msr_linear_addr_semaphore = 0;  /* 4k~640K    */
+unsigned long remap_linear_addr_semaphore = 0;      /* 128M: 896M~1024M */
+unsigned long remap_msr_linear_addr_semaphore = 0;  /* 128K: 8k~136K    */
 
 /* 根据linear_addr可以定位到内核页表具体的页表项，然后用phy_addr设置该页表项，完成访问>(1G-128M)物理内存的重映射。 */
 void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
@@ -80,8 +80,13 @@ void reset_swap_table_entry(unsigned long linear_addr, unsigned long phy_addr)
 #if EMULATOR_TYPE
 void recov_msr_swap_linear(unsigned long linear_addr)
 {
+
 	if (linear_addr) {
+
+#if LOCK_FOR_KERNEL_MSR_REMAP
 		linear_msr_addr_swap_map[(linear_addr>>12)-KERNEL_MSR_REMAP_ADDR_START] = 0;
+#endif
+
 		/* 注意：这里是个大坑，要详细解释一下，后悔自己当初为什么不把内核地址空间分配在高地址空间>=3G
 		 * 因为QEMU不支持relocate APIC base address,所以只能使用其默认值，但是其默认物理地址是>1G(0xFEE00000)的，
 		 * 由于内核的地址空间是分配在低1G的地址空间，所以要访问>1G的地址空间就必须要重映射，这里用4K~640K(内核不用的低地址空间)地址范围remap >1G的物理地址，
@@ -90,7 +95,7 @@ void recov_msr_swap_linear(unsigned long linear_addr)
 		 * 因此，当新进程(NR>1)在执行do_execve().free_page_tables().free_page()的时候，会报“trying to free nonexistent page”。
 		 * 如果内存是4G的话，这段内存就只能定义为preseverd mem,而不能放到mem_map中被进程所使用。
 		 * 后面会完善这块？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？ */
-		reset_swap_table_entry(linear_addr, 0);
+		reset_swap_table_entry(linear_addr & (~0xFFF), linear_addr & (~0xFFF));
 	}
 }
 
@@ -107,14 +112,15 @@ void recov_msr_swap_linear_addrs(unsigned long* linear_addrs, int length) {
 /* 对>3G的MSR物理地址进行重映射。返回的是被重映射的内核线性地址 */
 unsigned long remap_msr_linear_addr(unsigned long phy_addr)
 {
+	unsigned long linear_addr = 0;
+	struct task_struct* current = get_current_task();
+#if LOCK_FOR_KERNEL_MSR_REMAP
 	/*
 	 * 当内存>3G时,内核用于映射>3G内存的保留线性地址空间也是多进程共享资源,所以一定要加锁同步,
 	 * 否则会导致多个>3G的内存页被映射到了相同的线性地址空间,导致系统崩溃,大坑一口哈哈.
 	 * */
     lock_op(&remap_msr_linear_addr_semaphore);
-	struct task_struct* current = get_current_task();
-	unsigned long linear_addr = 0;
-	for (int i=0; i< KERNEL_MSR_REMAP_ADDR_SPACE; i++)
+	for (int i=0; i< KERNEL_MSR_REMAP_ADDR_SPACE_SIZE; i++)
 	{
 		if (linear_msr_addr_swap_map[i] == 0)
 		{
@@ -126,8 +132,13 @@ unsigned long remap_msr_linear_addr(unsigned long phy_addr)
 	}
 	unlock_op(&remap_msr_linear_addr_semaphore);
 	if (!linear_addr) {
-		panic("Linear address has been full \n\r");
+		panic("remap_msr_linear_addr has been full \n\r");
 	}
+#else
+	ulong apic_id = get_current_apic_id();
+	linear_addr = (KERNEL_MSR_REMAP_ADDR_START + apic_id) << 12; /* 计算需要被重映射的内核空间线性地址 */
+	reset_swap_table_entry(linear_addr, phy_addr & 0xFFFFF000);
+#endif
 	invalidate(current->tss.cr3);
 	return linear_addr;
 }
@@ -227,11 +238,11 @@ unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigne
  * 就应该用保留线性地址remap了，而不是>512M物理内存才需要映射，这里有个概念一定要记住：内核地址空间是512M并不代表属于内核的物理地址就有512M，
  * 这个512M的地址空间指的是线性地址空间是属于内核的，而不是物理地址。
  * 所以传给%ebx寄存器的值应该是KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES，从这块物理地址开始比较，而不是从512M开始。
- * 参数real_space的值有两个：0和1
+ * 参数real_space的值有3个：0,1和2
  * 这个参数的值有意义的前提是，内存>512M,本版本规定的最大进程数为1K，一个进程占用8K(task_struct+dir)内核实地址映射的内存,总共占用8M。
- * 1:表示分配的物理页地址<(main_memory_start+8M/4K),也就是来自于mem_map开始8M部分，内核实地址映射的物理页,
- *   本系统是将进程的task_struct和目录表分配在开始的8M空间，是实地址映射的可以直接访问，不需要remap。
- * 0:表示分配的物理页来自于整个mem_map管理的内存页,可以来自于实地址或非实地址映射的物理页。
+ * 2:表示分配的物理页地址范围是(main_memory_start,    main_memory_start+4M),共4M大小,用于实地址映射GuestOS中每个进程的CR3
+ * 1:表示分配的物理页地址范围是(main_memory_start+4M,main_memory_start+36M),共32M大小,这部分内存一定是实地址映射的
+ * 0:表示分配的物理页地址范围是(main_memory_start+36M,mem_end),共(mem_end-main_memory_start-36)M大小,这部分内存是否是实地址映射，要根据总内存的大小来判定。
  */
 unsigned long get_free_page(int real_space)
 {
@@ -244,67 +255,75 @@ lock_op(&page_lock_semaphore);
 
 register unsigned long __res asm("ax");
 unsigned long compare_addr = KERNEL_LINEAR_ADDR_SPACE;
-unsigned long paging_num = PAGING_PAGES;
+unsigned long paging_num = PAGING_PAGES;  /* Granularity: 4K */
 unsigned long paging_end = mem_map+(PAGING_PAGES-1);
-unsigned long paging_start = LOW_MEM;
+unsigned long paging_start = LOW_MEM;     /* Granularity: Byte */
+ulong permanent_real_addr_mapping_space = 0x8000;   /* Granularity 4K (128M permanent real-address mapping space) */
+ulong permanent_real_addr_mapping_for_guest_cr3 = 0x400; /* Granularity 4K (4M permanent real-address mapping space),GuestOS中可以有最大1024个进程 */
 
 if (memory_end > KERNEL_LINEAR_ADDR_SPACE)  /* 判断实际的物理内存是否>512M,只有>512M才会在内核空间开辟保留空间用于映射>(512M-64M)的物理内存。 */
 {
-	if (real_space) { /* 这里将会在分页内存区的开始8M(这个值由最大进程数确定)空间，寻找空闲页，用于存储task_struct和目录表 */
-		paging_num = NR_TASKS*2;               /* Granularity is 4K. */
+	if (real_space == 2) {
+		paging_num = permanent_real_addr_mapping_for_guest_cr3;
 		/* 从main_memory_start开始的paging_num个物理页专用于存储进程的task_struc和dir的，这部分物理页是肯定在内核的实地址寻址空间的 */
 		paging_end = mem_map + (paging_num -1);
 	}
+	else if (real_space == 1) { /* 这里将会在分页内存区的开始8M(这个值由最大进程数确定)空间，寻找空闲页，用于存储task_struct和目录表 */
+		paging_num = permanent_real_addr_mapping_space;
+		/* 从main_memory_start开始的paging_num个物理页专用于存储进程的task_struc和dir的，这部分物理页是肯定在内核的实地址寻址空间的 */
+		paging_end = mem_map + permanent_real_addr_mapping_for_guest_cr3 + (paging_num -1);
+		paging_start += (permanent_real_addr_mapping_for_guest_cr3<<12);
+	}
 	else {
 		/* 如果分配的物理页不是用于task_struct和dir, 那么要从内存的最高物理页开始查找，查找的总的物理页数不包括task_struc和dir专用的物理页。 */
-		paging_num = (PAGING_PAGES-NR_TASKS*2);
-		paging_start += ((NR_TASKS*2)<<12);
+		paging_num = (PAGING_PAGES - permanent_real_addr_mapping_space - permanent_real_addr_mapping_for_guest_cr3);
+		paging_start += ((permanent_real_addr_mapping_space + permanent_real_addr_mapping_for_guest_cr3)<<12);
 	}
-	/* 当分配的物理页大于(512-64)M的时候，就得remap了，才能对该物理页进行初始化操作。 */
+	/* 当分配的物理页大于(1024-128)M的时候，就得remap了，才能对该物理页进行初始化操作。 */
 	compare_addr = KERNEL_LINEAR_ADDR_SPACE-KERNEL_REMAP_ADDR_SPACE;
 }
 
 __asm__("std ; repne ; scasb\n\t"
-	"jne 2f\n\t"
-	"movb $1,1(%%edi)\n\t"
-	"sall $12,%%ecx\n\t"          /* 这里自己动手挖了个大坑，差点把自己埋了，当paging_num = (PAGING_PAGES-NR_TASKS*2)时，计算地址的时候要加上NR_TASKS*2，mama */
-	"addl %2,%%ecx\n\t"
-	"shl $12,%%ebx\n\t"
-    "cmp %%ebx,%%ecx\n\t"          /* 根据内存的实际大小和要访问的物理地址页，决定是否需要remap该物理地址才能初始化它 */
-    "jl 1f\n\t"
-	"pushl %%ecx\n\t"              /* 可用的物理页地址且>(512M-64M),ecx中存储的新分配物理页地址的granularity是byte */
-	"call remap_linear_addr\n\t"   /* 将该物理页地址与内核的后128M(1G线性地址空间)某个线性地址页绑定  */
-	"popl %%ecx\n\t"               /* 弹出要被remap的>(1G-128)的物理地址 */
-	"pushl %%ecx\n\t"              /* 将被重映射的>(512-64)M的物理地址存储栈中，后面的函数返回值会用到 */
-	"pushl %%eax\n\t"              /* 将被remap的线性地址入栈,调用remap_linear_addr后的返回值放在eax中，为后面调用recov_swap_linear做准备 */
-	//"movl $0x0,%%ecx\n\t"        /* 这里不能用目录地址0了，应该根据current->tss.cr3设置，从而让TLB失效。这里也是个巨坑，其实在remap_linear_addr中已经刷新过了，这里再设置成dir=0就有问题了。 */
-	//"movl %%ecx,%%cr3\n\t"       /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
-	"movl %%eax,%%edx\n\t"         /* 将内核地址空间后128M的被重映射的线性地址，放入edx */
-	"xorl %%eax,%%eax\n\t"         /* 将eax清零，后面的rep stosl指令要用eax中的值初始化这个物理页,这又是自己挖的坑啊想哭 */
-	"movl $1024,%%ecx\n\t"
-	"leal 4092(%%edx),%%edi\n\t"   /* 将该线性地址对应的实际物理地址(>(1G-128M))初始化为0 */
-	"rep ; stosl\n\t"
-	"call recov_swap_linear\n\t"   /* 释放该被remap的线性地址，这样该线性地址就可以被映射到其他>1G-128M的物理地址了 */
-	"popl %%eax\n\t"               /* 这时弹出是被选定的用于remap的线性地址 */
-	"popl %%eax\n\t"               /* 这时弹出的是被remp的物理地址>512M-64M */
-	"jmp 2f\n\t"
-	"1:\n\t"
-	"movl %%ecx,%%edx\n\t"         /* 这时ecx存储是的内核实地址映射的物理地址 */
-	"movl $1024,%%ecx\n\t"
-	"leal 4092(%%edx),%%edi\n\t"   /* 将该物理地址页初始化为0 */
-	"rep ; stosl\n\t"
-	"movl %%edx,%%eax\n\t"         /* 将该物理地址页放入eax，作为返回值。 */
-	"2:\n\t"
-	"cld\n\t"
-	"lea page_lock_semaphore,%%ebx\n\t"
-	"pushl %%eax\n\t"              /* eax作为get_free_page函数的返回值,这里必须要备份一下,因为下面unlock_op函数调用会重置eax,作为返回值,即使该函数是void类型 */
-	"pushl %%ebx\n\t"
-	"call unlock_op\n\t"
-	"popl %%ebx\n\t"
-	"popl %%eax\n\t"
-	:"=a" (__res)
-	:"0" (0),"r" (paging_start),"c" (paging_num),
-	"D" (paging_end), "b" (compare_addr));
+		"jne 2f\n\t"
+		"movb $1,1(%%edi)\n\t"
+		"sall $12,%%ecx\n\t"          /* 这里自己动手挖了个大坑，差点把自己埋了，当paging_num = (PAGING_PAGES-NR_TASKS*2)时，计算地址的时候要加上NR_TASKS*2，mama */
+		"addl %2,%%ecx\n\t"
+		"shl $12,%%ebx\n\t"
+		"cmp %%ebx,%%ecx\n\t"          /* 根据内存的实际大小和要访问的物理地址页，决定是否需要remap该物理地址才能初始化它 */
+		"jl 1f\n\t"
+		"pushl %%ecx\n\t"              /* 可用的物理页地址且>(512M-64M),ecx中存储的新分配物理页地址的granularity是byte */
+		"call remap_linear_addr\n\t"   /* 将该物理页地址与内核的后128M(1G线性地址空间)某个线性地址页绑定  */
+		"popl %%ecx\n\t"               /* 弹出要被remap的>(1G-128)的物理地址 */
+		"pushl %%ecx\n\t"              /* 将被重映射的>(512-64)M的物理地址存储栈中，后面的函数返回值会用到 */
+		"pushl %%eax\n\t"              /* 将被remap的线性地址入栈,调用remap_linear_addr后的返回值放在eax中，为后面调用recov_swap_linear做准备 */
+		//"movl $0x0,%%ecx\n\t"        /* 这里不能用目录地址0了，应该根据current->tss.cr3设置，从而让TLB失效。这里也是个巨坑，其实在remap_linear_addr中已经刷新过了，这里再设置成dir=0就有问题了。 */
+		//"movl %%ecx,%%cr3\n\t"       /* 重置CR3内核目录表寄存器，达到刷新TLB的作用，因为有些线性地址被重映射了 */
+		"movl %%eax,%%edx\n\t"         /* 将内核地址空间后128M的被重映射的线性地址，放入edx */
+		"xorl %%eax,%%eax\n\t"         /* 将eax清零，后面的rep stosl指令要用eax中的值初始化这个物理页,这又是自己挖的坑啊想哭 */
+		"movl $1024,%%ecx\n\t"
+		"leal 4092(%%edx),%%edi\n\t"   /* 将该线性地址对应的实际物理地址(>(1G-128M))初始化为0 */
+		"rep ; stosl\n\t"
+		"call recov_swap_linear\n\t"   /* 释放该被remap的线性地址，这样该线性地址就可以被映射到其他>1G-128M的物理地址了 */
+		"popl %%eax\n\t"               /* 这时弹出是被选定的用于remap的线性地址 */
+		"popl %%eax\n\t"               /* 这时弹出的是被remp的物理地址>512M-64M */
+		"jmp 2f\n\t"
+		"1:\n\t"
+		"movl %%ecx,%%edx\n\t"         /* 这时ecx存储是的内核实地址映射的物理地址 */
+		"movl $1024,%%ecx\n\t"
+		"leal 4092(%%edx),%%edi\n\t"   /* 将该物理地址页初始化为0 */
+		"rep ; stosl\n\t"
+		"movl %%edx,%%eax\n\t"         /* 将该物理地址页放入eax，作为返回值。 */
+		"2:\n\t"
+		"cld\n\t"
+		"lea page_lock_semaphore,%%ebx\n\t"
+		"pushl %%eax\n\t"              /* eax作为get_free_page函数的返回值,这里必须要备份一下,因为下面unlock_op函数调用会重置eax,作为返回值,即使该函数是void类型 */
+		"pushl %%ebx\n\t"
+		"call unlock_op\n\t"
+		"popl %%ebx\n\t"
+		"popl %%eax\n\t"
+		:"=a" (__res)
+		:"0" (0),"r" (paging_start),"c" (paging_num),
+		"D" (paging_end), "b" (compare_addr));
 
 /* 要在返回之前释放同步锁
  * 在此处调用该解锁方法,GCC编译的时候有问题,会遗漏一些操作,对于这种嵌入式混合汇编,觉的GCC在处理上下文依赖关系上,还是不完善.
@@ -322,7 +341,7 @@ int free_page(unsigned long addr)
 	unsigned long addr_bk = addr;
 	if (addr < LOW_MEM) return 1;
 	if (addr >= HIGH_MEMORY){
-		printk("nonexistent page: %p, high_mem: %u \n\r", addr, HIGH_MEMORY);
+		printk("nonexistent page: %p, high_mem: %08x \n\r", addr, HIGH_MEMORY);
 		panic("trying to free nonexistent page");
 	}
 	addr -= LOW_MEM;

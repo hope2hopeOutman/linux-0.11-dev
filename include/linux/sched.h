@@ -124,6 +124,16 @@ struct task_struct {
 	int father_nr;
 };
 
+typedef struct exit_reason_task_switch_struct {
+	ulong  task_switch_entry;        /* VM  set, only used by VMM  */
+	ulong  new_task_nr;              /* VM  set, only used by VM   */
+	ulong  new_task_cr3;             /* VM  set, only used by VMM  */
+	ulong  new_task_executed;        /* VM  set, only used by VMM  */
+	ulong  old_task_nr;              /* VM  set, only used by VM   */
+	ulong  old_task_cr3;             /* VM  set, only used by VMM  */
+	struct tss_struct old_task_tss;  /* VMM set, only used by VM   */
+} exit_reason_task_switch_struct;
+
 /*
  *  INIT_TASK is used to set up the first task table, touch at
  * your own risk!. Base=0, limit=0x9ffff (=640kB)
@@ -155,6 +165,11 @@ struct task_struct {
 	}, \
 /*sched_on_ap=0，表示没有AP运行该task，可以被调度到AP上运行*/ 0 \
 }
+
+union task_union {
+	struct task_struct task;
+	char stack[PAGE_SIZE];
+};
 
 extern struct task_struct *task[NR_TASKS];
 extern struct task_struct *last_task_used_math;

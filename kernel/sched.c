@@ -59,13 +59,9 @@ extern void mem_use(void);
 extern int timer_interrupt(void);
 extern int system_call(void);
 
-union task_union {
-	struct task_struct task;
-	char stack[PAGE_SIZE];
-};
-
 union task_union init_task = {INIT_TASK,};
 union task_union ap_default_task = {INIT_TASK,};
+union task_union vm_defualt_task = {INIT_TASK,};
 /*
  * 这里一次性分配64个processor，主要原因是这样可以使data_segment_align 4K对齐，
  * 如果设置为4的话就导致data_segment_align不能4K对齐了，导致运行有问题，
@@ -89,17 +85,30 @@ struct {
 	short b;
 	} stack_start = {&user_stack[PAGE_SIZE>>2] , 0x10};
 
-/* 获取当前processor正在运行的任务 */
+/*
+ * 获取当前processor正在运行的任务
+ */
 unsigned long get_current_apic_id(){
 	register unsigned long apic_id asm("ebx");
-	__asm__ ("movl $0x01,%%eax\n\t" \
-			 "cpuid\n\t" \
-			 "shr $24,%%ebx\n\t" \
-			 :"=b" (apic_id):
+	unsigned char gdt_base[8] = {0,}; /* 16-bit limit stored in low two bytes, and gdt_base stored in high 4bytes. */
+	/*
+	 * 在Guest VM 环境下，执行cpuid指令会导致vm-exit，所以这里要判断当前的执行环境是否在VM环境.
+	 * 实现思路：我们知道在VM环境下，已经为GDT表分配了4K空间，且GDT表的首8字节是不用的，这里利用这8个字节存储vm-entry环境下的apic_id.
+	 */
+	__asm__ ("sgdt %1\n\t"              \
+			 "movl %2,%%eax\n\t"        \
+			 "movl 0(%%eax),%%ebx\n\t"  \
+			 "cmpl $0x00,%%ebx\n\t"     \
+			 "jne truncate_flag\n\t"    \
+			 "movl $0x01,%%eax\n\t"     \
+			 "cpuid\n\t"                \
+			 "shr $24,%%ebx\n\t"        \
+			 "jmp output\n\t"           \
+			 "truncate_flag:\n\t"       \
+			 "andl $0xFF,%%ebx\n\t" /* 这里假设最多有255个processor */  \
+			 "output:\n\t"              \
+			 :"=b" (apic_id) :"m" (*gdt_base),"m" (*(char*)(gdt_base+2))
 			);
-	if (apic_id > 0) {
-		//printk("apic_id = %d\n\r", apic_id);
-	}
 	return apic_id;
 }
 
@@ -127,20 +136,25 @@ void reset_cpu_load() {
 /* 计算哪个AP的负载最小，后续的task将会调度该AP执行。 */
 unsigned long get_min_load_ap() {
 	unsigned long apic_index = 1;  /* BSP不参与计算 */
-	int overload = 0;
+	int processor_overload_num = 0;
 	if (apic_ids[apic_index].load_per_apic == 0xFFFFFFFF) {
-		++overload;
+		++processor_overload_num;
 	}
 	for (int i=2;i<LOGICAL_PROCESSOR_NUM;i++) {
-		if (apic_ids[i].load_per_apic == 0xFFFFFFFF) {
-			++overload;
-			continue;
+		if (!apic_ids[i].vmx_entry_flag) { /* vmx_entry_flag=1 表明该processor不能用于HostOS调度执行其普通任务 */
+			if (apic_ids[i].load_per_apic == 0xFFFFFFFF) {
+				++processor_overload_num;
+				continue;
+			}
+			if (apic_ids[apic_index].load_per_apic > apic_ids[i].load_per_apic) {
+				apic_index = i;
+			}
 		}
-		if (apic_ids[apic_index].load_per_apic > apic_ids[i].load_per_apic) {
-			apic_index = i;
+		else {
+			++processor_overload_num; /* vmx_entry_flag=1的processor可以看成是一直overload. */
 		}
 	}
-	if (overload == LOGICAL_PROCESSOR_NUM-1) {
+	if (processor_overload_num == LOGICAL_PROCESSOR_NUM-1) {
 		reset_cpu_load();
 		return apic_ids[LOGICAL_PROCESSOR_NUM-1].apic_id;
 	}
@@ -163,29 +177,33 @@ int check_default_task_running_on_ap() {
 /*
  * 向指定的AP发送IPI中断消息,要先写ICR的高32位，因为写低32位就会触发IPI了，
  * 所以要现将apic_id写到destination field,然后再触发IPI。
+ * 注意^n:尼玛嵌入式中调用函数，一定要注意备份eax,ecx和edx的值，这个必须要手工备份，编译器是不会帮你的，尼玛，浪费时间啊。
  */
 #if EMULATOR_TYPE
 void send_IPI(int apic_id, int v_num) {
 __asm__ ("movl bsp_apic_default_location,%%edx\n\t" \
+		 "pushl %%ecx\n\t" /* 注意^n:尼玛嵌入式中调用函数，一定要注意备份eax,ecx和edx的值，这个必须要手工备份，编译器是不会帮你的，尼玛，浪费时间啊。 */ \
 		 "pushl %%edx\n\t" \
 		 "call remap_msr_linear_addr\n\t" \
 		 "popl %%edx\n\t" \
-		 "movl %%eax,%%edx\n\t"          /* eax中存储映射后的linear addr */ \
-		 "addl $0x10,%%edx\n\t"          /* 获得ICR的高32位地址 */ \
+		 "popl %%ecx\n\t" \
+		 "movl %%eax,%%edx\n\t"                       /* eax中存储映射后的linear addr */ \
+		 "addl bsp_apic_icr_high_offset,%%edx\n\t"    /* 获得ICR的高32位地址 */ \
 		 "shll $24,%%ecx\n\t" \
-		 "movl %%ecx,0(%%edx)\n\t"       /* 设置ICR高32位中的destination field */  \
+		 "movl %%ecx,0(%%edx)\n\t"                    /* 设置ICR高32位中的destination field */  \
 		 "movl %%eax,%%edx\n\t" \
+		 "addl bsp_apic_icr_full_offset,%%edx\n\t"    /* 获得ICR的高32位地址 */ \
 		 "addl $0x00004000,%%ebx\n\t" \
-		 "movl %%ebx,0(%%edx)\n\t"       /* 设置ICR低32位的vector field */   \
-		 "pushl %%eax\n\t" \
-		 "call recov_msr_swap_linear\n\t" \
-		 "popl %%eax\n\t" \
+		 "movl %%ebx,0(%%edx)\n\t"                    /* 设置ICR低32位的vector field */   \
 		 "wait_loop_ipi:\n\t" \
-		 "xorl %%eax,%%eax\n\t" \
-		 "movl 0(%%edx),%%eax\n\t" \
-		 "andl $0x00001000,%%eax\n\t"    /* 判断ICR低32位的delivery status field, 0: idle, 1: send pending */  \
-		 "cmpl $0x00,%%eax\n\t"   \
+		 "xorl %%ecx,%%ecx\n\t" \
+		 "movl 0(%%edx),%%ecx\n\t" \
+		 "andl $0x00001000,%%ecx\n\t"                 /* 判断ICR低32位的delivery status field, 0: idle, 1: send pending */  \
+		 "cmpl $0x00,%%ecx\n\t"   \
 		 "jne wait_loop_ipi\n\t"  \
+		 "pushl %%eax\n\t"        \
+		 "call recov_msr_swap_linear\n\t"             /* 一定要在这里释放remap页，不然的话会被其他进程占用，这样上面的会进入死循环，坑啊 */  \
+		 "popl %%eax\n\t"   \
 		 ::"c" (apic_id),"b" (v_num));
 }
 
@@ -420,6 +438,7 @@ void schedule(void)
 		}
 	}
 
+
 	if (current_apic_id == apic_ids[0].apic_id) {  /* 调度任务发生在BSP上 */
 #if 0
 		unsigned long sched_apic_id = get_min_load_ap();
@@ -502,6 +521,7 @@ void schedule(void)
 		}
 #endif
 	}
+
 	if (lock_flag) {
 		unlock_op(&sched_semaphore);
 		lock_flag = 0;
@@ -843,5 +863,5 @@ void sched_init(void)
 	set_intr_gate(APIC_TIMER_INTR_NO,&timer_interrupt);  /* Vector value 0x83 for APIC timer */
 #endif
 
-	set_system_gate(0x80,&system_call);
+	set_system_gate(SYSTEM_CALL_INTR_NO,&system_call);
 }

@@ -2,12 +2,40 @@
 #define _HEAD_H
 
 #define EMULATOR_TYPE 0x01   /* 0x00: bochs, 0x01: qemu */
+#define PAGE_SIZE 4096
+
+typedef unsigned long  ulong;
 
 typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
 
-struct apic_info {
+typedef struct exit_reason_io_vedio_struct {
+	unsigned long  exit_reason_no;
+	unsigned long  print_size;
+	char*          print_buf;
+} exit_reason_io_vedio_struct;
+
+typedef struct exit_reason_fork {
+	ulong  exit_reason_no;
+	ulong  operation;  /* 0: default, 1: GuestOS中执行fork操作 */
+	ulong  task_cr3;
+} exit_reason_fork;
+
+typedef struct exit_reason_free_ept_page{
+	ulong  guest_page_phy_addr;
+}exit_reason_free_ept_page;
+
+typedef union cpuid_exit_info {
+	exit_reason_free_ept_page free_ept_page_info;
+}cpuid_exit_info;
+
+typedef struct exit_reason_cpuid {
+	ulong  exit_reason_no;
+	cpuid_exit_info exit_info;
+} exit_reason_cpuid;
+
+typedef struct apic_info {
 	unsigned long bsp_flag;        /* 1: BSP, 0: AP */
 	unsigned long apic_id;
 	unsigned long apic_regs_addr;
@@ -21,7 +49,8 @@ struct apic_info {
 	 */
 	unsigned long load_per_apic;
 	struct task_struct *current;
-};
+	unsigned long vmx_entry_flag;  /* 1: have entered vmx-env, can not be scheduled to run HostOS task; 0: not */
+}apic_info;
 
 //extern unsigned long pg_dir[1024];
 extern unsigned long* pg_dir;
@@ -83,10 +112,218 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
  * 1M的低地址范围内，4K~640K没有被使用，所以可以用来remap >3G物理地址空间的APIC base address.
  * */
 #if EMULATOR_TYPE
-#define KERNEL_MSR_REMAP_ADDR_START 0x0001   /* granularity 4K,起始地址空间是4K. */
-#define KERNEL_MSR_REMAP_ADDR_SPACE 0x009F   /* granularity 4K,可用于remap APIC base address的地址空间大小，636K=159*4K=0x9F*4K */
+/*
+ * 这里最大允许有64个processor(BSP+APs)
+ * 每个processor通过其APIC_ID预先分配好一个remap page，这样当读写apic MSR-regs的时候就不用通过加锁随机分配一个空闲的remap page给某个ap去执行send_EOI操作了，
+ * 这样做的好处是减小多核加锁竞争带来的性能消耗和死锁的风险，想想看当每个processor都开启了apic-timer后,这种竞争是多么的恐怖.
+ * 通过非加锁的方式实现MSRs的访问，系统现在稳定多了啦O(∩_∩)O哈哈~
+ */
+#define LOCK_FOR_KERNEL_MSR_REMAP        0x00     /* 0x00:为每个processor的MSRs分配一个固定的映射页; 0x01:通过加锁机制为每个processor的MSRs动态分配映射页 */
+#define KERNEL_MSR_REMAP_ADDR_START      0x0002   /* granularity 4K,起始地址是8K,地址0x00用于HostOS的内核目录表，地址0x4k用于GuestOS内核目录表 */
+#define KERNEL_MSR_REMAP_ADDR_SPACE_SIZE 0x0040   /* granularity 4K,可用于remap APIC base address的地址空间大小，64*4k=256K */
+
+#define IA32_VMX_BASIC                0x480
+#define IA32_VMX_PINBASED_CTLS        0x481
+#define IA32_VMX_PROCBASED_CTLS       0x482
+#define IA32_VMX_PROCBASED_CTLS2      0x48B
+#define IA32_VMX_EXIT_CTLS            0x483
+#define IA32_VMX_ENTRY_CTLS           0x484
+#define IA32_VMX_CR0_FIXED0           0x486
+#define IA32_VMX_CR0_FIXED1           0x487
+#define IA32_VMX_CR4_FIXED0           0x488
+#define IA32_VMX_CR4_FIXED1           0x489
+#define IA32_VMX_EPT_VPID_CAP         0x48C
+#define IA32_VMX_TRUE_PINBASED_CTLS   0x48D
+#define IA32_VMX_TRUE_PROCBASED_CTLS  0x48E
+#define IA32_VMX_TRUE_EXIT_CTLS       0x48F
+#define IA32_VMX_TRUE_ENTRY_CTLS      0x490
+#define IA32_VMX_VMFUNC               0x491
+#define IA32_FEATURE_CONTROL          0x3A
+#define IA32_VMX_MISC                 0x485
+
+#define IA32_VMX_VPID_ENCODING                                   0x0000
+#define IA32_VMX_POSTED_INTERRUPT_NOTIFICATION_VECTOR_ENCODING   0x0002
+#define IA32_VMX_EPTP_INDEX_ENCODING                             0x0004
+
+#define IA32_VMX_IO_BITMAP_A_FULL_ADDR_ENCODING                  0x2000
+#define IA32_VMX_IO_BITMAP_A_HIGH_ADDR_ENCODING                  0x2001
+#define IA32_VMX_IO_BITMAP_B_FULL_ADDR_ENCODING                  0x2002
+#define IA32_VMX_IO_BITMAP_B_HIGH_ADDR_ENCODING                  0x2003
+
+#define IA32_VMX_MSR_BITMAPS_ADDR_FULL_ENCODING                  0x2004
+#define IA32_VMX_MSR_BITMAPS_ADDR_HIGH_ENCODING                  0x2005
+#define IA32_VMX_VIRTUAL_APIC_ADDR_FULL_ENCODING                 0x2012
+#define IA32_VMX_VIRTUAL_APIC_ADDR_HIGH_ENCODING                 0x2013
+#define IA32_VMX_APIC_ACCESS_ADDR_FULL_ENCODING                  0x2014
+#define IA32_VMX_APIC_ACCESS_ADDR_HIGH_ENCODING                  0x2015
+#define IA32_VMX_POSTED_INTERRUPT_DESCRIPTOR_ADDR_FULL_ENCODING  0x2016
+#define IA32_VMX_POSTED_INTERRUPT_DESCRIPTOR_ADDR_HIGH_ENCODING  0x2017
+#define IA32_VMX_VM_FUNCTION_CONTROLS_FULL_ENCODING              0x2018
+#define IA32_VMX_VM_FUNCTION_CONTROLS_HIGH_ENCODING              0x2019
+
+#define IA32_VMX_EPTP_LIST_ADDRESS_FULL_ENCODING                 0x2024
+#define IA32_VMX_EPTP_LIST_ADDRESS_HIGH_ENCODING                 0x2025
+
+#define IA32_VMX_EPT_POINTER_FULL_ENCODING    0x201A
+#define IA32_VMX_EPT_POINTER_HIGH_ENCODING    0x201B
+
+#define IA32_VMX_GUEST_PHYSICAL_ADDR_FULL_ENCODING 0x2400
+#define IA32_VMX_GUEST_PHYSICAL_ADDR_HIGH_ENCODING 0x2401
+
+#define IA32_VMX_VMCS_LINK_POINTER_FULL_ENCODING    0x2800
+#define IA32_VMX_VMCS_LINK_POINTER_HIGH_ENCODING    0x2801
+
+#define IA32_VMX_PINBASED_CTLS_ENCODING             0x4000
+#define IA32_VMX_PROCBASED_CTLS_ENCODING            0x4002
+#define IA32_VMX_TPR_THRESHOLD_ENCODING             0x401C
+#define IA32_VMX_SECONDARY_PROCBASED_CTLS_ENCODING  0x401E
+#define IA32_VMX_CR3_TARGET_COUNT_ENCODING          0x400A
+
+#define IA32_VMX_EXIT_CTLS_ENCODING                 0x400C
+#define IA32_VMX_EXIT_MSR_STORE_COUNT_ENCODING      0x400E
+#define IA32_VMX_EXIT_MSR_STORE_ADDR_FULL_ENCODING  0x2006
+#define IA32_VMX_EXIT_MSR_STORE_ADDR_HIGH_ENCODING  0x2007
+
+#define IA32_VMX_EXIT_MSR_LOAD_COUNT_ENCODING       0x4010
+#define IA32_VMX_EXIT_MSR_LOAD_ADDR_FULL_ENCODING   0x2008
+#define IA32_VMX_EXIT_MSR_LOAD_ADDR_HIGH_ENCODING   0x2009
+
+#define IA32_VMX_ENTRY_CTLS_ENCODING                      0x4012
+#define IA32_VMX_ENTRY_MSR_LOAD_COUNT_ENCODING            0x4014
+#define IA32_VMX_ENTRY_MSR_LOAD_ADDR_FULL_ENCODING        0x200A
+#define IA32_VMX_ENTRY_MSR_LOAD_ADDR_HIGH_ENCODING        0x200B
+#define IA32_VMX_ENTRY_INTERRUPTION_INFORMATION_ENCODING  0x4016
+
+#define IA32_VMX_VM_INSTRUCTION_ERROR_ENCODING            0x4400
+#define IA32_VMX_EXIT_REASON_ENCODING                     0x4402
+#define IA32_VMX_EXIT_INTR_INFO_ENCODING                  0x4404
+#define IA32_VMX_EXIT_INTR_ERROR_CODE_ENCODING            0x4406
+#define IA32_VMX_IDT_VECTOR_INFO_ENCODING                 0x4408
+#define IA32_VMX_IDT_VECTOR_ERROR_CODE_ENCODING           0x440A
+#define IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING         0x440C
+#define IA32_VMX_VM_EXIT_INSTRUCTION_INFO_ENCODING        0x440E
+
+#define IA32_VMX_PREEMPTION_TIMER_VALUE_ENCODING          0x482E
+
+#define IA32_VMX_EXIT_QUALIFICATION_ENCODING    0x6400
+#define IA32_VMX_GUEST_LINEAR_ADDR_ENCODING     0x640A
+
+/*========== Host area =============*/
+#define HOST_CR0_ENCODING  0x6C00
+#define HOST_CR3_ENCODING  0x6C02
+#define HOST_CR4_ENCODING  0x6C04
+
+#define HOST_ES_ENCODING   0x0C00
+#define HOST_CS_ENCODING   0x0C02
+#define HOST_SS_ENCODING   0x0C04
+#define HOST_DS_ENCODING   0x0C06
+#define HOST_FS_ENCODING   0x0C08
+#define HOST_GS_ENCODING   0x0C0A
+#define HOST_TR_ENCODING   0x0C0C
+
+#define IA32_VMX_CR3_TARGET_VALUE0_ENCODING   0x6008
+#define IA32_VMX_CR3_TARGET_VALUE1_ENCODING   0x600A
+#define IA32_VMX_CR3_TARGET_VALUE2_ENCODING   0x600C
+#define IA32_VMX_CR3_TARGET_VALUE3_ENCODING   0x600E
+
+#define HOST_FS_BASE_ENCODING     0x6C06
+#define HOST_GS_BASE_ENCODING     0x6C08
+#define HOST_TR_BASE_ENCODING     0x6C0A
+#define HOST_GDTR_BASE_ENCODING   0x6C0C
+#define HOST_IDTR_BASE_ENCODING   0x6C0E
+
+#define HOST_IA32_SYSENTER_CS_ENCODING   0x4C00
+#define HOST_IA32_SYSENTER_ESP_ENCODING  0x6C10
+#define HOST_IA32_SYSENTER_EIP_ENCODING  0x6C12
+
+#define HOST_RSP_ENCODING    0x6C14
+#define HOST_RIP_ENCODING    0x6C16
+/*========== Host area =============*/
+
+/*========== Guest area ============*/
+#define GUEST_CR0_ENCODING  0x6800
+#define GUEST_CR3_ENCODING  0x6802
+#define GUEST_CR4_ENCODING  0x6804
+
+#define GUEST_ES_ENCODING   0x0800
+#define GUEST_CS_ENCODING   0x0802
+#define GUEST_SS_ENCODING   0x0804
+#define GUEST_DS_ENCODING   0x0806
+#define GUEST_FS_ENCODING   0x0808
+#define GUEST_GS_ENCODING   0x080A
+#define GUEST_LDTR_ENCODING 0x080C
+#define GUEST_TR_ENCODING   0x080E
+
+#define GUEST_GDTR_BASE_ENCODING   0x6816
+#define GUEST_IDTR_BASE_ENCODING   0x6818
+#define GUEST_DR7_ENCODING    0x681A
+#define GUEST_RSP_ENCODING    0x681C
+#define GUEST_RIP_ENCODING    0x681E
+
+#define GUEST_RFLAGS_ENCODING     0x6820
+#define GUEST_ES_BASE_ENCODING    0x6806
+#define GUEST_CS_BASE_ENCODING    0x6808
+#define GUEST_SS_BASE_ENCODING    0x680A
+#define GUEST_DS_BASE_ENCODING    0x680C
+#define GUEST_FS_BASE_ENCODING    0x680E
+#define GUEST_GS_BASE_ENCODING    0x6810
+#define GUEST_LDTR_BASE_ENCODING  0x6812
+#define GUEST_TR_BASE_ENCODING    0x6814
+
+#define GUEST_ES_LIMIT_ENCODING   0x4800
+#define GUEST_CS_LIMIT_ENCODING   0x4802
+#define GUEST_SS_LIMIT_ENCODING   0x4804
+#define GUEST_DS_LIMIT_ENCODING   0x4806
+#define GUEST_FS_LIMIT_ENCODING   0x4808
+#define GUEST_GS_LIMIT_ENCODING   0x480A
+#define GUEST_LDTR_LIMIT_ENCODING 0x480C
+#define GUEST_TR_LIMIT_ENCODING   0x480E
+#define GUEST_GDTR_LIMIT_ENCODING 0x4810
+#define GUEST_IDTR_LIMIT_ENCODING 0x4812
+
+#define GUEST_ES_ACCESS_RIGHTS_ENCODING    0x4814
+#define GUEST_CS_ACCESS_RIGHTS_ENCODING    0x4816
+#define GUEST_SS_ACCESS_RIGHTS_ENCODING    0x4818
+#define GUEST_DS_ACCESS_RIGHTS_ENCODING    0x481A
+#define GUEST_FS_ACCESS_RIGHTS_ENCODING    0x481C
+#define GUEST_GS_ACCESS_RIGHTS_ENCODING    0x481E
+#define GUEST_LDTR_ACCESS_RIGHTS_ENCODING  0x4820
+#define GUEST_TR_ACCESS_RIGHTS_ENCODING    0x4822
+
+#define GUEST_INTERRUPTIBILITY_STATE_ENCODING      0x4824
+#define GUEST_ACTIVITY_STATE_ENCODING              0x4826
+#define GUEST_VMX_PREEMPTION_TIMER_VALUE_ENCODING  0x482E
+#define GUEST_PENDING_DEBUG_EXCEPTIONS_ENCODING    0x6822
+
+#define GUEST_IA32_SYSENTER_CS_ENCODING            0x482A
+#define GUEST_IA32_SYSENTER_ESP_ENCODING           0x6824
+#define GUEST_IA32_SYSENTER_EIP_ENCODING           0x6826
+
+#define GUEST_VMCS_LINK_POINTER_FULL_ENCODING      0x2800
+#define GUEST_VMCS_LINK_POINTER_HIGH_ENCODING      0x2801
+#define GUEST_IA32_DEBUGCTL_FULL_ENCODING          0x2802
+#define GUEST_IA32_DEBUGCTL_HIGH_ENCODING          0x2803
+
+#define GUEST_IA32_PAT_FULL_ENCODING               0x2804
+#define GUEST_IA32_PAT_HIGH_ENCODING               0x2805
+#define GUEST_IA32_EFER_FULL_ENCODING              0x2806
+#define GUEST_IA32_EFER_HIGH_ENCODING              0x2807
+#define GUEST_IA32_PERF_GLOBAL_CTRL_FULL_ENCODING  0x2808
+#define GUEST_IA32_PERF_GLOBAL_CTRL_HIGH_ENCODING  0x2809
+#define GUEST_IA32_BNDCFGS_FULL_ENCODING           0x2812
+#define GUEST_IA32_BNDCFGS_HIGH_ENCODING           0x2813
+
+/*========== Guest area End ============*/
+
+#define IA32_DEBUGCTL           0x1D9
+#define IA32_PERF_GLOBAL_CTRL   0x38F
+#define IA32_PAT                0x277
+#define IA32_EFER               0xC0000080
+#define IA32_BNDCFGS            0xD90
+
 #endif
 
+#define PAGE_IN_REAL_MEM_MAP_FOR_GUEST_CR3 2 /* 这部分内存专用于存储Guset-CR3对应的实地址内存页 */
 #define PAGE_IN_REAL_MEM_MAP 1               /* 表示分配的物理地址来自于内核实地址映射的空间，mem_map开始的一部分是内核实地址映射的 */
 #define PAGE_IN_MEM_MAP 0                    /* 表示分配的物理地址来自于整个mem_map管理的内存 */
 
@@ -102,14 +339,72 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define LOGICAL_PROCESSOR_NUM       0x04    /* 这里设置有4个processor */
 #define LOGICAL_PROCESSOR_MAXIMUM   0x64    /* 这里设置processor个数的上限 */
 
-#define BSP_APIC_REGS_DEFAULT_LOCATION  0xFEE00000    /* Default addr for APIC base address  */
+#define BSP_APIC_REGS_DEFAULT_LOCATION         0xFEE00000    /* Default addr for APIC base address  */
+#define BSP_APIC_ICR_FULL_OFFSET               0x0300
+#define BSP_APIC_ICR_HIGH_OFFSET               0x0310
 #define BSP_APIC_REGS_RELOCATION  0x20000   /* BSP Local APIC Registers在内存中的remap */
 #define BSP_APIC_ICR_RELOCATION   0x20300   /* BSP ICR(Interrupt command register) 在内存中的位置 */
 
-
+#define SYSTEM_CALL_INTR_NO   0x80      /* 系统调用中断号 */
+#define TOPOLOGY_INTR_NO      0x81      /* 解析AP拓扑结构的中断号 */
 #define SCHED_INTR_NO         0x82      /* AP响应BSP发来的进程调度IPI中断号 */
+#define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
+#define VMX_ENTRY_IPI_INTR_NO           0x84      /* AP响应BSP发来的进入VMX的IPI中断号  */
+#define HALT_EXIT_IPI_INTR_NO     0x85      /* AP响应BSP发来的跳出halt的IPI中断号 */
+#define HD_IPI_INTR_NO            0x88      /* AP响应BSP发来的HD_INTR的IPI中断号 */
+#define APIC_TIMER_ENABLE_IPI_INTR_NO  0x89      /* AP响应BSP发来的开启APIC-timer的IPI中断号 */
 
 #define AP_DEFAULT_TASK_NR    0x50      /* 这个数字已经超出了任务的最大个数64,所以永远不会被schedule方法调度到,仅用来保存AP halt状态下的context */
-#define APIC_TIMER_INTR_NO    0x83      /* APIC timer定时器触发的中断号 */
+
+
+#define VM_EXIT_REASON_EXTERNAL_INTERRUPT     1   /* External interrupt */
+#define VM_EXIT_REASON_TRIPLE_FAULT           2   /* External interrupt */
+#define VM_EXIT_REASON_TASK_SWITCH            9   /* Task Switch */
+#define VM_EXIT_REASON_EXEC_CPUID             10   /* CPUID */
+#define VM_EXIT_REASON_VMREAD                 23  /* VMREAD  vmcs-shadow not support */
+#define VM_EXIT_REASON_VMWRITE                25  /* VMWRITE vmcs-shadow not support */
+#define VM_EXIT_REASON_CONTROL_REGS_ACCESS    28  /* Control-register accesses */
+#define VM_EXIT_REASON_IO_INSTRUCTION         30  /* Use I/O bitmap        */
+#define VM_EXIT_REASON_EPT_VIOLATION          48  /* EPT violation         */
+#define VM_EXIT_REASON_EPT_MISCONFIGURATION   49  /* EPT misconfiguration  */
+#define VM_EXIT_REASON_PREEMPTION_TIMER_EXPIRED 52 /* preemption timer expired.  */
+
+#define GDT_IDENTITY_NO  0
+#define IDT_IDENTITY_NO  1
+
+#define IA32_VMX_CR3_TARGET_COUNT  4
+
+/* 这块的定义一定要和Makefile里的-Ttext起始地址一致，这点一定要注意 */
+#define GUEST_OS_IDT_BASE_ADDR               0xC02000
+#define GUEST_OS_GDT_BASE_ADDR               0xC03000
+#define GUEST_OS_TR_BASE_ADDR                0xC04000
+#define GUEST_OS_LDT_BASE_ADDR               0xC05000
+#define GUEST_OS_IO_BITMAP_A_BASE_ADDR       0xC06000
+#define GUEST_OS_IO_BITMAP_B_BASE_ADDR       0xC07000
+
+
+/*
+ * 4K~640K 低地址空间利用与分配，该段地址空间被host和所有VM共享，用于它们之间的通信,从高地址开始以4K为单位,由高到低分配的.
+ * 注意: 用于映射APIC-base-addr的地址空间是从这个空间的低地址由低到高分配的，这里要注意overlap,后面会优化一下.
+ */
+#define VM_EXIT_REASON_IO_INFO_ADDR                 0x9F000
+#define VM_EXIT_REASON_TASK_SWITCH_INFO_ADDR        0x9E000
+#define VM_EXIT_REASON_CPUID_INFO_ADDR              0x9D000
+#define VM_HD_OPERATION_ADDR                        0x9C000
+#define VMM_VM_SHARED_SPACE_SEMAPHORE               0x9B000
+
+#define GUEST_KERNEL_CR3_PHY_ADDR             0x1000  /* GuestOS kernel CR3,所有进攻共享的部分 */
+#define GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR         0x1000000  /* 16M~20M */
+#define GUEST_SPACE_KERNEL_PAGE_TABLES_ADDR                  0x100000   /* 1M~5M */
+
+#define GUEST_TSS_STATUS_AVAILABLE   9     /* VM中tss段的状态 */
+#define GUEST_TSS_STATUS_BUSY        11
+
+/* 通过cpuid指令触发VM-EXIT,用于不同的业务，这里针对不同的业务做了如下的区分 */
+#define VM_EXIT_REASON_CPUID_FOR_FREE_EPT_PAGE 1
+#define VM_EXIT_REASON_CPUID_FOR_SEND_EOI      2
+#define VM_EXIT_REASON_CPUID_FOR_GAME_OVER     3
+
+#define VMX_PREEMPTION_TIMER_VALUE       10000
 
 #endif
