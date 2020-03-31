@@ -1208,10 +1208,35 @@ void vm_entry() {
 	 */
 	init_guest_kernel_space();
 
-#if 1
+	/*
+	 * 下面的初始化完全为了debug VM中的GuestOS
+	 * 在host物理地址0x1000处为guestOS task0初始化一个目录表，实地址映射1G的guest-phy-space，
+	 * 在host物理地址16M~20M处保留4M地址空间，用于存储GuestOS的task0的页表，实地址映射1G guest-phy-space，
+	 * 为什么要这么做呢，主要是因为当vmlunch到GuestOS后，即使你已经为GuestOS的task0初始化了CR3和相应的页表，但是还会报memory can not access错误，
+	 * 程序可以继续运行，但是没法打印调试信息了，后来发现，要在host.phy.addr=GuestOS.task0.cr3处建一个1G实地址映射就不会报内存不可访问错误了。
+	 *
+	 * 下面是hostOS与GuestOS的内存布局图
+	 *
+	 *                                                                                      |---EPT mapping to->>--|
+	 *                                                                              |--guest-cr3--|                |
+	 * 0   4K  8K  1M          6M                12M                 16M           20M           24M             152M                          4G
+	 * |---|---|---|------------|-----------------|-------------------|-------------|-------------|--------------------------------|------------|
+	 * |---|---|   |--host-PTs--|--host code&buf--|---guest code&buf--|--debug-PTs--|--debug-cr3--|---128M for 2G guest-phy-space--|
+	 *   |   |                                                                                                      |
+	 *   |   |------这4K作为Guest.task0.cr3----EPT mapping to guest-phy-space---->>>------------------>>>------------|
+	 *   |   |
+	 *   |   |--->这4K作为Guest.task0的debug cr3，此处是HOST实地址映射，其管理的4M页表存储在debug-cr3实地址处，用于映射1G guest-phy-space.
+	 *   |        所以这里将16M~20M这4M空间用于存储GuestOS的用于GuestOS内核调试的页表，因此能实地址映射4G的GuestOS-phy-space，
+	 *   |        这样相当与GuestOS中的每个进程有两套地址映射，一套是EPT映射的，一套是debug-PTs和debug-cr3映射的
+	 *   |        这样在调试的时候就不会报memory cannot access错误了。debug-cr3区间共享debug-PTs用于debug,但debug-cr3区间作为GuestOS进程guest-cr3的地址空间，会被
+	 *   |        EPT映射到24M~152M这128M物理地址区间的。具体的机制有篇文章已经详细解释了。
+	 *   |
+	 *   |--->这4K用于HostOS.task0.cr3
+	 *
+	 *  */
+#if GUEST_OS_DEBUG_ENABLE
 	init_dir_page(GUEST_KERNEL_CR3_PHY_ADDR, 1024, 1);
-#else
-	init_dir_page(GUEST_KERNEL_CR3_PHY_ADDR, 4, 1);
+	init_pt_tables();
 #endif
 	//init_dir_page(0x2000, 1024, 1); /* 将GuestOS的内核目录表设置在8k~12K空间，然后将其映射在host内核目录表的4K~8K线性地址空间 */
 
@@ -1221,7 +1246,7 @@ void vm_entry() {
     ulong pt_entry = pt_base + ((0x1000>>12) & (0x3FF)) * 4;
     *(ulong*)pt_entry = 0x2007;*/
 
-	init_pt_tables();
+
 
 	ulong cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	ulong cr3_phy_addr = get_phy_addr(cr3_guest_phy_addr);

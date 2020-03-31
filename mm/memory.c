@@ -238,11 +238,11 @@ unsigned long caching_linear_addr(unsigned long* addr_array, int length, unsigne
  * 就应该用保留线性地址remap了，而不是>512M物理内存才需要映射，这里有个概念一定要记住：内核地址空间是512M并不代表属于内核的物理地址就有512M，
  * 这个512M的地址空间指的是线性地址空间是属于内核的，而不是物理地址。
  * 所以传给%ebx寄存器的值应该是KERNEL_LINEAR_ADDR_PAGES-LINEAR_ADDR_SWAP_PAGES，从这块物理地址开始比较，而不是从512M开始。
- * 参数real_space的值有3个：0,1和2
+ * 参数real_space的值有3个：0,1和2; main_memory_start=20M
  * 这个参数的值有意义的前提是，内存>512M,本版本规定的最大进程数为1K，一个进程占用8K(task_struct+dir)内核实地址映射的内存,总共占用8M。
  * 2:表示分配的物理页地址范围是(main_memory_start,    main_memory_start+4M),共4M大小,用于实地址映射GuestOS中每个进程的CR3
- * 1:表示分配的物理页地址范围是(main_memory_start+4M,main_memory_start+36M),共32M大小,这部分内存一定是实地址映射的
- * 0:表示分配的物理页地址范围是(main_memory_start+36M,mem_end),共(mem_end-main_memory_start-36)M大小,这部分内存是否是实地址映射，要根据总内存的大小来判定。
+ * 1:表示分配的物理页地址范围是(main_memory_start+4M,main_memory_start+132M),共128M大小,这部分内存一定是实地址映射的
+ * 0:表示分配的物理页地址范围是(main_memory_start+132M,mem_end),共(mem_end-main_memory_start-132)M大小,这部分内存是否是实地址映射，要根据总内存的大小来判定。
  */
 unsigned long get_free_page(int real_space)
 {

@@ -393,7 +393,9 @@ extern unsigned long caching_linear_addr(unsigned long* addr_array, int length, 
 #define VM_HD_OPERATION_ADDR                        0x9C000
 #define VMM_VM_SHARED_SPACE_SEMAPHORE               0x9B000
 
-#define GUEST_KERNEL_CR3_PHY_ADDR             0x1000  /* GuestOS kernel CR3,所有进攻共享的部分 */
+#define GUEST_OS_DEBUG_ENABLE                 0x00
+
+#define GUEST_KERNEL_CR3_PHY_ADDR             0x1000  /* GuestOS kernel CR3,所有进程共享的部分 */
 #define GUEST_SPACE_REAL_MAP_KERNEL_PAGE_TABLES_ADDR         0x1000000  /* 16M~20M */
 #define GUEST_SPACE_KERNEL_PAGE_TABLES_ADDR                  0x100000   /* 1M~5M */
 

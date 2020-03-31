@@ -134,7 +134,7 @@ unsigned long get_phy_addr(unsigned long guest_phy_addr) {
 				 *    因为Guest的<1M中的一页会被EPT映射到mem-map中，所以这一页是不可能映射到Host的<1M地址空间了，也就不能共享了。
 				 * 3. 当然你可以强制共享host相同位置(1M~5M)的页表，这样就不用再重新分配和映射了，但是这样有个问题，会引起page的RWX和Access位的混乱,
 				 *    想想看是不是这样，因此，这里为Guest的GDP和GPT在PAGE_IN_REAL_MEM_MAP空间单独分配page用于管理Guest的地址空间。
-				 * 4. 因此1M~5M用于存储映射GuestOS的4G linear-addr-space的所有页表,所以不能共享Host的页表。
+				 * 4. 因此1M~5M(Guest physical space)用于存储映射GuestOS的4G linear-addr-space的所有页表,所以不能共享Host的页表。
 				 * 5. 当Guest-phy-space > 1G的时候，内核只能实地址映射1G的guest-phy-addr，> 1G的guest-addr-space要用保留的内核线性地址空间remap，
 				 *    所以这里只初始化1G的guest-phy-addr-space.
 				 */
@@ -344,7 +344,7 @@ void do_vm_page_fault() {
 	unsigned long ept_phy_addr = get_phy_addr(guest_phy_addr);
 	//printk("ept_phy_addr: %08x\n\r", ept_phy_addr);
 	//printk("guest_linear_addr: %08x,guest_phy_addr: %08x,ept_phy_addr: %08x\n\r",guest_linear_addr, guest_phy_addr, ept_phy_addr);
-	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
+	//unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
 	//set_guest_cr3_shadow_entry(cr3_guest_phy_addr, ept_phy_addr);
 }
 
@@ -420,7 +420,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			/* End: 备份老任务的执行上下文 */
 
 			write_vmcs_field(GUEST_RIP_ENCODING, exit_reason_task_switch->task_switch_entry);
-			write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE0_ENCODING, exit_reason_task_switch->new_task_cr3);
+			//write_vmcs_field(IA32_VMX_CR3_TARGET_VALUE0_ENCODING, exit_reason_task_switch->new_task_cr3);
 
 			/* 将老进程的tss.status状态设置为available,为下一次调度做准备 */
 			reset_guest_tss_status(exit_reason_task_switch->old_task_nr, GUEST_TSS_STATUS_AVAILABLE);
@@ -430,7 +430,9 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 			 * 对于第一次运行的进程，一定要初始化它的guest_cr3_shadow目录表结构
 			 */
 			if (!exit_reason_task_switch->new_task_executed) {
-				init_guest_cr3_shadow(exit_reason_task_switch);
+#if GUEST_OS_DEBUG_ENABLE
+					init_guest_cr3_shadow(exit_reason_task_switch);  //Open it can debug GuestOS in kernel space.
+#endif
 			}
 
 			flush_tlb();
@@ -561,6 +563,7 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 					 ::);
 		}
 		else if (vm_exit_reason == VM_EXIT_REASON_CONTROL_REGS_ACCESS) {
+			printk("error:VM_EXIT_REASON_CONTROL_REGS_ACCESS\n\r");
 			unsigned long vm_exit_instruction_len  = read_vmcs_field(IA32_VMX_VM_EXIT_INSTRUCTION_LEN_ENCODING);
 			unsigned long vm_exit_guest_rip        = read_vmcs_field(GUEST_RIP_ENCODING);
 			write_vmcs_field(GUEST_CR3_ENCODING, eax);
@@ -605,8 +608,12 @@ void vm_exit_diagnose(ulong eax,ulong ebx, ulong ecx, ulong edx, ulong esi, ulon
 /*
  * 1.0版本： 初始化Guest内核空间，共享host的内核空间，后面制作一个GuestOS image，这样就不用共享host内核了
  * 2.0版本： 初始化Guest内核空间，仅共享host的4K~1M的内核空间(因为有些系统信息例如硬盘参数等还存储在4K~1M地址空间，所以GuestOS共享该空间就可以直接用了),
- *          5M开始处就是GuestOS的代码了，1M~5M之间是Guest内核态的页表空间,0~4K是guest内核态的目录表空间，这个空间不能共享host的目录表。
+ *    1. GuestOS-Code是存放在12M～16M这4M之间的，其中还包括磁盘的高速缓冲区,
+ *       这部分空间Host没有利用，是专用于实地址映射GuestOS的内核Code和高速缓冲区的,
+ *       因此这部分guest-phy-addr到phy-addr的映射也是实地址映射.
+ *    2. 5M~12M是用于存储Host-Code和host的磁盘高速缓冲区，这里也是实地址映射了，共享这部分Host代码了
  */
+
 void init_guest_kernel_space() {
 	/* =============== 判断Guest-CR3对应的物理页是否存在,如果不存在分配一个Page并初始化 ===============*/
 	unsigned long cr3_guest_phy_addr = read_vmcs_field(GUEST_CR3_ENCODING);
@@ -700,6 +707,7 @@ void init_guest_kernel_space() {
 	 * 目前在host state状态下，开辟了128M的permanent_real_addr_mapping_space用于模拟GuestOS的整个2G的虚拟物理内存，
 	 * 这样做主要是为了后面的调试方便，等整个GuestOS调通以后，会在Host的整个mem_map中调用get_free_page分配.
 	 * 这里先通过EPT-paging-structure映射GuestOS 32M内核空间, Guest-phy-addr --> phy-addr.
+	 *
 	 */
 #if 1
 	for (unsigned long i = 0x00; i< 0x2000;i++) {  /* i (Granularity: 4K) */
